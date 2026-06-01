@@ -19,12 +19,13 @@ export default {
       alias: {
          '~/': `${path.resolve(__dirname, 'src')}/`,
          '$fonts/': `${path.resolve(__dirname, 'fonts')}/`,
+         '$shared/': `${path.resolve(__dirname, 'shared')}/`,
       },
    },
    test: {
       environment: 'happy-dom',
       globals: true,
       setupFiles: ['./tests/setup.js'],
-      include: ['tests/unit/**/*.test.js'],
+      include: ['tests/unit/**/*.test.js', 'tests/integration/**/*.test.js'],
    },
 };

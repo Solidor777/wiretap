@@ -26,6 +26,7 @@ export default ({ mode }) => {
          alias: {
             '~/': `${path.resolve(__dirname, 'src')}/`,
             '$fonts/': `${path.resolve(__dirname, 'fonts')}/`,
+            '$shared/': `${path.resolve(__dirname, 'shared')}/`,
          },
       },
 
