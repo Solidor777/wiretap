@@ -1,0 +1,36 @@
+{
+   "id": "wiretap",
+   "title": "Wiretap",
+   "description": "Adds a tab and bridge for AI agents inside Foundry VTT.",
+   "version": "0.0.1",
+   "compatibility": {
+      "minimum": "13",
+      "verified": "14",
+      "maximum": "14"
+   },
+   "authors": [
+      {
+         "name": "Solidor",
+         "discord": "solidor"
+      }
+   ],
+   "esmodules": [
+      "index.js"
+   ],
+   "styles": [
+      "style.css"
+   ],
+   "languages": [
+      {
+         "lang": "en",
+         "name": "English",
+         "path": "lang/en.json"
+      }
+   ],
+   "socket": true,
+   "url": "https://github.com/Solidor777/wiretap",
+   "bugs": "https://github.com/Solidor777/wiretap/issues",
+   "manifest": "https://github.com/Solidor777/wiretap/releases/latest/download/module.json",
+   "download": "https://github.com/Solidor777/wiretap/releases/latest/download/wiretap.zip",
+   "license": "LICENSE-MIT"
+}
