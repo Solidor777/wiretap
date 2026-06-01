@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen } from '@testing-library/svelte';
 import { describe, it, expect } from 'vitest';
 import Wiretap from '~/components/Wiretap.svelte';
 
@@ -9,12 +9,11 @@ describe('Wiretap.svelte', () => {
       expect(screen.getByRole('heading', { name: 'WIRETAP.Title' })).toBeTruthy();
    });
 
-   // The counter button must increment on click, proving runes reactivity in the mount.
-   it('increments the counter when clicked', async () => {
+   // With no live connection, status shows 'disconnected' and the input + send are disabled.
+   it('shows disconnected status and disables input when not connected', () => {
       render(Wiretap, { props: { foundryApp: {} } });
-      const button = screen.getByRole('button');
-      expect(button.textContent).toContain('Clicked 0 times');
-      await fireEvent.click(button);
-      expect(button.textContent).toContain('Clicked 1 time');
+      expect(screen.getByText('disconnected')).toBeTruthy();
+      expect(screen.getByPlaceholderText('Message the sidecar…').disabled).toBe(true);
+      expect(screen.getByRole('button', { name: 'Send' }).disabled).toBe(true);
    });
 });
