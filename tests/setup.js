@@ -39,15 +39,33 @@ class HooksMock {
       this.handlers = {};
    }
 
+   /**
+    * Register a handler for a named hook.
+    * @param {string} name - The hook name to subscribe to.
+    * @param {Function} fn - The handler to invoke when the hook fires.
+    * @returns {Function} The registered handler (mirrors Foundry's Hooks.on return).
+    */
    on(name, fn) {
       (this.handlers[name] ??= new Set()).add(fn);
       return fn;
    }
 
+   /**
+    * Remove a previously registered handler for a named hook.
+    * @param {string} name - The hook name to unsubscribe from.
+    * @param {Function} fn - The handler to remove.
+    * @returns {void}
+    */
    off(name, fn) {
       this.handlers[name]?.delete(fn);
    }
 
+   /**
+    * Invoke all handlers registered for a named hook.
+    * @param {string} name - The hook name to fire.
+    * @param {...*} args - Arguments forwarded to each handler.
+    * @returns {void}
+    */
    call(name, ...args) {
       for (const fn of [...(this.handlers[name] ?? [])]) {
          fn(...args);

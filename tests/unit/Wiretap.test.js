@@ -13,8 +13,8 @@ describe('Wiretap.svelte', () => {
    it('increments the counter when clicked', async () => {
       render(Wiretap, { props: { foundryApp: {} } });
       const button = screen.getByRole('button');
-      expect(button.textContent).toContain('0');
+      expect(button.textContent).toContain('Clicked 0 times');
       await fireEvent.click(button);
-      expect(button.textContent).toContain('1');
+      expect(button.textContent).toContain('Clicked 1 time');
    });
 });

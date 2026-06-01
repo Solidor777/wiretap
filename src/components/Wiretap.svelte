@@ -1,5 +1,6 @@
 <script>
    // Props supplied by WiretapSidebarTab when it mounts this component.
+   /** @type {{ foundryApp: object }} */
    let { foundryApp } = $props();
 
    // Reactive click counter proving Svelte 5 runes reactivity inside the Foundry mount.
