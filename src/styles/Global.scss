@@ -1,0 +1,9 @@
+@use 'Variables' as *;
+
+// Layout for the Wiretap sidebar tab and its popped-out window.
+.wiretap {
+   display: flex;
+   flex-direction: column;
+   gap: $wiretap-padding;
+   padding: $wiretap-padding;
+}
