@@ -86,6 +86,8 @@ export default [
          'styles/',
          'templates/',
          'index.js',
+         // Vite code-split chunks emitted at the repo root by `build:e2e` (gated dynamic import).
+         '*-????????.js',
          'node_modules/',
          'fix-comments.js',
          'count-long.cjs',
