@@ -48,6 +48,10 @@ end-to-end into the Wiretap tab. No Claude, no Foundry tools — just the pipe.
   Foundry's already-bundled `io` **client** (`io('http://<host>:<port>')`) — no extra browser bundle
   weight, free auto-reconnect, ack callbacks for request/response correlation, named events.
 - **Default port:** 31416 (one above foundry-vtt-mcp's 31415 to avoid collision), configurable.
+- **socket.io version pin:** Foundry v14 bundles `socket.io-client@^4.8.3` (verified in
+  `C:\FoundryVTT\V14\foundry\package.json`). The sidecar's `socket.io` server MUST be the matching v4
+  line (pin `socket.io@^4.8.3`) so the browser handshake is protocol-compatible. Re-verify this pin on
+  any future Foundry version bump.
 - **UI:** replace the placeholder counter in `Wiretap.svelte` with connection-status + echo UI.
 - **Connection lifecycle:** connect on Foundry `ready` as a persistent singleton; the tab observes its
   reactive state (connection survives the tab opening/closing).
@@ -59,7 +63,8 @@ end-to-end into the Wiretap tab. No Claude, no Foundry tools — just the pipe.
   the Foundry origin (`http://localhost:30000`), logs connect/disconnect, registers the echo handler.
 - `server/echo.ts` — the sole handler: on the `wiretap:message` event, ack-replies `{ text, receivedAt }`
   (where `receivedAt` is an ISO timestamp stamped by the sidecar).
-- Root `package.json` additions: `socket.io` (dependency), `tsx` (devDependency); scripts
+- Root `package.json` additions: `socket.io@^4.8.3` (dependency — matches Foundry's bundled
+  `socket.io-client`), `tsx` (devDependency); scripts
   `"server": "tsx watch server/index.ts"` and `"server:start": "tsx server/index.ts"`.
 
 ### 3.2 Shared wire contract — `shared/protocol.js` (plain JS + JSDoc)
