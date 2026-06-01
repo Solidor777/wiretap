@@ -22,6 +22,16 @@ export default function onceInit() {
       icon: 'fa-solid fa-user-secret',
    };
 
+   // The sidecar URL is per-client (each GM's machine runs its own sidecar), so the setting is client-scoped.
+   game.settings.register('wiretap', 'serverUrl', {
+      name: 'WIRETAP.Settings.ServerUrl.Name',
+      hint: 'WIRETAP.Settings.ServerUrl.Hint',
+      scope: 'client',
+      config: true,
+      type: String,
+      default: 'http://localhost:31416',
+   });
+
    // The module entry, used to expose a public API object for downstream features and the e2e probe.
    const module = game.modules.get('wiretap');
    module.api = {};

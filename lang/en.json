@@ -1,6 +1,12 @@
 {
    "WIRETAP": {
       "Title": "Wiretap",
-      "SidebarTab": "Wiretap"
+      "SidebarTab": "Wiretap",
+      "Settings": {
+         "ServerUrl": {
+            "Name": "Sidecar Server URL",
+            "Hint": "URL of the Wiretap agent sidecar (default http://localhost:31416)."
+         }
+      }
    }
 }
