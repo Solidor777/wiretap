@@ -43,7 +43,7 @@ describe('Wiretap sidecar terminal manager', () => {
    });
 
    it('launches a command and streams output, then exits', async () => {
-      server = createWiretapServer(0);
+      server = createWiretapServer(0, 0);
       const port = server.io.httpServer.address().port;
       const client = ioClient(`http://localhost:${port}`);
       await new Promise((r) => client.on('connect', r));
@@ -60,7 +60,7 @@ describe('Wiretap sidecar terminal manager', () => {
    });
 
    it('forwards input to the PTY and closes on demand', async () => {
-      server = createWiretapServer(0);
+      server = createWiretapServer(0, 0);
       const port = server.io.httpServer.address().port;
       const client = ioClient(`http://localhost:${port}`);
       await new Promise((r) => client.on('connect', r));
