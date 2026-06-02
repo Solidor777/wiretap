@@ -77,15 +77,19 @@ function buildServer(bridge: FoundryBridge): McpServer {
 export function startMcpServer(bridge: FoundryBridge, port: number): { close: () => void } {
    const httpServer = http.createServer(async (req, res) => {
       if (req.method === 'POST' && req.url === '/mcp') {
-         const chunks: Buffer[] = [];
-         for await (const chunk of req) {
-            chunks.push(chunk as Buffer);
-         }
          let body: unknown;
          try {
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) {
+               chunks.push(chunk as Buffer);
+            }
             body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
          } catch {
-            res.writeHead(400).end();
+            // A malformed body or a stream error mid-read (client abort or reset) becomes a clean 400
+            // rather than an unhandled promise rejection in the request handler.
+            if (!res.headersSent) {
+               res.writeHead(400).end();
+            }
             return;
          }
          const server = buildServer(bridge);
