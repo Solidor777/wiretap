@@ -47,6 +47,18 @@ export class TerminalConnection {
    #output = '';
 
    /**
+    * The most recent terminal size reported by a view, used when launching a new PTY.
+    * @type {number}
+    */
+   #cols = 80;
+
+   /**
+    * The most recent terminal row count reported by a view.
+    * @type {number}
+    */
+   #rows = 24;
+
+   /**
     * Active terminal output sinks — one per mounted terminal view (the docked tab and any pop-out).
     * @type {Set<(chunk: string) => void>}
     */
@@ -118,14 +130,12 @@ export class TerminalConnection {
    }
 
    /**
-    * Request the sidecar spawn a PTY.
+    * Request the sidecar spawn a PTY at the most recently reported size.
     * @param {string} command - The command line to run.
-    * @param {number} cols - Initial columns.
-    * @param {number} rows - Initial rows.
     * @returns {void}
     */
-   launch(command, cols, rows) {
-      this.#socket?.emit(TERMINAL_LAUNCH, { command, cols, rows });
+   launch(command) {
+      this.#socket?.emit(TERMINAL_LAUNCH, { command, cols: this.#cols, rows: this.#rows });
    }
 
    /**
@@ -138,12 +148,14 @@ export class TerminalConnection {
    }
 
    /**
-    * Resize the PTY.
+    * Resize the PTY and remember the size for the next launch.
     * @param {number} cols - New columns.
     * @param {number} rows - New rows.
     * @returns {void}
     */
    resize(cols, rows) {
+      this.#cols = cols;
+      this.#rows = rows;
       this.#socket?.emit(TERMINAL_RESIZE, { cols, rows });
    }
 

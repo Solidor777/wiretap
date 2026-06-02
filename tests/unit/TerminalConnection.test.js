@@ -59,7 +59,7 @@ describe('TerminalConnection', () => {
       const conn = new TerminalConnection();
       conn.connect('http://localhost:31416', () => socket);
       fire('connect');
-      conn.launch('claude', 80, 24);
+      conn.launch('claude');
       conn.sendInput('x');
       conn.close();
       const events = sent.map((s) => s.event);
