@@ -71,6 +71,13 @@ export class TerminalConnection {
    #sinks = new Set();
 
    /**
+    * Listeners invoked with the live socket whenever a socket is created (and immediately on
+    * registration if a socket already exists). Used by the Foundry bridge to share the one connection.
+    * @type {Set<(socket: object) => void>}
+    */
+   #socketListeners = new Set();
+
+   /**
     * Connect to the sidecar and wire terminal events. Idempotent while a socket exists.
     * @param {string} url - The sidecar URL.
     * @param {Function} [ioFactory] - Socket.IO client factory; defaults to Foundry's global `io`.
@@ -88,6 +95,9 @@ export class TerminalConnection {
       this.status = 'connecting';
       const socket = ioFactory(url, { reconnection: true });
       this.#socket = socket;
+      for (const listener of this.#socketListeners) {
+         listener(socket);
+      }
 
       socket.on('connect', () => {
          this.status = 'connected';
@@ -137,6 +147,22 @@ export class TerminalConnection {
       }
       return () => {
          this.#sinks.delete(sink);
+      };
+   }
+
+   /**
+    * Register a listener invoked with the live socket each time one is created. If a socket already
+    * exists, the listener is invoked immediately. Returns an unsubscribe function.
+    * @param {(socket: object) => void} listener - Receives the socket.
+    * @returns {() => void} An unsubscribe function.
+    */
+   onSocket(listener) {
+      this.#socketListeners.add(listener);
+      if (this.#socket) {
+         listener(this.#socket);
+      }
+      return () => {
+         this.#socketListeners.delete(listener);
       };
    }
 
