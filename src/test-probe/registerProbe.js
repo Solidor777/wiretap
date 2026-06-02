@@ -1,3 +1,5 @@
+import { connection } from '~/bridge/TerminalConnection.svelte.js';
+
 /**
  * Install the test-only probe API on the module's public API object. Only imported when the bundle is
  * built with `--mode e2e` (gated by `__WIRETAP_PROBE__`). Lets e2e specs assert tab registration and
@@ -29,6 +31,27 @@ export default function registerProbe(api) {
        */
       popout() {
          return ui.wiretap?.renderPopout();
+      },
+
+      /**
+       * Terminal controls for e2e setup/teardown without UI interaction.
+       */
+      terminal: {
+         /**
+          * Whether a PTY session is currently running.
+          * @returns {boolean} True when a session is active.
+          */
+         running() {
+            return connection.running;
+         },
+
+         /**
+          * Close any running PTY session.
+          * @returns {void}
+          */
+         close() {
+            connection.close();
+         },
       },
    };
 }
