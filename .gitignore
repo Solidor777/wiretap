@@ -14,6 +14,7 @@ node_modules/
 titan.zip
 test-results/
 playwright-report/
+.superpowers/
 packs/**/LOG
 packs/**/LOCK
 *.old
