@@ -5,6 +5,12 @@
       "Launch": "Launch",
       "Close": "Close",
       "PoppedOut": "Terminal is popped out.",
+      "Sidecar": {
+         "Connecting": "Connecting to sidecar…",
+         "OfflineTitle": "Sidecar not running",
+         "OfflineHint": "Double-click start-wiretap.cmd in the Wiretap module folder. This tab will connect automatically once it's running.",
+         "Trying": "Trying {url}"
+      },
       "Settings": {
          "ServerUrl": {
             "Name": "Sidecar Server URL",

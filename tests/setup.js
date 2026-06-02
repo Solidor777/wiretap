@@ -26,10 +26,15 @@ globalThis.foundry = {
    utils: { mergeObject },
 };
 
-// Minimal game mock: i18n.localize returns the key so components render deterministically in tests.
+// Minimal game mock: i18n.localize/format return the key so components render deterministically in tests;
+// settings.get returns the sidecar default so the offline panel can render its target URL.
 globalThis.game = {
    i18n: {
       localize: (key) => key,
+      format: (key) => key,
+   },
+   settings: {
+      get: () => 'http://localhost:31416',
    },
 };
 
