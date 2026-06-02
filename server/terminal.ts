@@ -9,6 +9,7 @@ import {
    TERMINAL_STATE,
    TERMINAL_EXIT,
 } from '../shared/protocol.js';
+import { resolvePtyOptions } from './ptyOptions.ts';
 
 // Maximum bytes of recent PTY output retained for reattach replay.
 const SCROLLBACK_LIMIT = 64 * 1024;
@@ -82,6 +83,7 @@ export function createTerminalManager(io: Server): { handleConnection: (socket: 
          rows: size.rows,
          cwd: process.cwd(),
          env: process.env as { [key: string]: string },
+         ...resolvePtyOptions(process.platform, process.env),
       });
       term = child;
       child.onData((chunk) => {
