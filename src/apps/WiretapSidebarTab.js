@@ -21,6 +21,17 @@ export default class WiretapSidebarTab extends foundry.applications.sidebar.Abst
    static tabName = 'wiretap';
 
    /**
+    * Application options merged across the ApplicationV2 chain. `window.resizable` makes the popped-out
+    * window user-resizable; the docked sidebar tab (frameless) ignores it.
+    * @type {object}
+    */
+   static DEFAULT_OPTIONS = {
+      window: {
+         resizable: true,
+      },
+   };
+
+   /**
     * Build the props object handed verbatim to _replaceHTML.
     * @param {object} context - The render context (unused; reserved for future reactive data).
     * @param {object} options - The render options bag.

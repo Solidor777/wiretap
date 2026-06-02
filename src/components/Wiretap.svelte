@@ -44,6 +44,13 @@
       };
    });
 
+   // Clear the terminal display whenever the session ends, so a stale session is not left on screen.
+   $effect(() => {
+      if (!connection.running) {
+         term?.reset();
+      }
+   });
+
    /**
     * Toggle the terminal: launch the configured command if idle, otherwise close it.
     * @returns {void}
