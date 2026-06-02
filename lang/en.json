@@ -7,6 +7,13 @@
       "PoppedOut": "Terminal is popped out.",
       "Copied": "Copied to clipboard.",
       "CopyFailed": "Could not copy to clipboard.",
+      "Toolbar": {
+         "Clear": "Clear terminal",
+         "Copy": "Copy",
+         "Restart": "Restart",
+         "FontDecrease": "Decrease font size",
+         "FontIncrease": "Increase font size"
+      },
       "Sidecar": {
          "Connecting": "Connecting to sidecar…",
          "OfflineTitle": "Sidecar not running",

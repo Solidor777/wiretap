@@ -4,6 +4,7 @@
    import { popoutState } from '~/bridge/popoutState.svelte.js';
    import TerminalView from '~/components/TerminalView.svelte';
    import SidecarOffline from '~/components/SidecarOffline.svelte';
+   import TerminalToolbar from '~/components/TerminalToolbar.svelte';
 
    /** @type {{ foundryApp: { isPopout?: boolean } }} */
    let { foundryApp } = $props();
@@ -58,6 +59,7 @@
    {#if !showTerminal}
       <p class="wiretap__popped-out">{game.i18n.localize('WIRETAP.PoppedOut')}</p>
    {:else if connection.status === 'connected'}
+      <TerminalToolbar />
       <TerminalView />
    {:else}
       <SidecarOffline />

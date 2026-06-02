@@ -70,4 +70,16 @@ describe('Wiretap.svelte', () => {
       expect(container.querySelector('.wiretap__terminal')).toBeTruthy();
       expect(screen.queryByText('WIRETAP.Sidecar.OfflineTitle')).toBeNull();
    });
+
+   it('shows the terminal toolbar in the connected branch', () => {
+      connection.status = 'connected';
+      render(Wiretap, { props: { foundryApp: {} } });
+      expect(screen.getByRole('button', { name: 'WIRETAP.Toolbar.Clear' })).toBeTruthy();
+   });
+
+   it('hides the terminal toolbar when the sidecar is disconnected', () => {
+      connection.status = 'disconnected';
+      render(Wiretap, { props: { foundryApp: {} } });
+      expect(screen.queryByRole('button', { name: 'WIRETAP.Toolbar.Clear' })).toBeNull();
+   });
 });
