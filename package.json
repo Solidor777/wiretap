@@ -7,7 +7,10 @@
    "type": "module",
    "author": "Solidor",
    "dependencies": {
-      "socket.io": "^4.8.3"
+      "socket.io": "^4.8.3",
+      "node-pty": "^1.0.0",
+      "@xterm/xterm": "^5.5.0",
+      "@xterm/addon-fit": "^0.10.0"
    },
    "devDependencies": {
       "@playwright/test": "^1.60.0",
