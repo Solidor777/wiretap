@@ -11,10 +11,12 @@ function tool(page, label) {
    return page.locator(`#sidebar section.wiretap button.wiretap__tool[aria-label="${label}"]`);
 }
 
-// NOTE: these specs need a live PTY. On Windows + Node 25 the node-pty ConPTY backend intermittently severs
-// the PTY (spurious exit + the `conpty_console_list_agent` AttachConsole crash seen in the sidecar log),
-// which flakes any terminal e2e on this machine (the pre-existing terminal.spec pop-out tests fail the same
-// way on a clean checkout). The assertions below are correct and pass on a stable PTY runtime (e.g. Node LTS).
+// NOTE: these specs need a live PTY. node-pty's Windows ConPTY backend intermittently severs long-lived PTYs
+// (spurious exit + the `conpty_console_list_agent` AttachConsole crash seen in the sidecar log), which flakes
+// terminal e2e on this machine (the pre-existing terminal.spec pop-out tests flake the same way on a clean
+// checkout). Node 22 LTS substantially reduces it vs Node 25 (single runs are commonly clean) but does not
+// fully eliminate it — full reliability needs the sidecar PTY-shutdown hardening (see TODO.md). Each test is
+// kept short so the PTY only has to survive a few seconds.
 test.describe('wiretap terminal toolbar', () => {
    // Ensure no PTY leaks between serial tests.
    test.afterEach(async ({ page }) => {
@@ -74,15 +76,15 @@ test.describe('wiretap terminal toolbar', () => {
          .toBe(16);
    });
 
-   test('Restart relaunches the command (fresh marker after a clear)', async ({ page }) => {
+   test('Restart relaunches the command', async ({ page }) => {
       await openTab(page, MARKER_CMD);
       const rows = page.locator('#sidebar section.wiretap .xterm-rows');
       await page.locator('#sidebar section.wiretap button.wiretap__toggle').click();
       await expect(rows).toContainText('READY-MARK', { timeout: 15_000 });
-      // Clear the view (old process keeps running), then Restart spawns a fresh process that reprints the marker.
-      await tool(page, 'Clear terminal').click();
-      await expect(rows).not.toContainText('READY-MARK', { timeout: 10_000 });
+      // Restart closes the running PTY (the reset-on-close effect blanks the screen), then relaunches it: a
+      // fresh process reprints the marker. Asserting the marker disappears and returns proves the relaunch.
       await tool(page, 'Restart').click();
+      await expect(rows).not.toContainText('READY-MARK', { timeout: 10_000 });
       await expect(rows).toContainText('READY-MARK', { timeout: 15_000 });
    });
 });

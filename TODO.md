@@ -25,6 +25,9 @@
 - [ ] Configurable terminal working directory (`terminalCwd`)
 - [ ] Reattach fidelity for full-screen TUIs (resize nudge / repaint on reconnect)
 - [ ] Extend e2e to cover reattach-after-reload + resize reflow (comprehensive tier, deferred earlier)
+- [ ] e2e reliability: terminal e2e (incl. the new `toolbar.spec.js`) is FLAKY on Windows + Node 25 —
+      node-pty's ConPTY backend spuriously exits PTYs mid-session (`conpty_console_list_agent` AttachConsole
+      crash). Pin CI/dev to a Node LTS (20/22) and/or land the sidecar PTY-shutdown fix above to stabilize.
 
 ## Deferred (later)
 
