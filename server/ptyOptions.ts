@@ -37,7 +37,7 @@ export function resolvePtyOptions(platform: NodeJS.Platform, env: NodeJS.Process
       return {};
    }
    const requested = env.WIRETAP_PTY_BACKEND;
-   const backend: PtyBackend = requested && requested in BACKEND_OPTIONS
+   const backend: PtyBackend = requested && Object.prototype.hasOwnProperty.call(BACKEND_OPTIONS, requested)
       ? (requested as PtyBackend)
       : DEFAULT_BACKEND;
    return BACKEND_OPTIONS[backend];

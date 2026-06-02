@@ -18,5 +18,6 @@ describe('resolvePtyOptions', () => {
       const expected = resolvePtyOptions('win32', { WIRETAP_PTY_BACKEND: DEFAULT_BACKEND });
       expect(resolvePtyOptions('win32', {})).toEqual(expected);
       expect(resolvePtyOptions('win32', { WIRETAP_PTY_BACKEND: 'bogus' })).toEqual(expected);
+      expect(resolvePtyOptions('win32', { WIRETAP_PTY_BACKEND: 'constructor' })).toEqual(expected);
    });
 });
