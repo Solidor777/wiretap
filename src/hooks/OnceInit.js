@@ -1,4 +1,5 @@
 import WiretapSidebarTab from '~/apps/WiretapSidebarTab.js';
+import { TERMINAL_THEME_CHOICES, terminalTheme } from '~/components/terminalThemes.svelte.js';
 
 /**
  * Foundry `init` handler. Registers the Wiretap sidebar tab, exposes the module API, and installs the
@@ -41,6 +42,24 @@ export default function onceInit() {
       type: String,
       default: 'claude',
    });
+
+   // Color theme for the embedded terminal; Foundry renders `choices` as a dropdown. Applied live via the
+   // reactive `terminalTheme` store that the tab component observes.
+   game.settings.register('wiretap', 'terminalTheme', {
+      name: 'WIRETAP.Settings.TerminalTheme.Name',
+      hint: 'WIRETAP.Settings.TerminalTheme.Hint',
+      scope: 'client',
+      config: true,
+      type: String,
+      choices: TERMINAL_THEME_CHOICES,
+      default: 'tokyo-night',
+      onChange: (id) => {
+         terminalTheme.id = id;
+      },
+   });
+
+   // Seed the reactive store from the stored value (covers a non-default saved choice on load).
+   terminalTheme.id = game.settings.get('wiretap', 'terminalTheme');
 
    // The module entry, used to expose a public API object for downstream features and the e2e probe.
    const module = game.modules.get('wiretap');

@@ -4,6 +4,7 @@
    import { FitAddon } from '@xterm/addon-fit';
    import '@xterm/xterm/css/xterm.css';
    import { connection } from '~/bridge/TerminalConnection.svelte.js';
+   import { TERMINAL_THEMES, terminalTheme } from '~/components/terminalThemes.svelte.js';
 
    /** @type {{ foundryApp: object }} */
    let { foundryApp } = $props();
@@ -24,29 +25,7 @@
          fontSize: 16,
          lineHeight: 1.3,
          fontFamily: "'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace",
-         theme: {
-            background: '#1a1b26',
-            foreground: '#c0caf5',
-            cursor: '#4a9eff',
-            cursorAccent: '#1a1b26',
-            selectionBackground: '#28304d',
-            black: '#414868',
-            red: '#f7768e',
-            green: '#9ece6a',
-            yellow: '#e0af68',
-            blue: '#7aa2f7',
-            magenta: '#bb9af7',
-            cyan: '#7dcfff',
-            white: '#a9b1d6',
-            brightBlack: '#565f89',
-            brightRed: '#ff7a93',
-            brightGreen: '#b9f27c',
-            brightYellow: '#ff9e64',
-            brightBlue: '#7da6ff',
-            brightMagenta: '#bb9af7',
-            brightCyan: '#0db9d7',
-            brightWhite: '#c0caf5',
-         },
+         theme: TERMINAL_THEMES[terminalTheme.id].theme,
       });
       fit = new FitAddon();
       term.loadAddon(fit);
@@ -77,6 +56,16 @@
    $effect(() => {
       if (!connection.running) {
          term?.reset();
+      }
+   });
+
+   // The active theme's background, used to match the terminal panel padding to the palette.
+   const terminalBackground = $derived(TERMINAL_THEMES[terminalTheme.id].theme.background);
+
+   // Re-theme any open terminal live when the dropdown setting changes (runs in docked + pop-out instances).
+   $effect(() => {
+      if (term) {
+         term.options.theme = TERMINAL_THEMES[terminalTheme.id].theme;
       }
    });
 
@@ -117,6 +106,7 @@
    <div
       class="wiretap__terminal"
       bind:this={viewport}
+      style:background={terminalBackground}
    ></div>
 </section>
 
@@ -149,7 +139,6 @@
          flex: 1;
          min-height: 0;
          padding: $wiretap-padding;
-         background: #1a1b26;
       }
    }
 </style>

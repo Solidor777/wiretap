@@ -12,6 +12,10 @@
          "TerminalCommand": {
             "Name": "Terminal Command",
             "Hint": "Command launched in the terminal (default `claude`)."
+         },
+         "TerminalTheme": {
+            "Name": "Terminal Theme",
+            "Hint": "Color theme for the embedded terminal."
          }
       }
    }
