@@ -11,7 +11,7 @@
 
 ## AI bridge roadmap (terminal-relay design)
 
-- [ ] #3 terminal UX polish (theme dropdown ✓, popout-takeover + 4:3 default ✓, sidecar launcher + offline panel ✓; remaining: font-size setting, toolbar niceties, scrollback tuning)
+- [ ] #3 terminal UX polish (theme dropdown ✓, popout-takeover + 4:3 default ✓, sidecar launcher + offline panel ✓, toolbar [clear/copy/font/restart] + persisted font size ✓; remaining: scrollback tuning)
 - [ ] (optional/future) structured chat UI — only viable via headless/programmatic mode
       (Agent SDK / `claude -p`), which draws on the $200/mo Agent SDK credit + Commercial Terms
 - [ ] (optional/future) dedicated Foundry MCP server for the user's `claude` to call
