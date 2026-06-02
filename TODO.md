@@ -18,16 +18,24 @@
 
 ## Carried-over cleanups
 
-- [ ] Sidecar: kill a running PTY on server shutdown (expose `dispose()`; today a PTY orphans on SIGTERM)
+- [x] Sidecar: kill a running PTY on server shutdown — `dispose()` on the manager + SIGINT/SIGTERM teardown in `index.ts` (Windows console-window-close / CTRL_CLOSE still uncatchable by Node)
 - [ ] Sidecar `index.ts`: log "listening" on the `'listening'` event, not synchronously after start
 - [ ] Status badge accessibility: add `role="status"` / `aria-live="polite"` (fits #3 UX polish)
 - [ ] Optional shared-secret handshake for the sidecar socket (defense in depth)
 - [ ] Configurable terminal working directory (`terminalCwd`)
 - [ ] Reattach fidelity for full-screen TUIs (resize nudge / repaint on reconnect)
 - [ ] Extend e2e to cover reattach-after-reload + resize reflow (comprehensive tier, deferred earlier)
-- [ ] e2e reliability: terminal e2e (incl. the new `toolbar.spec.js`) is FLAKY on Windows + Node 25 —
-      node-pty's ConPTY backend spuriously exits PTYs mid-session (`conpty_console_list_agent` AttachConsole
-      crash). Pin CI/dev to a Node LTS (20/22) and/or land the sidecar PTY-shutdown fix above to stabilize.
+- [~] e2e reliability — ROOT CAUSE FOUND + core fixed. The flake was NOT the ConPTY backend: node-pty's
+      Windows arg-escaping mangled the inline `node -e "..."` marker (dropping its keep-alive → early exit).
+      Fixed by a committed file-based marker (`tests/e2e/marker.js`) and a quote-safe spawn (`resolveSpawn`
+      now passes the Windows command line as a verbatim string — `server/spawnCommand.ts`). Per-spec the e2e
+      is now SOLID (`toolbar.spec` 25/25 on `--repeat-each=5`; `spawn.spec` 3/3) under Node 22. Backend is not
+      the lever (measured: conpty/conpty-dll/winpty all survive a single long PTY; both conpty & winpty still
+      flake the FULL suite). RESIDUAL: running ALL specs against ONE shared sidecar flakes under cumulative
+      rapid PTY kill/respawn churn (backend-agnostic; concentrated in the popout tests). FIX: give each spec
+      file a fresh sidecar (per-file restart) or run specs separately in CI. `WIRETAP_PTY_BACKEND`
+      (conpty|conpty-dll|winpty) is a documented escape hatch; default stays `conpty` (best `claude` fidelity).
+- [ ] e2e harness: per-spec sidecar isolation so the FULL suite is reliable (see the residual above).
 
 ## Deferred (later)
 
