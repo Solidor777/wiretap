@@ -35,9 +35,13 @@ interface InputPayload {
  * its output to all connected sockets, retains a scrollback buffer for reattach, and accepts input/resize/
  * close from any socket.
  * @param io - The Socket.IO server used to broadcast terminal events.
- * @returns The manager with a per-socket connection handler.
+ * @param spawn - The PTY spawner, injectable for testing; defaults to `pty.spawn`.
+ * @returns The manager with a per-socket connection handler and a dispose method.
  */
-export function createTerminalManager(io: Server): { handleConnection: (socket: Socket) => void } {
+export function createTerminalManager(
+   io: Server,
+   spawn: typeof pty.spawn = pty.spawn,
+): { handleConnection: (socket: Socket) => void; dispose: () => void } {
    let term: pty.IPty | null = null;
    let scrollback = '';
    let size = { cols: 80, rows: 24 };
@@ -65,7 +69,7 @@ export function createTerminalManager(io: Server): { handleConnection: (socket: 
       size = { cols: payload.cols, rows: payload.rows };
       scrollback = '';
       const { file, args } = resolveSpawn(command, process.platform, process.env.ComSpec);
-      const child = pty.spawn(file, args, {
+      const child = spawn(file, args, {
          name: 'xterm-color',
          cols: size.cols,
          rows: size.rows,
@@ -101,6 +105,17 @@ export function createTerminalManager(io: Server): { handleConnection: (socket: 
             term?.resize(payload.cols, payload.rows);
          });
          socket.on(TERMINAL_CLOSE, () => term?.kill());
+      },
+
+      /**
+       * Tear down the manager: kill any running PTY and clear retained state so the PTY does not orphan.
+       * Safe to call multiple times; a second call is a no-op once the term has been cleared.
+       * @returns Nothing.
+       */
+      dispose(): void {
+         term?.kill();
+         term = null;
+         scrollback = '';
       },
    };
 }

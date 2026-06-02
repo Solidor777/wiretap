@@ -1,7 +1,9 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { resolvePtyOptions, DEFAULT_BACKEND } from '../../server/ptyOptions.ts';
 import { resolveSpawn } from '../../server/spawnCommand.ts';
+import { createTerminalManager } from '../../server/terminal.ts';
+import { TERMINAL_LAUNCH } from '$shared/protocol.js';
 
 describe('resolvePtyOptions', () => {
    it('returns no backend options off Windows', () => {
@@ -36,5 +38,36 @@ describe('resolveSpawn', () => {
    it('returns an argument ARRAY via /bin/sh on POSIX', () => {
       expect(resolveSpawn('node -e "x"', 'linux', undefined))
          .toEqual({ file: '/bin/sh', args: ['-c', 'node -e "x"'] });
+   });
+});
+
+describe('terminal manager dispose', () => {
+   it('kills the active PTY and is idempotent', () => {
+      const child = {
+         onData: vi.fn(),
+         onExit: vi.fn(),
+         write: vi.fn(),
+         resize: vi.fn(),
+         kill: vi.fn(),
+      };
+      const spawn = vi.fn(() => child);
+      const io = { emit: vi.fn() };
+      const handlers = {};
+      const socket = {
+         emit: vi.fn(),
+         on: (event, fn) => {
+            handlers[event] = fn;
+         },
+      };
+      const manager = createTerminalManager(io, spawn);
+      manager.handleConnection(socket);
+      handlers[TERMINAL_LAUNCH]({ command: 'x', cols: 80, rows: 24 });
+      expect(spawn).toHaveBeenCalledTimes(1);
+
+      manager.dispose();
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      // A second dispose is a safe no-op (the term is already cleared).
+      manager.dispose();
+      expect(child.kill).toHaveBeenCalledTimes(1);
    });
 });
