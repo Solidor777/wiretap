@@ -5,25 +5,26 @@
 - [x] Package scaffold (Svelte 5 + SCSS + Vite, titan-parity tooling)
 - [x] Wiretap sidebar tab with Svelte mount + pop-out
 - [x] Unit + e2e smoke tests
-- [x] AI bridge #1 — transport + sidecar skeleton (socket.io echo round-trip)
+- [x] AI bridge #1 — transport + sidecar skeleton (socket.io)
+- [x] AI bridge #2 — Claude Code terminal relay (node-pty + xterm.js; Launch/Close; reattach)
 
-## AI bridge roadmap (remaining sub-projects)
+## AI bridge roadmap (terminal-relay design)
 
-- [ ] #2 Claude Code in the sidecar (embed Agent SDK, stream responses, session)
-- [ ] #3 Read-only Foundry tool surface (tools round-trip into the module)
-- [ ] #4 Write operations + features (create actors/items/walls, permission model)
-- [ ] #5 Chat UX polish (streaming, tool-call display, approvals, history)
-- [ ] #6 Security / permissions / auth
+- [ ] #3 terminal UX polish (theming, toolbar niceties, popout fit, scrollback tuning)
+- [ ] (optional/future) structured chat UI — only viable via headless/programmatic mode
+      (Agent SDK / `claude -p`), which draws on the $200/mo Agent SDK credit + Commercial Terms
+- [ ] (optional/future) dedicated Foundry MCP server for the user's `claude` to call
 
-## Carried-over cleanups (surfaced during #1 reviews)
+## Carried-over cleanups
 
-- [ ] `WiretapConnection`: add an explicit `disconnect()` / teardown + reconnect-to-new-URL path
-      (today `#socket` stays set after disconnect and relies on socket.io auto-reconnection only)
-- [ ] Status badge accessibility: add `role="status"` / `aria-live="polite"` (fits #5 UX polish)
-- [ ] Sidecar `index.ts`: log "listening" on the `'listening'` event rather than synchronously after
-      `createWiretapServer` (the async bind completes after the current log line)
-- [ ] Automate the bridge e2e (launch the sidecar from the Playwright harness) — deferred from #1
+- [ ] Sidecar: kill a running PTY on server shutdown (expose `dispose()`; today a PTY orphans on SIGTERM)
+- [ ] Sidecar `index.ts`: log "listening" on the `'listening'` event, not synchronously after start
+- [ ] Status badge accessibility: add `role="status"` / `aria-live="polite"` (fits #3 UX polish)
+- [ ] Optional shared-secret handshake for the sidecar socket (defense in depth)
+- [ ] Configurable terminal working directory (`terminalCwd`)
+- [ ] Reattach fidelity for full-screen TUIs (resize nudge / repaint on reconnect)
+- [ ] Automate sidecar-backed e2e (launch the sidecar from the Playwright harness)
 
 ## Deferred (later)
 
-- [ ] Settings menu beyond serverUrl, keybindings, fonts, compendium packs
+- [ ] Settings menu beyond serverUrl/terminalCommand, keybindings, fonts, compendium packs
