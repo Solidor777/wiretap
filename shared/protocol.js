@@ -62,3 +62,34 @@ export const TERMINAL_EXIT = 'terminal:exit';
  * @property {number|null} code - Process exit code.
  * @property {string} [signal] - Terminating signal, if any.
  */
+
+// --- Foundry bridge events (MCP tool execution) ---
+
+// Client → server, once per (re)connect: register this socket as a live Foundry-GM bridge endpoint.
+export const BRIDGE_IDENTIFY = 'bridge:identify';
+
+// Server → client, with an ack callback: run a Foundry operation and return its result.
+export const BRIDGE_INVOKE = 'bridge:invoke';
+
+// Operation names dispatched over BRIDGE_INVOKE (shared so both sides agree).
+export const OP_CREATE_ACTOR = 'createActor';
+
+/**
+ * @typedef {object} BridgeIdentify
+ * @property {string} userId - The Foundry user id.
+ * @property {string} userName - The Foundry user display name.
+ * @property {boolean} isGM - Whether the identifying user is a GM.
+ */
+
+/**
+ * @typedef {object} BridgeInvoke
+ * @property {string} op - The operation name (one of the OP_* constants).
+ * @property {object} params - Operation parameters.
+ */
+
+/**
+ * @typedef {object} BridgeAck
+ * @property {boolean} ok - Whether the operation succeeded.
+ * @property {*} [result] - The operation result when ok is true.
+ * @property {string} [error] - A human-readable error when ok is false.
+ */
