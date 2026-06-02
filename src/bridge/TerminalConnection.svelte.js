@@ -59,6 +59,12 @@ export class TerminalConnection {
    #rows = 24;
 
    /**
+    * A command to launch once the current PTY exits, set by restart() while a PTY is still running.
+    * @type {string | null}
+    */
+   #pendingRelaunch = null;
+
+   /**
     * Active terminal output sinks — one per mounted terminal view (the docked tab and any pop-out).
     * @type {Set<(chunk: string) => void>}
     */
@@ -110,6 +116,11 @@ export class TerminalConnection {
       });
       socket.on(TERMINAL_EXIT, () => {
          this.running = false;
+         if (this.#pendingRelaunch !== null) {
+            const command = this.#pendingRelaunch;
+            this.#pendingRelaunch = null;
+            this.launch(command);
+         }
       });
    }
 
@@ -136,6 +147,21 @@ export class TerminalConnection {
     */
    launch(command) {
       this.#socket?.emit(TERMINAL_LAUNCH, { command, cols: this.#cols, rows: this.#rows });
+   }
+
+   /**
+    * Restart the terminal: relaunch the command, closing any running PTY first. While a PTY is running the
+    * relaunch is deferred until the PTY's exit is observed, so only one PTY exists at a time.
+    * @param {string} command - The command line to run.
+    * @returns {void}
+    */
+   restart(command) {
+      if (this.running) {
+         this.#pendingRelaunch = command;
+         this.close();
+      } else {
+         this.launch(command);
+      }
    }
 
    /**

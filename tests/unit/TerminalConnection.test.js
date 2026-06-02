@@ -81,4 +81,29 @@ describe('TerminalConnection', () => {
       expect(a.join('')).toBe('hello');
       expect(b.join('')).toBe('hello');
    });
+
+   it('restart while running closes, then relaunches on exit', () => {
+      const { socket, fire, sent } = makeFakeSocket();
+      const conn = new TerminalConnection();
+      conn.connect('http://localhost:31416', () => socket);
+      fire('connect');
+      fire('terminal:state', { running: true, cols: 80, rows: 24 });
+      conn.restart('claude');
+      let events = sent.map((s) => s.event);
+      expect(events).toContain(TERMINAL_CLOSE);
+      expect(events).not.toContain(TERMINAL_LAUNCH);
+      fire('terminal:exit', { code: 0 });
+      events = sent.map((s) => s.event);
+      expect(events).toContain(TERMINAL_LAUNCH);
+   });
+
+   it('restart while idle launches immediately', () => {
+      const { socket, fire, sent } = makeFakeSocket();
+      const conn = new TerminalConnection();
+      conn.connect('http://localhost:31416', () => socket);
+      fire('connect');
+      conn.restart('claude');
+      const events = sent.map((s) => s.event);
+      expect(events).toContain(TERMINAL_LAUNCH);
+   });
 });
