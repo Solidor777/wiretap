@@ -1,5 +1,15 @@
 import { test, expect } from '@playwright/test';
 import { openTab, MARKER_CMD } from './fixtures.js';
+import { startSidecar, stopSidecar } from './sidecar.js';
+
+// Each spec file runs against its own fresh sidecar so cumulative PTY kill/respawn churn stays bounded.
+let sidecar;
+test.beforeAll(async () => {
+   sidecar = await startSidecar();
+});
+test.afterAll(async () => {
+   await stopSidecar(sidecar);
+});
 
 test.describe('wiretap terminal relay', () => {
    // Ensure no PTY leaks between serial tests.

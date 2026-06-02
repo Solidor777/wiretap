@@ -1,11 +1,21 @@
 import { test, expect } from '@playwright/test';
 import { openTab } from './fixtures.js';
+import { startSidecar, stopSidecar } from './sidecar.js';
 
 // A command with nested quotes. node-pty's Windows array-arg escaping used to mangle this (the setInterval
 // keep-alive was dropped, so it printed once then exited). With resolveSpawn returning a verbatim string the
 // command runs intact. This spec needs a live PTY runtime — see the note in toolbar.spec.js.
 const QUOTED_CMD =
    'node -e "process.stdout.write(\'QUOTED-OK\\r\\n\'); setInterval(() => process.stdout.write(\'.\'), 300)"';
+
+// Each spec file runs against its own fresh sidecar so cumulative PTY kill/respawn churn stays bounded.
+let sidecar;
+test.beforeAll(async () => {
+   sidecar = await startSidecar();
+});
+test.afterAll(async () => {
+   await stopSidecar(sidecar);
+});
 
 test.describe('wiretap command spawn', () => {
    test.afterEach(async ({ page }) => {

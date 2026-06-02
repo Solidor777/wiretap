@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { openTab, MARKER_CMD } from './fixtures.js';
+import { startSidecar, stopSidecar } from './sidecar.js';
 
 /**
  * Locate a toolbar tool button by its accessible label within the docked Wiretap tab.
@@ -10,6 +11,15 @@ import { openTab, MARKER_CMD } from './fixtures.js';
 function tool(page, label) {
    return page.locator(`#sidebar section.wiretap button.wiretap__tool[aria-label="${label}"]`);
 }
+
+// Each spec file runs against its own fresh sidecar so cumulative PTY kill/respawn churn stays bounded.
+let sidecar;
+test.beforeAll(async () => {
+   sidecar = await startSidecar();
+});
+test.afterAll(async () => {
+   await stopSidecar(sidecar);
+});
 
 // NOTE: these specs need a live PTY. node-pty's Windows ConPTY backend intermittently severs long-lived PTYs
 // (spurious exit + the `conpty_console_list_agent` AttachConsole crash seen in the sidecar log), which flakes
