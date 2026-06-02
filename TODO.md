@@ -7,6 +7,7 @@
 - [x] Unit + e2e smoke tests
 - [x] AI bridge #1 — transport + sidecar skeleton (socket.io)
 - [x] AI bridge #2 — Claude Code terminal relay (node-pty + xterm.js; Launch/Close; reattach)
+- [x] Terminal-relay Playwright e2e (sidecar-in-harness; round-trip, fan-out + relaunch regressions)
 
 ## AI bridge roadmap (terminal-relay design)
 
@@ -23,7 +24,7 @@
 - [ ] Optional shared-secret handshake for the sidecar socket (defense in depth)
 - [ ] Configurable terminal working directory (`terminalCwd`)
 - [ ] Reattach fidelity for full-screen TUIs (resize nudge / repaint on reconnect)
-- [ ] Automate sidecar-backed e2e (launch the sidecar from the Playwright harness)
+- [ ] Extend e2e to cover reattach-after-reload + resize reflow (comprehensive tier, deferred earlier)
 
 ## Deferred (later)
 
