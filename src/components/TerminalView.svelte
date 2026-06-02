@@ -5,6 +5,7 @@
    import '@xterm/xterm/css/xterm.css';
    import { connection } from '~/bridge/TerminalConnection.svelte.js';
    import { TERMINAL_THEMES, terminalTheme } from '~/components/terminalThemes.svelte.js';
+   import { terminalFontSize } from '~/components/terminalFontSize.svelte.js';
 
    // The DOM node the xterm terminal mounts into.
    let viewport = $state(null);
@@ -19,7 +20,7 @@
       term = new Terminal({
          convertEol: false,
          cursorBlink: true,
-         fontSize: 16,
+         fontSize: terminalFontSize.size,
          lineHeight: 1.3,
          fontFamily: "'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace",
          theme: TERMINAL_THEMES[terminalTheme.id].theme,
@@ -63,6 +64,14 @@
    $effect(() => {
       if (term) {
          term.options.theme = TERMINAL_THEMES[terminalTheme.id].theme;
+      }
+   });
+
+   // Re-apply the font size live when the setting changes, reflowing rows/cols to fit.
+   $effect(() => {
+      if (term) {
+         term.options.fontSize = terminalFontSize.size;
+         fit?.fit();
       }
    });
 </script>

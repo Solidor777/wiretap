@@ -1,5 +1,12 @@
 import WiretapSidebarTab from '~/apps/WiretapSidebarTab.js';
 import { TERMINAL_THEME_CHOICES, terminalTheme } from '~/components/terminalThemes.svelte.js';
+import {
+   terminalFontSize,
+   FONT_SIZE_MIN,
+   FONT_SIZE_MAX,
+   FONT_SIZE_STEP,
+   FONT_SIZE_DEFAULT,
+} from '~/components/terminalFontSize.svelte.js';
 
 /**
  * Foundry `init` handler. Registers the Wiretap sidebar tab, exposes the module API, and installs the
@@ -60,6 +67,28 @@ export default function onceInit() {
 
    // Seed the reactive store from the stored value (covers a non-default saved choice on load).
    terminalTheme.id = game.settings.get('wiretap', 'terminalTheme');
+
+   // Terminal font size (px); Foundry renders a slider from the `range`. Applied live via the reactive
+   // `terminalFontSize` store that the terminal component observes.
+   game.settings.register('wiretap', 'terminalFontSize', {
+      name: 'WIRETAP.Settings.FontSize.Name',
+      hint: 'WIRETAP.Settings.FontSize.Hint',
+      scope: 'client',
+      config: true,
+      type: Number,
+      range: {
+         min: FONT_SIZE_MIN,
+         max: FONT_SIZE_MAX,
+         step: FONT_SIZE_STEP,
+      },
+      default: FONT_SIZE_DEFAULT,
+      onChange: (size) => {
+         terminalFontSize.size = size;
+      },
+   });
+
+   // Seed the reactive store from the stored value (covers a non-default saved size on load).
+   terminalFontSize.size = game.settings.get('wiretap', 'terminalFontSize');
 
    // The module entry, used to expose a public API object for downstream features and the e2e probe.
    const module = game.modules.get('wiretap');

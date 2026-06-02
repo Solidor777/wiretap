@@ -23,6 +23,10 @@
          "TerminalTheme": {
             "Name": "Terminal Theme",
             "Hint": "Color theme for the embedded terminal."
+         },
+         "FontSize": {
+            "Name": "Terminal Font Size",
+            "Hint": "Font size (px) of the embedded terminal."
          }
       }
    }
