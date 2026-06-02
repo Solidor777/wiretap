@@ -67,4 +67,18 @@ describe('TerminalConnection', () => {
       expect(events).toContain(TERMINAL_INPUT);
       expect(events).toContain(TERMINAL_CLOSE);
    });
+
+   it('fans out output to multiple attached sinks (docked + popout)', () => {
+      const { socket, fire } = makeFakeSocket();
+      const conn = new TerminalConnection();
+      conn.connect('http://localhost:31416', () => socket);
+      fire('connect');
+      const a = [];
+      const b = [];
+      conn.attach((chunk) => a.push(chunk));
+      conn.attach((chunk) => b.push(chunk));
+      fire('terminal:data', { chunk: 'hello' });
+      expect(a.join('')).toBe('hello');
+      expect(b.join('')).toBe('hello');
+   });
 });

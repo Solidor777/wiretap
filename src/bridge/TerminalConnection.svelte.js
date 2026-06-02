@@ -47,10 +47,10 @@ export class TerminalConnection {
    #output = '';
 
    /**
-    * The current output sink (the xterm writer), or null when no terminal is mounted.
-    * @type {((chunk: string) => void) | null}
+    * Active terminal output sinks — one per mounted terminal view (the docked tab and any pop-out).
+    * @type {Set<(chunk: string) => void>}
     */
-   #sink = null;
+   #sinks = new Set();
 
    /**
     * Connect to the sidecar and wire terminal events. Idempotent while a socket exists.
@@ -92,7 +92,9 @@ export class TerminalConnection {
          if (this.#output.length > OUTPUT_LIMIT) {
             this.#output = this.#output.slice(this.#output.length - OUTPUT_LIMIT);
          }
-         this.#sink?.(chunk);
+         for (const sink of this.#sinks) {
+            sink(chunk);
+         }
       });
       socket.on(TERMINAL_EXIT, () => {
          this.running = false;
@@ -100,19 +102,18 @@ export class TerminalConnection {
    }
 
    /**
-    * Attach a terminal output sink (the xterm writer). Immediately replays the buffered output.
+    * Attach a terminal output sink (an xterm writer). Multiple sinks may be attached at once (the docked
+    * tab and its pop-out each attach one). Immediately replays the buffered output to the new sink.
     * @param {(chunk: string) => void} sink - Receives output chunks.
     * @returns {() => void} A detach function.
     */
    attach(sink) {
-      this.#sink = sink;
+      this.#sinks.add(sink);
       if (this.#output) {
          sink(this.#output);
       }
       return () => {
-         if (this.#sink === sink) {
-            this.#sink = null;
-         }
+         this.#sinks.delete(sink);
       };
    }
 
