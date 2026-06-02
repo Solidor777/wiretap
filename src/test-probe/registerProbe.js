@@ -34,6 +34,15 @@ export default function registerProbe(api) {
       },
 
       /**
+       * Close the Wiretap pop-out window if one is open. Reads the live pop-out reference that
+       * `AbstractSidebarTab` tracks on `ui.wiretap.popout`, so no app needs to be remembered locally.
+       * @returns {Promise<foundry.applications.sidebar.AbstractSidebarTab>|void} The popout close, if any.
+       */
+      closePopout() {
+         return ui.wiretap?.popout?.close();
+      },
+
+      /**
        * Terminal controls for e2e setup/teardown without UI interaction.
        */
       terminal: {
