@@ -23,8 +23,9 @@ export async function login(page, user = process.env.FOUNDRY_USER || DEFAULT_GM)
    await page.waitForFunction(() => globalThis.game?.ready === true, null, { timeout: 60_000 });
 }
 
-// A deterministic, long-lived command: prints a marker then ticks, so output persists for assertions.
-export const MARKER_CMD = 'node -e "process.stdout.write(\'READY-MARK\'); setInterval(() => process.stdout.write(\'.\'), 300)"';
+// A deterministic, long-lived command: prints a marker then ticks, so output persists for assertions. Runs a
+// committed script (not inline `node -e "..."`) because node-pty's Windows arg-escaping mangles nested quotes.
+export const MARKER_CMD = 'node tests/e2e/marker.js';
 
 /**
  * Log in, set the terminal command, open the Wiretap tab, and wait for the toggle to be enabled in a clean
