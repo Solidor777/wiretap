@@ -18,7 +18,36 @@
    let fit = null;
 
    onMount(() => {
-      term = new Terminal({ convertEol: false, cursorBlink: true });
+      term = new Terminal({
+         convertEol: false,
+         cursorBlink: true,
+         fontSize: 16,
+         lineHeight: 1.3,
+         fontFamily: "'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace",
+         theme: {
+            background: '#1a1b26',
+            foreground: '#c0caf5',
+            cursor: '#4a9eff',
+            cursorAccent: '#1a1b26',
+            selectionBackground: '#28304d',
+            black: '#414868',
+            red: '#f7768e',
+            green: '#9ece6a',
+            yellow: '#e0af68',
+            blue: '#7aa2f7',
+            magenta: '#bb9af7',
+            cyan: '#7dcfff',
+            white: '#a9b1d6',
+            brightBlack: '#565f89',
+            brightRed: '#ff7a93',
+            brightGreen: '#b9f27c',
+            brightYellow: '#ff9e64',
+            brightBlue: '#7da6ff',
+            brightMagenta: '#bb9af7',
+            brightCyan: '#0db9d7',
+            brightWhite: '#c0caf5',
+         },
+      });
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(viewport);
@@ -120,6 +149,7 @@
          flex: 1;
          min-height: 0;
          padding: $wiretap-padding;
+         background: #1a1b26;
       }
    }
 </style>
