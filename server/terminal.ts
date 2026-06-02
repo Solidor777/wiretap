@@ -10,6 +10,7 @@ import {
    TERMINAL_EXIT,
 } from '../shared/protocol.js';
 import { resolvePtyOptions } from './ptyOptions.ts';
+import { resolveSpawn } from './spawnCommand.ts';
 
 // Maximum bytes of recent PTY output retained for reattach replay.
 const SCROLLBACK_LIMIT = 64 * 1024;
@@ -27,19 +28,6 @@ interface ResizePayload {
 
 interface InputPayload {
    data: string;
-}
-
-/**
- * Resolve a command line into a PTY spawn file + args, routed through the platform shell so PATH and
- * Windows `.cmd` shims (e.g. `claude`) resolve.
- * @param command - The command line to run.
- * @returns The shell file and its arguments.
- */
-function resolveSpawn(command: string): { file: string; args: string[] } {
-   if (process.platform === 'win32') {
-      return { file: process.env.ComSpec ?? 'cmd.exe', args: ['/c', command] };
-   }
-   return { file: '/bin/sh', args: ['-c', command] };
 }
 
 /**
@@ -76,7 +64,7 @@ export function createTerminalManager(io: Server): { handleConnection: (socket: 
       const command = payload.command ?? 'claude';
       size = { cols: payload.cols, rows: payload.rows };
       scrollback = '';
-      const { file, args } = resolveSpawn(command);
+      const { file, args } = resolveSpawn(command, process.platform, process.env.ComSpec);
       const child = pty.spawn(file, args, {
          name: 'xterm-color',
          cols: size.cols,
