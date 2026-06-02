@@ -14,7 +14,13 @@
 - [ ] #3 terminal UX polish (theme dropdown ✓, popout-takeover + 4:3 default ✓, sidecar launcher + offline panel ✓, toolbar [clear/copy/font/restart] + persisted font size ✓; remaining: scrollback tuning)
 - [ ] (optional/future) structured chat UI — only viable via headless/programmatic mode
       (Agent SDK / `claude -p`), which draws on the $200/mo Agent SDK credit + Commercial Terms
-- [ ] (optional/future) dedicated Foundry MCP server for the user's `claude` to call
+- [x] dedicated Foundry MCP server for the user's `claude` to call — vertical slice: `create_actor`
+      (sidecar hosts MCP over Streamable HTTP on 127.0.0.1:31417; GM identify handshake routes tool
+      calls to the GM browser; `Actor.create` round-trips the uuid back). See
+      `docs/superpowers/specs/2026-06-02-wiretap-mcp-bridge-design.md`.
+- [ ] MCP follow-ups: more tools (`create_item`, `create_walls`, scene reads); live-Foundry e2e for
+      the bridge (drive an MCP HTTP client against the sidecar, assert an Actor appears); optional
+      Wiretap settings UI (enable toggle + port); shared-secret handshake on the sidecar socket.
 
 ## Carried-over cleanups
 
