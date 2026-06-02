@@ -25,17 +25,18 @@
 - [ ] Configurable terminal working directory (`terminalCwd`)
 - [ ] Reattach fidelity for full-screen TUIs (resize nudge / repaint on reconnect)
 - [ ] Extend e2e to cover reattach-after-reload + resize reflow (comprehensive tier, deferred earlier)
-- [~] e2e reliability — ROOT CAUSE FOUND + core fixed. The flake was NOT the ConPTY backend: node-pty's
-      Windows arg-escaping mangled the inline `node -e "..."` marker (dropping its keep-alive → early exit).
-      Fixed by a committed file-based marker (`tests/e2e/marker.js`) and a quote-safe spawn (`resolveSpawn`
-      now passes the Windows command line as a verbatim string — `server/spawnCommand.ts`). Per-spec the e2e
-      is now SOLID (`toolbar.spec` 25/25 on `--repeat-each=5`; `spawn.spec` 3/3) under Node 22. Backend is not
-      the lever (measured: conpty/conpty-dll/winpty all survive a single long PTY; both conpty & winpty still
-      flake the FULL suite). RESIDUAL: running ALL specs against ONE shared sidecar flakes under cumulative
-      rapid PTY kill/respawn churn (backend-agnostic; concentrated in the popout tests). FIX: give each spec
-      file a fresh sidecar (per-file restart) or run specs separately in CI. `WIRETAP_PTY_BACKEND`
-      (conpty|conpty-dll|winpty) is a documented escape hatch; default stays `conpty` (best `claude` fidelity).
-- [ ] e2e harness: per-spec sidecar isolation so the FULL suite is reliable (see the residual above).
+- [x] e2e reliability — RESOLVED. The flake was NOT the ConPTY backend: node-pty's Windows arg-escaping
+      mangled the inline `node -e "..."` marker (dropping its keep-alive → early exit). Fixed by a committed
+      file-based marker (`tests/e2e/marker.js`) + a quote-safe spawn (`server/spawnCommand.ts` passes the
+      Windows command line as a verbatim string — also fixes user `terminalCommand`s containing quotes/args).
+      Backend is not the lever (measured: conpty/conpty-dll/winpty all survive a single long PTY). The residual
+      full-suite churn flake was fixed by per-spec sidecar isolation (below). `WIRETAP_PTY_BACKEND`
+      (conpty|conpty-dll|winpty) remains a documented escape hatch; default `conpty` (best `claude` fidelity).
+      Validated under portable Node 22 — recommend pinning CI/dev to a Node LTS.
+- [x] e2e harness: per-spec sidecar isolation — each spec file gets a fresh sidecar (`tests/e2e/sidecar.js` +
+      beforeAll/afterAll); `global-setup` only builds the bundle. Also rewrote 2 stale `terminal.spec` pop-out
+      tests that asserted the pre-popout-takeover fan-out behavior (now assert takeover + return-on-close, via
+      a new `closePopout` probe). FULL `npm run test:e2e` now GREEN — 3/3 runs (11/11) under Node 22.
 
 ## Deferred (later)
 
