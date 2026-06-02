@@ -5,6 +5,8 @@
       "Launch": "Launch",
       "Close": "Close",
       "PoppedOut": "Terminal is popped out.",
+      "Copied": "Copied to clipboard.",
+      "CopyFailed": "Could not copy to clipboard.",
       "Sidecar": {
          "Connecting": "Connecting to sidecar…",
          "OfflineTitle": "Sidecar not running",

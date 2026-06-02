@@ -35,6 +35,15 @@ globalThis.game = {
    },
    settings: {
       get: () => 'http://localhost:31416',
+      set: () => {},
+   },
+};
+
+// Minimal notifications mock so components that surface info/warn toasts can run in tests.
+globalThis.ui = {
+   notifications: {
+      info: () => {},
+      warn: () => {},
    },
 };
 

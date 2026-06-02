@@ -6,6 +6,7 @@
    import { connection } from '~/bridge/TerminalConnection.svelte.js';
    import { TERMINAL_THEMES, terminalTheme } from '~/components/terminalThemes.svelte.js';
    import { terminalFontSize } from '~/components/terminalFontSize.svelte.js';
+   import { terminalController } from '~/components/terminalController.js';
 
    // The DOM node the xterm terminal mounts into.
    let viewport = $state(null);
@@ -28,6 +29,7 @@
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(viewport);
+      terminalController.term = term;
       fit.fit();
 
       // Pipe PTY output into the terminal (replays buffered scrollback immediately).
@@ -44,6 +46,7 @@
       return () => {
          detach();
          observer.disconnect();
+         terminalController.term = null;
          term?.dispose();
          term = null;
          fit = null;
