@@ -14,7 +14,17 @@ async function openTab(page, command) {
    await login(page);
    await page.evaluate((cmd) => game.settings.set('wiretap', 'terminalCommand', cmd), command);
    await page.locator('#sidebar nav.tabs [data-tab="wiretap"]').click();
-   await expect(page.locator('#sidebar section.wiretap button.wiretap__toggle')).toBeEnabled();
+   const toggle = page.locator('#sidebar section.wiretap button.wiretap__toggle');
+   await expect(toggle).toBeEnabled();
+   // Ensure a clean (closed) starting state: a sidecar reused across runs may already have a session,
+   // which would make the first toggle click a Close instead of a Launch. Close it and wait for Launch.
+   await page.evaluate(() => {
+      const probe = game.modules.get('wiretap')?.api?._probe;
+      if (probe?.terminal?.running()) {
+         probe.terminal.close();
+      }
+   });
+   await expect(toggle).toHaveText(/Launch/, { timeout: 10_000 });
 }
 
 test.describe('wiretap terminal relay', () => {
