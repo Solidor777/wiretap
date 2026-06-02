@@ -22,10 +22,14 @@ export default class WiretapSidebarTab extends foundry.applications.sidebar.Abst
 
    /**
     * Application options merged across the ApplicationV2 chain. `window.resizable` makes the popped-out
-    * window user-resizable; the docked sidebar tab (frameless) ignores it.
+    * window user-resizable; `position` gives it a 4:3 default size (the docked sidebar tab ignores both).
     * @type {object}
     */
    static DEFAULT_OPTIONS = {
+      position: {
+         width: 800,
+         height: 600,
+      },
       window: {
          resizable: true,
       },

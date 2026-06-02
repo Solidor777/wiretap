@@ -4,6 +4,7 @@
       "SidebarTab": "Wiretap",
       "Launch": "Launch",
       "Close": "Close",
+      "PoppedOut": "Terminal is popped out.",
       "Settings": {
          "ServerUrl": {
             "Name": "Sidecar Server URL",
