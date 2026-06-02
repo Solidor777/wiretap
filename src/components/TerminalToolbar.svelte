@@ -36,7 +36,10 @@
       disabled={!connection.running}
       onclick={() => terminalController.clear()}
    >
-      <i class="fa-solid fa-eraser"></i>
+      <i
+         class="fa-solid fa-eraser"
+         aria-hidden="true"
+      ></i>
    </button>
    <button
       type="button"
@@ -46,7 +49,10 @@
       disabled={!connection.running}
       onclick={() => terminalController.copy()}
    >
-      <i class="fa-solid fa-copy"></i>
+      <i
+         class="fa-solid fa-copy"
+         aria-hidden="true"
+      ></i>
    </button>
    <button
       type="button"
@@ -56,7 +62,10 @@
       disabled={terminalFontSize.size <= FONT_SIZE_MIN}
       onclick={() => setFontSize(terminalFontSize.size - FONT_SIZE_STEP)}
    >
-      <i class="fa-solid fa-magnifying-glass-minus"></i>
+      <i
+         class="fa-solid fa-magnifying-glass-minus"
+         aria-hidden="true"
+      ></i>
    </button>
    <button
       type="button"
@@ -66,7 +75,10 @@
       disabled={terminalFontSize.size >= FONT_SIZE_MAX}
       onclick={() => setFontSize(terminalFontSize.size + FONT_SIZE_STEP)}
    >
-      <i class="fa-solid fa-magnifying-glass-plus"></i>
+      <i
+         class="fa-solid fa-magnifying-glass-plus"
+         aria-hidden="true"
+      ></i>
    </button>
    <button
       type="button"
@@ -76,7 +88,10 @@
       disabled={!connection.running}
       onclick={restart}
    >
-      <i class="fa-solid fa-rotate-right"></i>
+      <i
+         class="fa-solid fa-rotate-right"
+         aria-hidden="true"
+      ></i>
    </button>
 </div>
 

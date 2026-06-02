@@ -3,7 +3,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import TerminalToolbar from '~/components/TerminalToolbar.svelte';
 import { connection } from '~/bridge/TerminalConnection.svelte.js';
 import { terminalController } from '~/components/terminalController.js';
-import { terminalFontSize, FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT } from '~/components/terminalFontSize.svelte.js';
+import {
+   terminalFontSize,
+   FONT_SIZE_MIN,
+   FONT_SIZE_MAX,
+   FONT_SIZE_DEFAULT,
+} from '~/components/terminalFontSize.svelte.js';
 
 describe('TerminalToolbar.svelte', () => {
    afterEach(() => {
