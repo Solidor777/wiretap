@@ -1,23 +1,60 @@
 <script>
-   import { connection } from '~/bridge/WiretapConnection.svelte.js';
+   import { onMount } from 'svelte';
+   import { Terminal } from '@xterm/xterm';
+   import { FitAddon } from '@xterm/addon-fit';
+   import '@xterm/xterm/css/xterm.css';
+   import { connection } from '~/bridge/TerminalConnection.svelte.js';
 
    /** @type {{ foundryApp: object }} */
    let { foundryApp } = $props();
 
-   // The current draft message in the input box.
-   let draft = $state('');
+   // The DOM node the xterm terminal mounts into.
+   let viewport = $state(null);
+
+   // The xterm instance and its fit addon, created on mount.
+   /** @type {Terminal | null} */
+   let term = null;
+   /** @type {FitAddon | null} */
+   let fit = null;
+
+   onMount(() => {
+      term = new Terminal({ convertEol: false, cursorBlink: true });
+      fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(viewport);
+      fit.fit();
+
+      // Pipe PTY output into the terminal (replays buffered scrollback immediately).
+      const detach = connection.attach((chunk) => term?.write(chunk));
+      // Forward keystrokes to the PTY.
+      term.onData((data) => connection.sendInput(data));
+      // Keep the PTY sized to the viewport.
+      term.onResize(({ cols, rows }) => connection.resize(cols, rows));
+
+      // Refit on container resize.
+      const observer = new ResizeObserver(() => fit?.fit());
+      observer.observe(viewport);
+
+      return () => {
+         detach();
+         observer.disconnect();
+         term?.dispose();
+         term = null;
+         fit = null;
+      };
+   });
 
    /**
-    * Send the trimmed draft to the sidecar and clear the input.
+    * Toggle the terminal: launch the configured command if idle, otherwise close it.
     * @returns {void}
     */
-   function send() {
-      const text = draft.trim();
-      if (!text) {
-         return;
+   function toggle() {
+      if (connection.running) {
+         connection.close();
+      } else {
+         const command = game.settings.get('wiretap', 'terminalCommand');
+         connection.launch(command, term?.cols ?? 80, term?.rows ?? 24);
       }
-      connection.send(text);
-      draft = '';
    }
 </script>
 
@@ -31,41 +68,20 @@
       >
          {connection.status}
       </span>
+      <button
+         type="button"
+         class="wiretap__toggle"
+         disabled={connection.status !== 'connected'}
+         onclick={toggle}
+      >
+         {connection.running ? game.i18n.localize('WIRETAP.Close') : game.i18n.localize('WIRETAP.Launch')}
+      </button>
    </header>
 
-   <ul class="wiretap__log">
-      {#each connection.messages as entry, index (index)}
-         <li
-            class="wiretap__entry"
-            data-direction={entry.direction}
-         >
-            {entry.text}
-         </li>
-      {/each}
-   </ul>
-
-   <form
-      class="wiretap__compose"
-      onsubmit={(event) => {
-         event.preventDefault();
-         send();
-      }}
-   >
-      <input
-         class="wiretap__input"
-         type="text"
-         placeholder="Message the sidecar…"
-         bind:value={draft}
-         disabled={connection.status !== 'connected'}
-      />
-      <button
-         type="submit"
-         class="wiretap__send"
-         disabled={connection.status !== 'connected'}
-      >
-         Send
-      </button>
-   </form>
+   <div
+      class="wiretap__terminal"
+      bind:this={viewport}
+   ></div>
 </section>
 
 <style lang="scss">
@@ -89,33 +105,14 @@
          font-size: 12px;
       }
 
-      &__log {
-         flex: 1;
-         overflow-y: auto;
-         margin: 0;
-         padding: 0;
-         list-style: none;
-      }
-
-      &__entry {
-         padding: 4px $wiretap-padding;
-
-         &[data-direction='out'] {
-            text-align: right;
-         }
-      }
-
-      &__compose {
-         display: flex;
-         gap: $wiretap-padding;
-      }
-
-      &__input {
-         flex: 1;
-      }
-
-      &__send {
+      &__toggle {
          border: 1px solid $wiretap-accent;
+      }
+
+      &__terminal {
+         flex: 1;
+         min-height: 0;
+         padding: $wiretap-padding;
       }
    }
 </style>

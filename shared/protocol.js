@@ -4,21 +4,7 @@
  * shapes.
  */
 
-// Socket.IO event (client to server) carrying a user message; the server replies via the ack callback.
-export const WIRETAP_MESSAGE = 'wiretap:message';
-
-/**
- * @typedef {object} WiretapMessage
- * @property {string} text - The message text sent from the tab to the sidecar.
- */
-
-/**
- * @typedef {object} WiretapEcho
- * @property {string} text - The echoed message text.
- * @property {string} receivedAt - ISO-8601 timestamp stamped by the sidecar on receipt.
- */
-
-// --- Terminal relay events (sub-project #2) ---
+// --- Terminal relay events ---
 
 // Client → server: spawn the PTY with a command at an initial size.
 export const TERMINAL_LAUNCH = 'terminal:launch';

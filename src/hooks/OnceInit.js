@@ -32,6 +32,16 @@ export default function onceInit() {
       default: 'http://localhost:31416',
    });
 
+   // The command launched in the PTY when the user clicks Launch (per-client; default `claude`).
+   game.settings.register('wiretap', 'terminalCommand', {
+      name: 'WIRETAP.Settings.TerminalCommand.Name',
+      hint: 'WIRETAP.Settings.TerminalCommand.Hint',
+      scope: 'client',
+      config: true,
+      type: String,
+      default: 'claude',
+   });
+
    // The module entry, used to expose a public API object for downstream features and the e2e probe.
    const module = game.modules.get('wiretap');
    module.api = {};

@@ -2,10 +2,16 @@
    "WIRETAP": {
       "Title": "Wiretap",
       "SidebarTab": "Wiretap",
+      "Launch": "Launch",
+      "Close": "Close",
       "Settings": {
          "ServerUrl": {
             "Name": "Sidecar Server URL",
             "Hint": "URL of the Wiretap agent sidecar (default http://localhost:31416)."
+         },
+         "TerminalCommand": {
+            "Name": "Terminal Command",
+            "Hint": "Command launched in the terminal (default `claude`)."
          }
       }
    }

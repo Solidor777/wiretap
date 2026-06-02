@@ -1,19 +1,37 @@
 import { render, screen } from '@testing-library/svelte';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import Wiretap from '~/components/Wiretap.svelte';
 
+// xterm touches DOM APIs happy-dom lacks; stub it so the component mounts in the unit test.
+vi.mock('@xterm/xterm', () => ({
+   Terminal: class {
+      cols = 80;
+      rows = 24;
+      open() {}
+      write() {}
+      onData() {}
+      onResize() {}
+      loadAddon() {}
+      dispose() {}
+      reset() {}
+   },
+}));
+vi.mock('@xterm/addon-fit', () => ({
+   FitAddon: class {
+      fit() {}
+      activate() {}
+      dispose() {}
+   },
+}));
+
 describe('Wiretap.svelte', () => {
-   // The component must render its localized title header.
    it('renders the title header', () => {
       render(Wiretap, { props: { foundryApp: {} } });
       expect(screen.getByRole('heading', { name: 'WIRETAP.Title' })).toBeTruthy();
    });
 
-   // With no live connection, status shows 'disconnected' and the input + send are disabled.
-   it('shows disconnected status and disables input when not connected', () => {
+   it('shows a Launch control when no terminal is running', () => {
       render(Wiretap, { props: { foundryApp: {} } });
-      expect(screen.getByText('disconnected')).toBeTruthy();
-      expect(screen.getByPlaceholderText('Message the sidecar…').disabled).toBe(true);
-      expect(screen.getByRole('button', { name: 'Send' }).disabled).toBe(true);
+      expect(screen.getByRole('button', { name: 'WIRETAP.Launch' })).toBeTruthy();
    });
 });

@@ -1,4 +1,4 @@
-import { connection } from '~/bridge/WiretapConnection.svelte.js';
+import { connection } from '~/bridge/TerminalConnection.svelte.js';
 
 /**
  * Foundry `ready` handler. Logs readiness and connects the persistent sidecar socket using the
@@ -7,5 +7,8 @@ import { connection } from '~/bridge/WiretapConnection.svelte.js';
  */
 export default function onceReady() {
    console.log('Wiretap | Module ready.');
-   connection.connect(game.settings.get('wiretap', 'serverUrl'));
+   // GM-only: the sidecar exposes a terminal on the host, so non-GM clients never connect.
+   if (game.user.isGM) {
+      connection.connect(game.settings.get('wiretap', 'serverUrl'));
+   }
 }
