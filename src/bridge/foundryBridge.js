@@ -1,6 +1,7 @@
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
+   BRIDGE_PING,
    OP_CREATE_ACTOR,
    OP_FAILED,
    PROTOCOL_MISMATCH,
@@ -8,7 +9,8 @@ import {
 } from '$shared/protocol.js';
 
 /**
- * Live bridge state; `identified` is true only from an ok identify ack until the next disconnect, refusal or reconnect.
+ * Live bridge state; `identified` is true only from an ok identify ack until the next disconnect, refusal or
+ * reconnect.
  * @type {{ identified: boolean }}
  */
 export const bridgeState = { identified: false };
@@ -60,7 +62,8 @@ const OP_HANDLERS = {
 
 /**
  * Wire the Foundry bridge onto the connection's socket: send the protocol v2 identify on each connect (acked by the
- * sidecar), track the identified state, and answer BRIDGE_INVOKE requests by dispatching through the op registry.
+ * sidecar), track the identified state, answer BRIDGE_INVOKE requests by dispatching through the op registry, and ack
+ * BRIDGE_PING liveness probes with `{ ok: true }`.
  * Reuses the single socket owned by the TerminalConnection (no second connection is opened).
  * @param {import('~/bridge/TerminalConnection.svelte.js').TerminalConnection} connection - The shared connection.
  * @returns {void}
@@ -81,6 +84,14 @@ export function initFoundryBridge(connection) {
             ack({ ok: true, result });
          } catch (err) {
             ack({ ok: false, error: { code: OP_FAILED, message: err?.message ?? String(err) } });
+         }
+      });
+
+      // Answer the sidecar's liveness probe, independent of identify state. The ack is the callback Socket.IO supplies
+      // when the sidecar emitted with one; a missing or non-function ack is ignored.
+      socket.on(BRIDGE_PING, (ack) => {
+         if (typeof ack === 'function') {
+            ack({ ok: true });
          }
       });
 

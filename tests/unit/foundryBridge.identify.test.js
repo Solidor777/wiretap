@@ -3,6 +3,7 @@ import { initFoundryBridge, reidentifyBridge, bridgeState } from '~/bridge/found
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
+   BRIDGE_PING,
    NOT_GM,
    OP_FAILED,
    PROTOCOL_MISMATCH,
@@ -277,5 +278,38 @@ describe('bridge invoke ack shape', () => {
          ok: true,
          result: { uuid: 'Actor.1', id: '1', name: 'X', type: 'character' },
       });
+   });
+});
+
+describe('bridge ping', () => {
+   it('acks { ok: true } while not identified and emits nothing', async () => {
+      const socket = makeFakeSocket(true);
+      wire(socket);
+      bridgeState.identified = false;
+      const emittedBefore = socket.emitted.length;
+      const ack = vi.fn();
+      await socket.fire(BRIDGE_PING, ack);
+      expect(ack).toHaveBeenCalledTimes(1);
+      expect(ack).toHaveBeenCalledWith({ ok: true });
+      expect(socket.emitted).toHaveLength(emittedBefore);
+      expect(bridgeState.identified).toBe(false);
+   });
+
+   it('acks { ok: true } while identified without changing state', async () => {
+      const socket = makeFakeSocket(true);
+      wire(socket);
+      bridgeState.identified = true;
+      const ack = vi.fn();
+      await socket.fire(BRIDGE_PING, ack);
+      expect(ack).toHaveBeenCalledWith({ ok: true });
+      expect(bridgeState.identified).toBe(true);
+   });
+
+   it('tolerates an absent or non-function ack', async () => {
+      const socket = makeFakeSocket(true);
+      wire(socket);
+      await expect(socket.fire(BRIDGE_PING)).resolves.toBeDefined();
+      await expect(socket.fire(BRIDGE_PING, 'not a function')).resolves.toBeDefined();
+      await expect(socket.fire(BRIDGE_PING, { ok: true })).resolves.toBeDefined();
    });
 });
