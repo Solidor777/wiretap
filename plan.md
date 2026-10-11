@@ -1,7 +1,7 @@
 # Wiretap plan: document skills for every type, plugin skills, seatless agents
 
-Status: draft for approval, revision 3 (2026-10-11: user decisions applied; path-scoped reads, final budgets and the
-D21 permission model evaluated; see §10). Baseline: HEAD `048df55`. Evidence labels: **MEASURED** (command or run
+Status: draft for approval, revision 5 (2026-10-11: M0 done and folded in, results in
+`docs/experiments/2026-10-m0-results.md`; see §10). Baseline: HEAD `048df55`. Evidence labels: **MEASURED** (command or run
 named), **READ** (source location named), **INFERRED** (not verified; alternatives not excluded). "MEASURED (coord.)"
 = measured by the coordinator's experiment agents in this planning session (claude 2.1.296), not by the user. Paths
 under `foundry/` are relative to `C:\FoundryVTT\V14\dev\foundry\` (v14 stable, build 364, READ `package.json`).
@@ -31,8 +31,8 @@ Goals:
 
 What "no seat" means (READ, see §4.3): a Foundry *client* must still run for anything that needs system or module
 code, sheets, derived data or plugin handlers. The seat is taken by a headless agent browser, not by a human. A
-raw-socket path without any client is possible but bypasses all client-side logic; its use is limited to operations
-that M0 certifies.
+raw-socket path without any client is possible but bypasses all client-side logic; M0 certified it for reads of stored
+source data only (D1), and whether to build it at all is D27.
 
 ## 2. Context budget: top priority
 
@@ -167,7 +167,7 @@ passes the sidecar enforcer: over budget → `{handle, bytes, summary}`.
 
 **Where scripts run:**
 
-- `api`: any client endpoint (agent or human GM tab). Raw socket (B) only for ops M0 certifies.
+- `api`: any client endpoint (agent or human GM tab). Raw socket (B) only for source reads (D1), if built (D27).
 - `dom`: the agent endpoint by default; a human tab only with an explicit `endpoint` override (D25, DECIDED).
   `screenshot` is captured by the agent runner's Playwright page on the sidecar; the client supplies the region
   rectangle. Unit tests cannot measure layout: happy-dom (READ `vitest.config.mjs`) performs no layout, so sizes are
@@ -265,13 +265,13 @@ the † changes are DECIDED (accepted 2026-10-11).
 | Always-listed tools (core + shipped) | ≤ 30 | CI hard | ≈ 400 tokens of names; raising it is a user decision |
 | All definitions (core + shipped) | ≤ 16 KB | CI hard | ≈ 8k tokens for a non-deferring client |
 | Ack (write) | ≤ 256 B per document | CI hard | +172 measured at 84 B |
-| Compact default view | ≤ 2 KB per document; embedded tuples capped at 40 plus a total count † | CI hard (synthetic fixtures) and e2e hard | 1,484 B measured with 31 tuples (≈43 B each); the cap makes the bound data-independent |
-| Projection / `paths` result | Hard cap only; ≤ 1 KB per 10 fields is the fixture target | CI warning on fixtures | Size is the agent's request; hero `system` = 5.8 KB is a legitimate request |
+| Compact default view | ≤ 2 KB per document; embedded tuples capped at 40 plus a total count † | CI hard (synthetic fixtures) and e2e hard | 1,484 B measured with 31 tuples (≈43 B each); the cap makes the bound data-independent. **Confirmed on titan (M0 E9): max 1,574 B** |
+| Projection / `paths` result | Hard cap only; ≤ 1 KB per 10 fields is the fixture target | CI warning on fixtures | Size is the agent's request; hero `system` = 5.8 KB is a legitimate request. Titan 10-field projections 199–1,224 B (E9; the 1,224 B one holds a long text leaf), consistent with warning-only |
 | Search page | ≤ 4 KB, default limit 20, max 100 | CI hard | Rows `[uuid, name, type]` |
 | Error | ≤ 512 B, first 10 failures + count | CI hard | — |
-| Text result hard cap | **8 KB default** †, per-call `maxBytes` up to 16 KB; over cap → `{handle, bytes, summary}` | Runtime enforcer; CI hard on the behaviour | 18 KB was +8,954 tokens; 8 KB ≈ 4k tokens fits hero `system` (5.8 KB) and the median item (2.1 KB); 16 KB stays below the measured Claude Code inline lower bound (21.7 KB) |
-| `sheet_layout` | ≤ 4 KB | CI hard (fixture) and e2e hard | — |
-| Image | `screenshot` only; default ≤ 800×600; max 1280 px longest side; one per result | CI hard (capture unit) | +972 measured at 800×600; larger sizes not measured |
+| Text result hard cap | **8 KB default** †, per-call `maxBytes` up to 16 KB; over cap → `{handle, bytes, summary}` | Runtime enforcer; CI hard on the behaviour | 18 KB was +8,954 tokens; 8 KB ≈ 4k tokens fits hero `system` (5.8 KB) and the median item (2.1 KB); 16 KB stays below the measured Claude Code inline lower bound (21.7 KB). Titan full actor exports are 5,738–12,492 B (E9): 3 of the 4 measured exceed 8 KB, so a full actor read returns a handle unless `maxBytes` is raised; titan items (634–1,697 B) fit |
+| `sheet_layout` | ≤ 4 KB | CI hard (fixture) and e2e hard | E9 prototype at depth 2: 401–441 B, but too shallow to be useful; the default depth is set in M15b by measurement |
+| Image | `screenshot` only; default ≤ 480,000 px (the 800×600 area), aspect kept ‡ (D28, PENDING-USER); max 1280 px longest side; one per result | CI hard (capture unit) | +972 measured at 800×600; larger sizes not measured. Titan sheets are 850×926 (actor) and 700×650 (item) (E9): the actor sheet does not fit an 800×600 box without distortion-free downscaling to 551×600, so the default is expressed as area |
 | Live recalibration | `tests/measure/measureContext.mjs`, manual, ≤ 6 `claude -p` runs | Report only | Tokenizers and Claude Code behaviour change between versions |
 
 ### 2.7 Skills as the discovery layer (part of D18, DECIDED)
@@ -377,10 +377,10 @@ entries of the same registry with the budgets of §2.6.
 
 | # | Decision | Status | Source |
 |---|---|---|---|
-| D1 | Seatless execution: headless browser client (A) and raw socket (B), B only where it adds no risk; the per-operation boundary is set by E2 | DECIDED (boundary PENDING-M0 E2) | User 2026-10-10 |
-| D2 | Must run on a headless server: `playwright-core` + Playwright Chromium build, `executablePath` configurable; no reliance on an installed Edge/Chrome. Full build vs `chromium_headless_shell` | DECIDED (build choice PENDING-M0 E3) | User; MEASURED (coord.): chromium-1223 413 MB, headless_shell-1223 273 MB (Playwright 1.60.0) |
-| D3 | Agent users: GM-client **client-scope** setting `[{userId, password}]` → pushed to the sidecar → module-local owner-only file; env-var provisioning also supported; passwords never sent back to any client | DECIDED (password-shape check PENDING-M0 P1) | User; READ `foundry/dist/database/documents/user.mjs` (`dump` deletes `password`, `passwordSalt`) |
-| D4 | Agent role (ASSISTANT vs GAMEMASTER) and active-GM behaviour | PENDING-M0 E4 | READ `foundry/client/documents/collections/users.mjs:70-96` |
+| D1 | Seatless execution: headless browser client (A) and raw socket (B), B only where it adds no risk. **Boundary (E2, applying the §4.3 rule):** B-eligible = reads of stored source data only. Updates of system fields with valid values were identical, but the update class fails rule 2 (the server stored invalid values the client refuses), so updates are A only; every create (Actor, Item, embedded Item/ActiveEffect, Scene and other classes with a client `_preCreate`) is A only; delete fidelity was not measured, so delete is A only. Table in §4.3 | DECIDED | User 2026-10-10; MEASURED (coord.) M0 E2 (`docs/experiments/2026-10-m0-results.md`) |
+| D2 | Must run on a headless server: `playwright-core` + Playwright Chromium build, `executablePath` configurable; no reliance on an installed Edge/Chrome. **Default agent profile: `chromium_headless_shell` with `core.noCanvas` on** (the smallest functional build, the agreed criterion) | DECIDED | User; MEASURED (coord.) M0 E3: shell/noCanvas median ready 1.8 s, 438.7 MB working set, 18.2 % of one core idle; full build 2.9 s, 547.3 MB, 42.1 %; shell with a drawn canvas 608 % idle |
+| D3 | Agent users: GM-client **client-scope** setting `[{userId, password}]` → pushed to the sidecar → module-local owner-only file; env-var provisioning also supported; passwords never sent back to any client | DECIDED (premise confirmed: P1 PASS) | User; READ `foundry/dist/database/documents/user.mjs`; MEASURED (coord.) M0 P1: no password, hash or salt client-visible for any role on any path |
+| D4 | Agent role: **ASSISTANT**, on a dedicated user per agent. An ASSISTANT has `isGM === true`, runs every Wiretap op tested, never outranks a GAMEMASTER for `activeGM`, and cannot promote anyone to GAMEMASTER; so a human GAMEMASTER always stays the active GM when online. Implication: with no GAMEMASTER online the agent **is** the active GM and runs any system/module automation gated on `activeGM` in the headless page (with `core.noCanvas` on; whether such automation needs the canvas is not measured). A GAMEMASTER agent would compete with humans by id order (`wtx-gm` won over `E2E GM 1`). Agents never share a human's user: the stock join form refuses an already-active user (E1) | DECIDED (per M0 evidence) | MEASURED (coord.) M0 E1, E4; READ `users.mjs:70-96`, `common/documents/user.mjs:124` |
 | D5 | Routing: prefer an agent endpoint, fall back to a human GM tab, per-call `endpoint` override | DECIDED | User 2026-10-11 |
 | D6 | Trust: loopback unauthenticated (same machine is trusted). External access is an opt-in bind that requires a bearer token on `/mcp` and a token on socket identify, plus TLS/reverse-proxy guidance. Reopens the loopback-only rule when enabled | DECIDED | User |
 | D7 | Acting user: optional advisory `actAs` pre-check (`testUserPermission` / `canUserModify`); the write runs as the endpoint user | DECIDED | User |
@@ -392,7 +392,7 @@ entries of the same registry with the budgets of §2.6.
 | D12a | Is `delete_documents` behind a GM gate? Recommendation: no gate for ordinary documents (Claude Code `ask` rules govern it, README shows `"ask": ["mcp__wiretap__delete_documents"]`); `dryRun` preview; `User` deletion stays under `allowUserWrites`, `Setting` under `allowSettingWrites`; compendium **pack** deletion is not exposed (§9 C1). `allowUndo` follows the same answer | DECIDED (user accepted the recommendation, 2026-10-11) | §9 C1 |
 | D13 | Replace semantics fire normal update hooks (not `importFromJSON`'s `noHook: true`) | DECIDED | User; READ `client-document.mjs:1065` |
 | D14 | Canonical document representation = the `toCompendium` export format (as used by `exportToJSON`), with `keepId: true` for reads | DECIDED (incl. `keepId`) | User 2026-10-11; READ `client-document.mjs:928-944,1113-1134` |
-| D15 | `describe_schema` = "schema by example" (blank export per type/subtype) first; DataModel field-walker for constraints second, scoped by path (§2.8 grammar) | PENDING-M0 E8 (sizes) | User; READ: no JSON-Schema export in `common/data/fields.mjs` |
+| D15 | `describe_schema` = "schema by example" (blank export per type/subtype) first; DataModel field-walker for constraints second, scoped by path (§2.8 grammar). **E8-driven design (M4):** without `path` it returns the blank export (titan Actor 4.85 KB, Items ≤ 648 B) plus a one-level outline of the schema; full constraints only with `path`, because the walker output for an Actor is 19.9 KB (above the 16 KB maximum cap) and Adventure 26.5 KB. For the 7 classes whose blank construction fails (ActorDelta, Drawing, Folder, Setting, TableResult, Tile, Wall) the example is built with the minimal required fields (parent, `type`, `key`) or omitted with the walker output only (approach INFERRED; M4 tests it) | DECIDED | User; READ: no JSON-Schema export in `common/data/fields.mjs`; MEASURED (coord.) M0 E8 |
 | D16 | `create_actor` is removed when `create_documents` lands; no alias (no-backwards-compatibility rule) | DECIDED | User 2026-10-11; READ `.claude/claude.md:25` |
 | D17 | Context minimisation is a top-priority, cross-cutting requirement; every milestone has a context-budget criterion | DECIDED | User 2026-10-10 |
 | D18 | The user's script proposal: adopted as modified in §2.3 (one registry with the core tools; each script its own deferred MCP tool; combined with result shaping); skills may reference tools as the discovery layer (§2.7) | DECIDED | User 2026-10-11; MEASURED (coord.) §2.1 R1–R6 |
@@ -404,6 +404,8 @@ entries of the same registry with the budgets of §2.6.
 | D24 | Default read view = compact; the canonical D14 export with `mode:"full"` or by `paths`, all under the hard cap | DECIDED (in principle) | User 2026-10-11 ("I think this can work") |
 | D25 | DOM scripts route to the agent endpoint by default; a human GM tab only by explicit `endpoint` override | DECIDED | User 2026-10-11 |
 | D26 | Path-scoped reads and writes (§2.8): `paths` parameter on `get_document`, same grammar in `update_documents`, `read_handle`, `describe_schema`; no new tools; `edit` merged into `update_documents` | DECIDED (accepted 2026-10-11; recommendation) | User request 2026-10-11; READ `helpers.mjs:821-868`, `global.d.mts:6-7` |
+| D27 | Build M11 (raw-socket executor) at all? Recommendation: **no; drop it and log it in `TODO.md`.** After E2 it could only serve source reads and valid system-field updates when no client is live, and the sidecar cannot tell valid from invalid values without the system's DataModels, which exist only in a client (READ §4.3); the agent runner (M9) already provides a client for about 440 MB and 1.8 s | PENDING-USER | MEASURED (coord.) M0 E2, E3 |
+| D28 | Screenshot default expressed as pixel area (≤ 480,000 px, the 800×600 area, aspect kept) instead of an 800×600 box (‡ in §2.6) | PENDING-USER (recommend adopt) | MEASURED (coord.) M0 E9: titan actor sheet 850×926 |
 
 ## 4. Architecture
 
@@ -461,7 +463,23 @@ GM human tab: settings UI → credentials pushed once over bridge:credentials �
 4. The operation needs nothing client-only: plugins, sheets, derived data (incl. `derived: true` path reads), rolls,
    macros, user queries, scripts with `requires: 'dom'`.
 
-Everything else uses A (or a human tab). Until M0 reports, no operation is B-eligible.
+Everything else uses A (or a human tab).
+
+**Result of M0 E2 (MEASURED (coord.), `docs/experiments/2026-10-m0-results.md`):**
+
+| Operation class | Rule 1 (diff) | Rule 2 (invalid input) | Rule 3 (fingerprint) | B-eligible |
+|---|---|---|---|---|
+| Read stored source (`modifyDocument get`, `world`, `getJoinData`) | — (source data; no derived values; raw-created documents have sparse `system`) | — | — | **yes** |
+| Create Actor (`player` 9/21 diff paths client/stored, `npc` 6/17) | fail | fail (server stores invalid `system`) | titan Actor `_preCreate` | no |
+| Create Item, 7 subtypes (1–2 / 8–14) and embedded Item (1–2 / 12) | fail | fail | titan Item `_preCreate` | no |
+| Create embedded ActiveEffect, 3 subtypes (1–2 / 1) | fail | fail | titan AE `_preCreate` | no |
+| Create Scene (0 Levels; `view()` throws) and other classes with a core `_preCreate` | fail | — | core `_preCreate` | no |
+| Update a system field with a valid value (player, npc) | pass (0 / 0) | **fail** (wrong type and 2.5-in-integer stored as sent; live clients diverge) | Actor/Item: no `_preUpdate`; AE: `_preUpdate` | no |
+| Unknown subtype | — | server rejects | — | n/a |
+| Delete | not measured | not measured | Cards, ActorDelta `_preDelete` | no |
+
+Replaying the client's exact emitted create payload over B matched the client result except `flags.titan`, so B adds
+nothing when a client must build the payload anyway.
 
 ### 4.4 Canonical document representation (D14, view per D24, paths per D26)
 
@@ -611,11 +629,30 @@ M12.
 
 ### M0 — Experiments against Foundry
 
-**Status (2026-10-11):** Foundry on `:30000` is free and the user wants the experiments run. **Prerequisite:** the
-Foundry launcher the coordinator is adding (`npm run foundry:start` / a Playwright `webServer` supervisor adopted
-from TITAN) has landed; M0 starts as soon as it does. **Depends on:** the launcher; no concurrent TITAN e2e run
-(§4.8). **Produces:** `docs/experiments/2026-10-m0-results.md` (raw numbers, commands, ids of everything created and
-deleted). No product code.
+**Status: DONE 2026-10-11.** Results: [`docs/experiments/2026-10-m0-results.md`](docs/experiments/2026-10-m0-results.md)
+(condensed from the raw JSON in the session scratchpad and checked against it). Run on the launcher
+(`npm run foundry:start`; spawn → listening 26.5 s cold, 4.9 s warm). Every experiment ran; deviations from the
+procedure below: E2 did not measure delete fidelity; E7 ran one restart (not two) as the pre-existing GAMEMASTER
+`E2E GM 1` and used the launcher's `--world` flag instead of `options.json`; the three `wtx-*` users were deleted at the
+end through Foundry document deletion (the safety limit below said they would be kept). No files were deleted.
+
+**Outcomes:**
+
+| Exp | Outcome (MEASURED (coord.)) | Decision |
+|---|---|---|
+| P1 | PASS: no password, hash or salt client-visible for any role on any path; an anonymous `/join` session receives the full user list (names, roles) | D3 premise holds |
+| E1 | PASS at socket level (12 samples over 55 s, broadcasts in 14–15 ms), but the stock join form refuses an already-active user | D4: dedicated agent users |
+| E2 | Every create class differs; valid system-field updates identical; server stores invalid `system` data; unknown subtype rejected; raw Scene broken | D1 boundary (§4.3), D27 |
+| E3 | Shell + noCanvas: ready 1.8 s, 438.7 MB WS / 294.8 MB private, 18.2 % of one core idle, 5 processes; drawn canvas on the shell 608 %; an MCP call before identify completes fails | D2 profile; M9 |
+| E4 | ASSISTANT `isGM` true, never outranks a GAMEMASTER for `activeGM`, cannot promote to GAMEMASTER; can create Users, Settings, compendium entries | D4 |
+| E7 | After a restart the page reconnects in 17.4 s, is then redirected to `/join` and stays there; the bridge does not re-identify; a fresh login recovers in 2.1 s (7.8 s after the restart flag) | M9 recovery design |
+| E8 | Actor schema walk 19.9 KB, Items 2.0–2.6 KB, Adventure 26.5 KB; blank export Actor 4.85 KB; 7 classes cannot be constructed blank | D15 |
+| E9 | Titan full actor exports 5.7–12.5 KB; compact ≤ 1,574 B; projections 199–1,224 B; `sheet_layout` depth 2 too shallow (≤ 441 B); actor sheet 850×926 PNG 111–115 KB | §2.6 confirmed except D28 |
+
+The original plan follows for the record.
+
+**Depends on:** the launcher; no concurrent TITAN e2e run (§4.8). **Produces:** `docs/experiments/2026-10-m0-results.md`.
+No product code.
 
 **Safety limits:**
 
@@ -652,7 +689,9 @@ with TITAN e2e (§4.8); E7 needs control of the Foundry process (the launcher).
 start before M0 finishes). **In:**
 
 - `server/endpoints.ts`.
-- `bridge:identify` v2 (`kind`, `dom`, `protocolVersion`, `gateState`, `fingerprint`); v1 identify removed.
+- `bridge:identify` v2 (`kind`, `dom`, `protocolVersion`, `gateState`, `fingerprint`); v1 identify removed. The
+  sidecar acknowledges identify after the endpoint is registered (Socket.IO ack); the client exposes an "identified"
+  state that the M9 runner waits on (M0 E3/E7: calls between identify-sent and registration failed).
 - Routing per D5 (DECIDED) with per-call `endpoint` override. The default order lives in one constant and is
   documented in the README.
 - `requestId`.
@@ -776,17 +815,24 @@ scripts call ops, never the reverse.
 ### M4 — Core read tools
 
 **Goal:** `list_document_types`, `get_document` (compact / `fields` / `paths` / `mode:"full"`), `search_documents`,
-`describe_schema` (with `path`), registered as M14 scripts. **Depends on:** M1, M3, M13, M14. The `describe_schema`
-scoping thresholds are **BLOCKED-BY-M0 (E8)**; the compact-view key-field lists per titan subtype are
-**BLOCKED-BY-M0 (E9)**. D26 decided before starting. **In:**
+`describe_schema` (with `path`), registered as M14 scripts. **Depends on:** M1, M3, M13, M14. M0 inputs are in (E8,
+E9): the compact view starts from the E9 prototype (uuid, name, type, up to 24 system leaves matched by a key-name
+pattern, embedded tuples; ≤ 1,574 B on titan) and the per-subtype key-field lists are fixed and reviewed in this
+milestone. **In:**
 
 - Primary, embedded (via `parentUuid` or a path into the parent) and compendium (`pack`) reads.
 - Default compact view; `fields` projection; `paths` (§2.8, incl. `derived: true` on client endpoints); `mode:"full"`
   canonical representation (§4.4); `ifModifiedSince`.
 - `search_documents`: default limit 20, max 100, cursor, `total`; rows are `[uuid, name, type]` unless `fields`.
-- `describe_schema(documentName, subtype, path?)` returning the blank export (or its subtree at `path`) plus
-  constraints (choices, min/max, integer, required, nullable, blank) from a field-walker over
-  `CONFIG[doc].dataModels[subtype].schema` and the core schema.
+- `describe_schema(documentName, subtype, path?)` per D15: without `path`, the blank export plus a one-level schema
+  outline (top-level field names and field classes); with `path`, the blank export's subtree plus constraints
+  (choices, min/max, integer, required, nullable, blank) from a field-walker over
+  `CONFIG[doc].dataModels[subtype].schema` and the core schema. The walker marks free-form fields (ObjectField 158,
+  AnyField 3, JSONField 2, TypedObjectField 3 occurrences in E8) as free-form instead of expanding them, refers to
+  embedded collections (EmbeddedCollectionField 39, EmbeddedCollectionDeltaField 4) by document name instead of
+  inlining them (the inlining is what made Adventure 26.5 KB), and resolves TypeDataField (15) by subtype. Blank
+  examples for ActorDelta, Drawing, Folder, Setting, TableResult, Tile and Wall use the minimal required fields or
+  are omitted (E8: blank construction fails).
 - `wiretap.*` settings and `User` password fields excluded from all reads, including any path that reaches them.
 
 **Tests:**
@@ -800,8 +846,10 @@ scoping thresholds are **BLOCKED-BY-M0 (E8)**; the compact-view key-field lists 
 **Acceptance:** every type in `ALL_DOCUMENT_TYPES` can be listed and read in the titan world (e2e enumerates); `paths`
 returns `system.attributes`-style slices and `items.*.name` keyed by `_id` on a titan actor. **Context budget:**
 compact ≤ 2 KB per document for every titan subtype in e2e (hard); a `paths` or full read above the hard cap returns a
-handle; `describe_schema` without `path` within the hard cap for every titan subtype, else it requires `path`.
-**Risks:** schema output size (E8).
+handle; `describe_schema` without `path` within the 8 KB default cap for every titan document type and subtype (E8:
+the blank Actor export alone is 4.85 KB, so the outline has ≈ 3 KB); a titan full actor read (5.7–12.5 KB, E9)
+returns a handle at the default cap and inline with `maxBytes: 16384`. **Risks:** schema output size (E8: an
+unscoped Actor walk is 19.9 KB, which is why constraints need `path`).
 
 ### M5 — Core write tools
 
@@ -920,10 +968,12 @@ plugin scripts. **Risks:** §2.5 residual risks of the chosen option.
 
 ### M8 — Agent users and credentials
 
-**Goal:** D3. **Depends on:** M1; uses M10's token when external. **BLOCKED-BY-M0 (P1)** for the premise. **In:**
+**Goal:** D3. **Depends on:** M1; uses M10's token when external. The P1 premise is confirmed (M0). **In:**
 
 - Client-scope setting `agentUsers` with a settings menu (ApplicationV2 form, `foundry-module-dev`) on GM clients:
-  a user picker limited to non-human-assigned users plus a password field.
+  a user picker limited to non-human-assigned users plus a password field. The form shows each user's role and warns
+  when it is not ASSISTANT (D4: a GAMEMASTER agent competes with humans for `activeGM`; a PLAYER or TRUSTED agent
+  cannot run GM ops) and when the user has no password (P1: anonymous `/join` lists every user name).
 - `bridge:credentials` push.
 - `server/agentCredentials.ts` writes `.wiretap/agents.json` (0o600, symlink refusal, overwrite only, same pattern
   as `mcpConfigFile.ts`).
@@ -942,38 +992,63 @@ the M13 tool-count snapshot is unchanged. **Risks:** plaintext in the GM's `loca
 
 ### M9 — Headless agent runner
 
-**Goal:** seatless operation on a headless server (D2), and the DOM endpoint for `dom` scripts. **BLOCKED-BY-M0 (E1,
-E3, E4, E7, E9)** for build choice, role, reconnect policy, cost budget and headless layout feasibility. **Depends
-on:** M1, M8. **New runtime dependency:** `playwright-core` (consent at start). Browser via `WIRETAP_BROWSER_PATH` /
-sidecar config; no auto-download in product code. **In:**
+**Goal:** seatless operation on a headless server (D2), and the DOM endpoint for `dom` scripts. All M0 inputs are in
+(E1, E3, E4, E7, E9). **Depends on:** M1 (identify acknowledgement), M8. **New runtime dependency:** `playwright-core`
+(consent at start). Browser via `WIRETAP_BROWSER_PATH` / sidecar config; no auto-download in product code. **In:**
 
-- One browser, one context per agent user, a fixed viewport so measurements are reproducible.
+- **Default profile (D2):** `chromium_headless_shell` (Playwright build 1223 measured), `core.noCanvas` on, set per
+  context before the page loads (M0 used a localStorage init script; MEASURED to take effect). A drawn canvas costs
+  ≈ 6 cores idle on the shell (E3), so canvas-on is never a default and is not offered without a measured need.
+- One browser, one context per agent user (an ASSISTANT user, D4), a fixed viewport (M0 used 1920×1080) so
+  measurements are reproducible.
 - `/join` login, then wait for `game.ready` (boot is exempt from the 1000 ms rule).
-- `core.noCanvas` per E3.
-- Identify with `kind: agent`, `dom: true`.
+- Identify with `kind: agent`, `dom: true`; **the agent is reported ready only after the sidecar acknowledges the
+  identify** (M1). E3 and E7: a call made after identify was sent but before it completed failed with `No Foundry GM
+  client connected`; identify travels over Engine.IO polling about 100 ms before the websocket upgrade.
+- **Restart recovery (E7):** after a Foundry restart the page's socket reconnects (17.4 s in E7, bounded by the
+  restart) and Foundry then redirects the page to `/join`; it never recovers on its own and the bridge does not
+  re-identify. The runner watches for the `/join` navigation (and for a closed Foundry socket that stays closed),
+  discards the context, logs in again with stored credentials in a fresh context, and waits for the identify
+  acknowledgement. While recovering, the endpoint is marked unavailable so the router falls back (D5) or returns a
+  ≤ 256 B "agent reconnecting" error.
 - Region capture API for `screenshot` (page clip by a client-supplied rectangle, downscaled to the cap).
-- Supervision with backoff on crash or Foundry restart.
+- Supervision with backoff on browser crash.
 - `--agents` CLI flag / `WIRETAP_AGENTS=on`.
 - Status in startup log and `list_endpoints` tool.
 
-**Tests:** unit (supervisor state machine with a fake launcher; capture downscaling); integration (fake launcher +
-fake client identify); e2e (real launch as `wtx-assistant`, identify, `create_documents` round-trip with §4.8
-teardown). **Acceptance:** E7-style restart recovery passes in e2e or a scripted check. **Context budget:**
-`list_endpoints` ≤ 1 KB with two agents and one human; capture output never exceeds the §2.6 pixel cap (unit).
-**Risks:** RAM/CPU on small servers (E3 numbers); active-GM takeover (E4).
+**Resource budget per agent (MEASURED (coord.) E3 on one host, i7-13700K, 5 runs, median):** launch → ready 1.8 s,
+438.7 MB working set / 294.8 MB private for the browser process tree, 18.2 % of one logical core idle, 5 processes,
+273 MB on disk for the shell build. Other hosts not measured. **Recovery budget (E7, one run):** fresh login → ready
+2.1 s; restart flag → agent usable 7.8 s with a warm Foundry restart (4.9 s spawn → listening); with a cold start
+(26.5 s spawn → listening, launcher log) recovery is INFERRED at ≈ 30 s.
+
+**Tests:** unit (supervisor state machine with a fake launcher: login, identify-ack wait, `/join` redirect →
+re-login, crash → backoff; capture downscaling); integration (fake launcher + fake client identify; a call during
+identify gets the reconnecting error, not a wrong route); e2e (real launch as an ASSISTANT test user, identify,
+`create_documents` round-trip with §4.8 teardown; a Foundry restart through the launcher → the agent re-identifies
+without a human). **Acceptance:** the restart e2e passes; the agent's measured idle cost on the CI host is recorded
+and within 1.5× the E3 medians or reported to the user. **Context budget:** `list_endpoints` ≤ 1 KB with two agents
+and one human; capture output never exceeds the §2.6 pixel cap (unit); the reconnecting error ≤ 256 B. **Risks:**
+RAM/CPU on small servers (E3 numbers are from one fast desktop host); with no GAMEMASTER online the agent becomes the
+active GM and runs `activeGM` automation headless (D4); the launcher does not stop Foundry when its `npm` wrapper is
+stopped (`docs/OPEN_BUGS.md`), which matters for the restart e2e.
 
 ### M15b — Script library: DOM scripts
 
 **Goal:** the `dom` rows of §2.9: `element_size`, `sheet_layout`, `inspect_sheet`, `screenshot` (and `open_sheet` /
-`close_sheet` on the agent endpoint). **Depends on:** M6, M9, M14. **BLOCKED-BY-M0 (E9)** for `sheet_layout` shape.
-**In:** `ctx.dom` (render-and-wait for the app's `rendered` state, READ `application.mjs:367`; rect and overflow
-reads; layout walk with `maxNodes`); `screenshot` via the M9 capture API.
+`close_sheet` on the agent endpoint). **Depends on:** M6, M9, M14. E9 input: offscreen sheets render headless with
+`core.noCanvas` (actor 850×925 in 50 ms on the shell, item 700×650); the depth-2 `sheet_layout` prototype (401–441 B)
+reached only the window header and content wrappers, so this milestone measures depths 3–6 on titan sheets and sets
+the default depth to the shallowest that reaches the sheet's own parts within 4 KB. **In:** `ctx.dom`
+(render-and-wait for the app's `rendered` state, READ `application.mjs:367`; rect and overflow reads; layout walk with
+`maxNodes`); `screenshot` via the M9 capture API.
 
 **Tests:** unit with mocked rects (happy-dom has no layout); integration with a fake DOM endpoint; e2e on the agent
 endpoint against titan actor and item sheets: sizes are non-zero and stable across two runs; `inspect_sheet` equals
 `open_sheet` + k × `element_size` + `close_sheet`. **Acceptance:** all §2.9 `dom` scripts work on the agent
 endpoint; on a human-only setup they return the D25 error. **Context budget:** `element_size` ≤ 256 B,
-`sheet_layout` ≤ 4 KB, `inspect_sheet` ≤ 2 KB, screenshot ≤ default 800×600, one image; e2e asserts each. **Risks:**
+`sheet_layout` ≤ 4 KB, `inspect_sheet` ≤ 2 KB, screenshot within the §2.6 default (D28), one image; e2e asserts
+each. **Risks:**
 headless layout differs from a human's window size → results report the viewport.
 
 ### M10 — External access opt-in
@@ -992,20 +1067,32 @@ headless layout differs from a human's window size → results report the viewpo
 **Tests:** integration (no token → 401 / identify refused; constant-time compare; loopback mode unchanged);
 `serverModes` style bind assertions. **Acceptance:** external mode cannot start without a token (test). **Context
 budget:** a 401 body is ≤ 128 B and never echoes the supplied token. **Risks:** token in the GM's `localStorage`.
+Information exposure (MEASURED (coord.) M0 P1): Foundry's own anonymous session (`GET /join` cookie, no login)
+receives the full user list with names and roles via `getJoinData`; agent user names are therefore visible to anyone
+who can reach Foundry. The README's external-mode section says so and requires passwords on agent users (Wiretap's
+external mode exposes the sidecar, not Foundry; Foundry's exposure is the GM's own configuration).
 
 ### M11 — Raw-socket executor (option B)
 
-**Goal:** B for M0-certified operation classes only, when no client endpoint is live. **BLOCKED-BY-M0 (E2)**. If E2
-certifies nothing, this milestone is dropped and logged. **Depends on:** M5, M8, M2 (gate snapshot). **In:**
+**Status after M0: recommended for dropping (D27, PENDING-USER).** E2 certifies reads of stored source data only
+(§4.3). What a read-only B would add: answers when no client endpoint is live, limited to source data (no derived
+values, no compact view key fields that depend on prepared data, sparse `system` for raw-created documents). What it
+costs: a second login path and executor, a second shaping path, and an always-present risk that a later change routes
+a write over it; the server stores invalid `system` values (E2), which the sidecar cannot detect without the
+system's DataModels. The M9 runner provides a full client for ≈ 440 MB and 1.8 s (E3), and recovers from a restart in
+≈ 8 s warm (E7). If D27 = drop, this milestone is logged in `TODO.md` and removed from the order; if D27 = build, its
+scope is the read-only form below. **Depends on:** M5, M8, M2 (gate snapshot). **In (read-only form):**
 
-- `server/rawSocket.ts` (login with an agent credential, `modifyDocument`).
-- Eligibility = E2 table ∩ last client fingerprint ∩ gate snapshot.
+- `server/rawSocket.ts` (login with an agent credential, `modifyDocument` with action `get` only; any other action is
+  refused in code, not by configuration).
+- Eligibility = reads only ∩ gate snapshot.
 - `wiretap.*` deny.
 - Results marked `executor: "raw"` and shaped by the same `ctx.shape` rules (compact / projection / path slices /
   ack) on the sidecar.
 
-**Tests:** unit (eligibility); integration against a fake Foundry socket server; e2e for each certified op comparing
-with the client path. **Acceptance:** an ineligible op with no client gives a clear "needs a Foundry client" error.
+**Tests:** unit (eligibility; non-`get` actions refused); integration against a fake Foundry socket server; e2e
+comparing raw reads with the client path's source data. **Acceptance:** an ineligible op with no client gives a clear
+"needs a Foundry client" error.
 **Context budget:** raw results equal the client-path results plus at most 20 B (`executor`), asserted per certified
 op.
 
@@ -1038,8 +1125,23 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
 
 ## 7. Risks and open questions
 
-- E2 may show B is never safe (INFERRED likely for system-typed documents). Then D1 reduces to A-only in practice.
-- An agent with the GAMEMASTER role can become `activeGM` and take module automation (READ `users.mjs:87-96`). E4.
+- **The Foundry server accepts invalid `system` data over a raw socket** (MEASURED (coord.) M0 E2): wrong types and
+  non-integers in integer fields are stored as sent, and a raw create with invalid `system` produces a document that
+  live clients never show and a fresh load lists in `invalidDocumentIds`. Any GM-authenticated socket can do this, not
+  only Wiretap. Wiretap never writes over B (D1), and its client path validates through the system DataModels.
+- **Foundry server error noise** (MEASURED (coord.) M0): each rejected `modifyDocument` logs `TypeError: Cannot read
+  properties of undefined (reading 'length')` in the server log (140 lines during M0); the caller still gets its
+  reply. Log readers and e2e log assertions must not treat it as a Wiretap failure; it is a Foundry defect, not
+  Wiretap's.
+- **Anonymous user listing** (MEASURED (coord.) M0 P1): a session from `GET /join` without login receives every user's
+  name and role. Relevant to M10 external guidance (agent users need passwords and neutral names).
+- **Active GM with only the agent online** (MEASURED (coord.) M0 E4): an ASSISTANT agent becomes `activeGM` when no
+  GAMEMASTER is online and runs `activeGM`-gated automation headless with `core.noCanvas` on; whether titan or other
+  modules' automation needs the canvas is not measured. A GAMEMASTER agent would compete with humans by id order.
+- **Runner recovery is login, not reconnect** (MEASURED (coord.) M0 E7): Foundry's restart drops sessions and sends
+  the page to `/join`; any runner that only waits for a socket reconnect stays offline.
+- **Launcher defect** (MEASURED, `docs/OPEN_BUGS.md`): stopping `npm run foundry:start` leaves the supervisor and
+  Foundry running.
 - `modifyBatch` is not atomic; users may assume transactions.
 - Document deletes are irreversible apart from backups; `dryRun` and Claude Code `ask` rules are the guard (D12a).
 - The arbitrary-code capabilities weaken the gate hard rule (§4.6), including agent-saved scripts (§2.5 S7).
@@ -1142,3 +1244,23 @@ cap, name and description limits), D21 option (b) (Claude Code permissions plus 
 (`paths` parameter on `get_document`, shared grammar), the three proposed extra gates (`allowOwnershipWrites`,
 `allowCompendiumWrites`, `allowModuleConfigWrites`) and the e2e running-list location. No PENDING-USER decisions
 remain except those that wait on M0 results.
+
+**Revision 5 (2026-10-11): M0 results folded in.**
+
+- M0 marked DONE with an outcome table and its deviations; results recorded in
+  `docs/experiments/2026-10-m0-results.md` (condensed from the raw JSON and checked against it, including E7 and the
+  experiment agent's corrections: the E4 role-2 rerun, the E2 malformed-path rerun, the E7 `autoRecovered` false
+  positive).
+- Decisions now DECIDED with M0 evidence: D1 (B-eligible = source reads only; the per-operation table in §4.3), D2
+  (headless shell + `core.noCanvas` as the default agent profile), D3 (P1 PASS), D4 (ASSISTANT agents on dedicated
+  users; activeGM implication stated), D15 (E8-driven `describe_schema`: blank export + outline, constraints only with
+  `path`). New PENDING-USER: D27 (drop M11, recommended) and D28 (screenshot default as pixel area).
+- §2.6: E9 confirms the compact (≤ 1,574 B) and projection budgets; notes that titan full actor exports exceed the 8 KB
+  default cap; `sheet_layout` depth to be measured in M15b; screenshot default rephrased (‡, D28).
+- Milestones: all BLOCKED-BY-M0 markers removed (M4, M8, M9, M11, M15b); M1 adds an identify acknowledgement; M4
+  `describe_schema` design per E8 and compact view from the E9 prototype; M8 role and password warnings; M9 rewritten
+  around the default profile, identify-ack wait, `/join`-redirect re-login recovery (E7), measured resource and
+  recovery budgets and a restart e2e; M10 anonymous user-listing note; M11 reduced to a read-only form pending D27;
+  M15b `sheet_layout` depth measurement.
+- §7: risks for server-accepted invalid data, the server `TypeError` noise, anonymous user listing, the agent as
+  active GM, login-not-reconnect recovery and the launcher defect; the obsolete "E2 may show" risk removed.
