@@ -9,6 +9,7 @@ paths:
   - "eslint.config.js"
   - ".stylelintrc.json"
   - "package.json"
+  - "scripts/**"
 ---
 
 # Wiretap build and test
@@ -19,13 +20,13 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 `build` (vite build), `build:e2e` (vite build --mode e2e), `dev`, `test` (vitest run), `test:watch`, `test:e2e`
 (playwright test; `:headed`, `:ui`), `eslint`, `eslint-fix`, `server` (tsx watch), `server:start` (tsx), `server:mcp` (tsx, `--mcp-only`),
-`typecheck` (tsc -p server/tsconfig.json), `stylelint`, `stylelint-fix`.
+`typecheck` (tsc -p server/tsconfig.json), `stylelint`, `stylelint-fix`, `foundry:start` (`node scripts/e2e-foundry-server.mjs`).
 
 ## Test layout
 
 | Dir | Kind |
 |---|---|
-| `tests/unit/` | vitest, happy-dom; client components/stores, `mcp`, `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`, `foundryBridge.{client,server}`, `sidecarPty` |
+| `tests/unit/` | vitest, happy-dom; client components/stores, `mcp`, `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`, `SuperviseServer`, `foundryBridge.{client,server}`, `sidecarPty` |
 | `tests/integration/terminal.test.js`, `serverModes.test.js`, `serverStartup.test.js`, `serverDispose.test.js` | vitest, terminal relay; full vs mcp-only composition; startup failure on occupied ports; dispose ordering (mocked terminal/mcp failures) |
 | `tests/e2e/` | Playwright against a live Foundry: `fixtures.js`, `global-setup.js`, `marker.js`, `sidecar.js` (starts a fresh sidecar per spec file), `users.js`, specs `smoke`, `spawn`, `terminal`, `toolbar` |
 | `tests/setup.js` | vitest setup with Foundry mocks (e.g. `HooksMock`) |
@@ -34,7 +35,17 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 - No e2e wait inside a loaded page longer than 1000 ms (`expect.poll`, `waitForFunction`, `toPass`, explicit
   `timeout:`). A longer wait is a defect to fix. World boot, login, reload, build and per-test limits are exempt.
-- e2e needs a live Foundry on `:30000` with the module enabled and a GM user (see `tests/e2e/users.js`).
+- e2e needs Foundry on `:30000` with the module enabled and a GM user (see `tests/e2e/users.js`). Playwright's
+  `webServer.command` is `node scripts/e2e-foundry-server.mjs` (`reuseExistingServer: true`, 120 s): if nothing
+  answers on the port it runs `node main.js --dataPath=<userdata> --world=<world>` from the Foundry app dir, otherwise
+  it reuses the running server. A server it launched is killed when the run ends (signals, process exit, or the
+  watched parent runner vanishing). `npm run foundry:start` runs the same launcher standalone and keeps the server up
+  until that process ends. Defaults: userdata = three levels above the module folder, app dir = `<userdata>/../foundry`,
+  port `30000`, world `test-titan`, log `debug/dumps/e2e-server.log` (gitignored `debug/`). Overrides:
+  `FOUNDRY_DATA_PATH`, `FOUNDRY_APP_DIR`, `FOUNDRY_PORT`, `FOUNDRY_WORLD`, `FOUNDRY_SERVER_LOG`. The launcher does not
+  enable the module; the launched world must already have it enabled. `scripts/lib/superviseServer.mjs` holds the
+  injectable parts, unit-tested in `tests/unit/SuperviseServer.test.js` with ephemeral ports and idle node processes
+  (no Foundry, never `:30000`).
 - Tests that write files inject a root under the gitignored `test/tmp/` (`mcpConfigFile` uses a unique
   `<pid>-<counter>` root per test and asserts it does not exist yet, so a stale scratch fails loudly) or mock `node:fs`; no test and no product code calls a deletion API (`rm`, `unlink`, `rmdir`). Product code never reads
   a test-only env var. Stale files in `test/tmp/` stay until removed by hand.

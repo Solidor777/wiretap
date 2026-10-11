@@ -51,6 +51,7 @@
       "test:e2e": "playwright test",
       "test:e2e:headed": "playwright test --headed",
       "test:e2e:ui": "playwright test --ui",
+      "foundry:start": "node scripts/e2e-foundry-server.mjs",
       "eslint": "eslint .",
       "eslint-fix": "eslint . --fix",
       "server": "tsx watch server/index.ts",

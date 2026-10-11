@@ -10,10 +10,10 @@ export default defineConfig({
       baseURL: 'http://localhost:30000',
       headless: true,
    },
-   // Reuse a running Foundry on :30000; otherwise launch it directly and wait.
+   // scripts/e2e-foundry-server.mjs reuses a Foundry already answering on :30000, otherwise launches one on the
+   // configured world and kills it when the run ends.
    webServer: {
-      command: 'node foundry/main.js --dataPath=/foundryvtt/V14/dev/foundryuserdata',
-      cwd: 'C:/FoundryVTT/V14/dev',
+      command: 'node scripts/e2e-foundry-server.mjs',
       url: 'http://localhost:30000',
       reuseExistingServer: true,
       timeout: 120_000,

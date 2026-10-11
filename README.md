@@ -9,6 +9,16 @@ Svelte 5 (runes), SCSS, and Vite.
 - `npm run build` — production build (emits `index.js` + `style.css`)
 - `npm test` — unit tests (Vitest)
 - `npm run test:e2e` — end-to-end tests (Playwright)
+- `npm run foundry:start` — starts Foundry on the configured world if nothing answers on the port, and stays up until
+  the process ends
+
+## Running e2e / starting Foundry
+
+`npm run test:e2e` starts Foundry itself through `scripts/e2e-foundry-server.mjs` when nothing answers on
+`:30000`, reuses a running server otherwise, and stops a server it started when the run ends. The launched world
+(default `test-titan`) must have Wiretap enabled. Defaults derive from the module location (userdata three levels
+up, Foundry app in `<userdata>/../foundry`); override with `FOUNDRY_DATA_PATH`, `FOUNDRY_APP_DIR`, `FOUNDRY_PORT`,
+`FOUNDRY_WORLD`, `FOUNDRY_SERVER_LOG` (default `debug/dumps/e2e-server.log`).
 
 ## Running the sidecar
 

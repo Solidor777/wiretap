@@ -26,3 +26,6 @@ test/tmp/
 
 # graphify output (regenerate with `graphify update .`)
 graphify-out/
+
+# Debug sink (e2e Foundry server log lives here).
+debug/
