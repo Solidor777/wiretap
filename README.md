@@ -224,3 +224,34 @@ capped at 10 entries with `failureCount` holding the true total. MCP error resul
 `<code>: <message>`, then as many `path: message` failure lines as fit, then ` (+N more)` for the failures not shown.
 The `create_actor` result must be an object with string `uuid`, `name` and `type` (each bounded to 256 bytes in the tool
 text); any other ack result is reported as `OP_FAILED`.
+
+## Settings and risk gates
+
+Wiretap registers its settings in Foundry's module settings. The client-scope settings (sidecar URL, terminal command,
+theme, font size) belong to each browser. The risk gates are world-scope, GM-only (`restricted`) settings, all off by
+default; each unlocks a class of dangerous operation for agents:
+
+| Setting | Unlocks |
+|---|---|
+| `allowMacroExecution` | Running macros (arbitrary code) |
+| `allowUserWrites` | Creating, updating and deleting User documents |
+| `allowSettingWrites` | Writing Setting documents and world or user settings |
+| `allowFileUpload` | Base64 data in file-path fields and the file upload tool |
+| `allowOwnershipWrites` | Changing the ownership of documents |
+| `allowCompendiumWrites` | Writing compendium packs and their documents |
+| `allowModuleConfigWrites` | Writing the module configuration (enables and disables modules) |
+| `allowAgentScripts` | Saving, disabling and running agent-saved scripts (arbitrary code) |
+| `allowedPluginModules` | Plugin skills and scripts of the module ids listed (comma-separated; empty by default) |
+
+The gate definitions live in `shared/gates.js`; the settings are registered from that table. A GM client sends its
+gate snapshot to the sidecar when it identifies and again whenever a gate setting changes. The sidecar uses the snapshot
+as a pre-check, and the executing browser re-reads its own settings before it acts, so a gate is always judged by the
+world setting of the client that would run the operation. No bridge operation can write a `wiretap.*` setting.
+
+The push ignores a change whose author is not a GM. Trust assumption: `restricted` only hides the setting in the
+settings window; Foundry lets any user holding the `SETTINGS_MODIFY` permission write a world setting, and that
+permission can be granted to a non-GM role. The executing browser reads the stored value whoever wrote it, so a user
+holding `SETTINGS_MODIFY` is trusted at GM level for the gates.
+
+Known limit: any arbitrary-code capability (`allowMacroExecution`, `allowAgentScripts`, a listed plugin module) can
+call `game.settings.set` directly. While one is enabled, the guarantee is only that no core skill can change a gate.

@@ -15,15 +15,16 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 
 - `src/index.js` imports `~/styles/Global.scss`, `hooks/OnceInit.js`, `hooks/OnceReady.js` (`~` aliases `src/`).
 - `OnceInit.js` sets `CONFIG.ui.wiretap = WiretapSidebarTab` (guarded on `foundry.applications.sidebar`
-  availability) and registers the world-agnostic settings `serverUrl`, `terminalCommand`, `terminalTheme`,
-  `terminalFontSize` under module id `wiretap`, plus the hidden client-scope `endpointKind` (`human` default, `agent`;
+  availability) and registers the client settings `serverUrl`, `terminalCommand`, `terminalTheme`,
+  `terminalFontSize` under module id `wiretap`, the risk-gate world settings (`registerGateSettings()` from
+  `settings/gates.js`), plus the hidden client-scope `endpointKind` (`human` default, `agent`;
   `config: false`, no lang keys) that supplies `kind` in the bridge identify. It sets
   `game.modules.get('wiretap').api = { bridge: { get identified() } }`, a getter over `bridgeState.identified` exported
   by `bridge/foundryBridge.js` (true only after an ok identify ack; false on disconnect, refusal or a new identify) so
   a Playwright page can wait on it. The e2e probe (`test-probe/registerProbe.js`) is loaded from there
   by a guarded dynamic import that is only valid in the e2e build.
 - `OnceReady.js` connects the shared `connection` (TerminalConnection) and calls `initFoundryBridge(connection)`
-  (see `wiretap-mcp-bridge`). `initFoundryBridge` emits the identify (protocol v3, no `gateState` yet)
+  (see `wiretap-mcp-bridge`). `initFoundryBridge` emits the identify (protocol v3, with `gateState: readGateState()`; it also pushes `BRIDGE_GATE_STATE` on gate setting changes)
   `{ protocolVersion, userId, userName, isGM, kind, dom: true }` with an ack callback on every (re)connect; a refused
   ack is logged with `console.error` (`Wiretap | bridge identify refused (<code>): <message>`, plus a reload-Foundry
   hint for `PROTOCOL_MISMATCH`). Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`.
@@ -45,6 +46,8 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 | `components/terminalFontSize.svelte.js` | `terminalFontSize` rune state; `FONT_SIZE_MIN 8`, `MAX 32`, `STEP 2`, `DEFAULT 16`; `clampFontSize` |
 | `bridge/TerminalConnection.svelte.js` | `TerminalConnection` class + `connection` singleton: Socket.IO client to the sidecar, terminal events, `onSocket` hook for sharing the socket |
 | `bridge/popoutState.svelte.js` | `popoutState` rune state `{ open }` |
+| `settings/gates.js` | `registerGateSettings()`: one world-scope, `restricted`, `config: true`, default-closed setting per `GATES` entry of `shared/gates.js` (iterated, no second list); a `boolean` gate is a Boolean, `allowedPluginModules` a String of comma-separated module ids (default `''`; Foundry has no list-of-strings setting editor). `gateLangKey(name, 'Name' \| 'Hint')` derives the `lang/en.json` key `WIRETAP.Settings.Gates.<Name with first letter upper-cased>.<Name\|Hint>`; the hints of `allowMacroExecution`, `allowAgentScripts` and `allowedPluginModules` state the arbitrary-code caveat |
+| `bridge/gates.js` | `readGateState()` (reads `game.settings` for every gate, a throwing read leaves the gate out, parses the module string, returns `sanitizeGateState(raw)`), `requireGate(name, moduleId?)` (`gateDenial(readGateState(), name, moduleId)`: reads this client's settings at call time, params never carry a gate value) and `gateNameFromSettingKey(key)` (gate name for a `wiretap.<gate>` key, else null) |
 | `test-probe/registerProbe.js` | e2e-only probe (must never ship in the production build) |
 
 ## Rules specific to this subsystem
@@ -55,4 +58,4 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 - Unit tests live in `tests/unit/` (`Wiretap`, `TerminalToolbar`, `TerminalConnection*`, `terminalController`,
   `terminalFontSize`, `terminalThemes`, `OnceInit` which asserts the `serverUrl` default `http://127.0.0.1:31416`
   matching the sidecar's IPv4 loopback bind, the `endpointKind` setting and `api.bridge.identified`; identify/ack and `BRIDGE_PING`
-  behavior is in `foundryBridge.identify.test.js`); e2e in `tests/e2e/` (see `wiretap-build-test`).
+  behavior is in `foundryBridge.identify.test.js`; gates: `gateSettings` (registration iterates `GATES`, lang keys for every gate, caveat text), `bridgeGates` (`readGateState` with hostile values, `requireGate`), `foundryBridge.gatePush` (identify payload and push), `foundryBridge.noSettingWrites`); e2e in `tests/e2e/` (see `wiretap-build-test`).

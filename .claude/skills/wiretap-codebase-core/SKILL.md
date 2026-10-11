@@ -31,7 +31,7 @@ router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `END
 |---|---|---|
 | Client UI + terminal client | `wiretap-client` | `src/**`, `lang/**` |
 | Sidecar terminal relay | `wiretap-sidecar` | `server/**` (except MCP/bridge files), `shared/**` |
-| MCP + Foundry bridge | `wiretap-mcp-bridge` | `server/mcp.ts`, `server/resultBudget.ts`, `server/handles.ts`, `server/utf8.ts`, `server/endpoints.ts`, `server/foundryBridge.ts`, `src/bridge/foundryBridge.js`, `shared/protocol.js` |
+| MCP + Foundry bridge | `wiretap-mcp-bridge` | `server/mcp.ts`, `server/resultBudget.ts`, `server/handles.ts`, `server/utf8.ts`, `server/endpoints.ts`, `server/foundryBridge.ts`, `src/bridge/foundryBridge.js`, `src/bridge/gates.js`, `src/settings/gates.js`, `shared/protocol.js`, `shared/gates.js` |
 | Build, lint, tests | `wiretap-build-test` | `tests/**`, `vite.config.mjs`, `vitest.config.mjs`, `playwright.config.mjs`, `eslint.config.js`, `package.json` |
 
 Subsystem skills activate by `paths:`; this core skill activates by description. Invoke the matching subsystem skill

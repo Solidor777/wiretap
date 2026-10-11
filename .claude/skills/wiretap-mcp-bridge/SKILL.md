@@ -8,6 +8,9 @@ paths:
   - "server/handles.ts"
   - "server/utf8.ts"
   - "src/bridge/foundryBridge.js"
+  - "src/bridge/gates.js"
+  - "src/settings/gates.js"
+  - "shared/gates.js"
   - "shared/protocol.js"
   - "tests/unit/mcp.test.js"
   - "tests/unit/handles.test.js"
@@ -99,12 +102,28 @@ way as the tool result.
   (no MCP tool takes it yet).
 - `src/bridge/foundryBridge.js` — `initFoundryBridge(connection)` (called from `OnceReady`) attaches to the shared
   socket via `TerminalConnection.onSocket`; `createActor` executes the world mutation on a GM client.
-  On each (re)connect it emits the identify (protocol v3; it carries no `gateState` yet, so the sidecar treats every gate as closed; `kind` from the `wiretap.endpointKind` client setting, `dom: true`)
+  On each (re)connect it emits the identify (protocol v3; `gateState: readGateState()` read at emit time from `src/bridge/gates.js`; `kind` from the `wiretap.endpointKind` client setting, `dom: true`)
   with an ack callback and sets `bridgeState.identified` (exposed as `api.bridge.identified`) true only on an ok ack
   while the socket is connected; a disconnect or refused ack sets it false and a refusal is logged with the sidecar's
   message. Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`. It also listens for `BRIDGE_PING` and
   acks `{ ok: true }` regardless of identify state (no ack, or a non-function ack, is ignored); the sidecar's health
   check relies on this.
+
+## Client gate enforcement (`src/bridge/gates.js`, `src/settings/gates.js`)
+
+- The gates are world-scope `restricted` settings registered from `GATES` (see `wiretap-client`). `readGateState()`
+  builds the sanitized snapshot from `game.settings`; `requireGate(name, moduleId?)` is the executing client's own check
+  (`gateDenial` over a snapshot read at call time). A gated op handler calls `requireGate` first and acks the denial as
+  `GATE_DENIED`; no gated op exists yet.
+- Push: `initFoundryBridge` registers one listener on `createSetting`, `updateSetting` and `deleteSetting` (a first
+  change creates the Setting document, a later one updates it, a reset to default deletes it; each document hook
+  runs on every client; the world collection is updated before the hook, so `game.settings.get` already returns the new value, or the default after a delete; the author is the last hook argument). For a `wiretap.<gate>` key written by a GM user (`game.users.get(userId)?.isGM`), and only on a connected GM client, it emits `BRIDGE_GATE_STATE` with a fresh
+  `readGateState()` and an ack callback; a non-ok ack is logged with `console.error`
+  (`Wiretap | bridge gate state refused (<code>): <message>`). A second `initFoundryBridge` call replaces the listener
+  (`Hooks.off` first), so a change is never pushed twice. A non-GM author is ignored; a user holding `SETTINGS_MODIFY` can still write a gate and is trusted at GM level (README). A change while disconnected needs no push: the next identify
+  carries the snapshot.
+- No op can set a setting: `OP_HANDLERS` holds only `createActor`, which passes `name` and `type` to `Actor.create`.
+  `foundryBridge.noSettingWrites.test.js` documents it. Each future write path wires `denyWiretapSettingWrite` (`TODO.md`).
 
 ## Adding a tool or op
 

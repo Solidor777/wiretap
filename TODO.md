@@ -87,10 +87,8 @@
 
 ## Deferred (later)
 
-- [ ] Risk gates, client half (next step after the sidecar half): register the world-scope `restricted` gate settings,
-      `lang/en.json` labels and hints (with the arbitrary-code caveat), the client-side `requireGate` that re-enforces
-      every gate from `game.settings`, the gate snapshot in the identify and the `bridge:gateState` push on
-      `updateSetting`, and the e2e that toggles a gate and restores it.
+- [ ] Call `requireGate(name, moduleId?)` (`src/bridge/gates.js`) at the start of every gated op handler as those ops
+      land, and ack its denial as `GATE_DENIED`; today it has no production caller and is covered by unit tests only.
 - [ ] Wire `denyWiretapSettingWrite` / `resolveSettingKey` into every Setting write path (CRUD, path-scoped writes,
       batch, replace, delete, settings skills, scripts' `ctx.core.*`) as those paths land; each path gets a test that
       it refuses `wiretap.*` and writes the string `resolveSettingKey` returned.
