@@ -9,22 +9,33 @@ import { defaultConfigRoot, writeMcpConfig } from '../../server/mcpConfigFile.ts
 const isWindows = process.platform === 'win32';
 
 /** @type {string} The gitignored scratch directory every filesystem test writes into; never the real module root. */
-const SCRATCH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'test', 'tmp', 'mcpConfigFile');
+const SCRATCH = path.resolve(
+   path.dirname(fileURLToPath(import.meta.url)),
+   '..',
+   '..',
+   'test',
+   'tmp',
+   'mcpConfigFile',
+);
+
+/** @type {number} Epoch milliseconds at module load; separates this run's roots from an earlier run's recycled pid. */
+const RUN_STAMP = Date.now();
 
 /** @type {number} Counter that makes every scratch root of this process unique. */
 let rootCounter = 0;
 
 /**
- * Return a scratch root no earlier run or test has used: `<SCRATCH>/<pid>-<counter>/<name>`. The root must not exist
- * yet, so a stale scratch directory (for example from a recycled process id) fails the test loudly instead of letting
- * it pass on leftovers. Nothing is ever removed; leftovers stay in the gitignored scratch directory.
+ * Return a scratch root no earlier run or test has used: `<SCRATCH>/<timestamp>-<pid>-<counter>/<name>`. The
+ * timestamp keeps a recycled process id from colliding with an earlier run. The root must not exist yet, so a stale
+ * scratch directory fails the test loudly instead of letting it pass on leftovers. Nothing is ever removed; leftovers
+ * stay in the gitignored scratch directory.
  * @param {string} name - A label for the test.
  * @returns {string} The absolute path of a root that does not exist.
  */
 function freshRoot(name) {
    rootCounter += 1;
    /** @type {string} The unique root. */
-   const root = path.join(SCRATCH, `${process.pid}-${rootCounter}`, name);
+   const root = path.join(SCRATCH, `${RUN_STAMP}-${process.pid}-${rootCounter}`, name);
    expect(fs.existsSync(root), `stale scratch root ${root}`).toBe(false);
    return root;
 }
