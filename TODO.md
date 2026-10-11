@@ -23,6 +23,9 @@
       Wiretap settings UI (enable toggle + port); shared-secret handshake on the sidecar socket.
 
 - [ ] MCP stdio transport (not built; only Streamable HTTP exists)
+- [ ] Endpoint health and failover: a preferred endpoint that never acks blocks later calls for 10 s each, and a
+      timed-out mutation must not be retried on another endpoint (double apply). Needs a decision on cooldown/skip
+      semantics (recommended: skip an endpoint for 60 s after a timeout, never auto-retry mutations); M9 runner health
 - [ ] Raw-socket executor (plan.md M11, dropped by D27): reads of stored source data only, for when no client
       endpoint is live. M0 showed raw creates skip the system's pre-create logic and the server accepts invalid data;
       revisit only if a raw path is ever wanted

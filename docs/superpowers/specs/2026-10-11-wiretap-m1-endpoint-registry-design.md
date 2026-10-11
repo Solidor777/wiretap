@@ -71,3 +71,43 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
 - R6.2 Skills `wiretap-mcp-bridge`, `wiretap-sidecar`, `wiretap-client` and `wiretap-codebase-core` updated to the new
   current state. `graphify update .` run.
 - R6.3 `plan.md` M1 text matches this spec (gateState moves to M2; fingerprint dropped).
+
+## Addendum A (code-review findings, 2026-10-11)
+
+- R7.1 Origin validation on the Socket.IO server via `allowRequest`: a request carrying an `Origin` header that is
+  not in the allowed origin list is refused (cross-site WebSocket hijack). The allowed list is the Foundry page origins
+  (`http://localhost:30000` and `http://127.0.0.1:30000`) in ONE exported constant (M10 makes it configurable); a request
+  with NO `Origin` (a local non-browser process) is allowed, because the accepted trust model is "same-machine
+  processes are trusted". Test first with a client sending a hostile `Origin`: it is accepted before the fix (record this
+  as the red measurement) and refused after; absent and allowed origins connect.
+- R7.2 The MCP HTTP endpoint (`/mcp`) rejects (403) a request whose `Origin` header is present and not allowed, and a
+  request whose `Host` header is not `127.0.0.1:<mcpPort>` or `localhost:<mcpPort>` (DNS-rebinding defence, as the MCP
+  transport guidance requires). Requests without `Origin` (MCP clients) are allowed. Tests for each.
+- R3.6 `create_actor` validates the client's `result` (an object with string `uuid`, `name`, `type`) and bounds each
+  string to 256 bytes; any other shape becomes `OP_FAILED` with a short message. A hostile `ok:true` ack never throws a
+  TypeError and never floods the tool text.
+- R3.7 Error text budget: the whole text returned for an error is at most 512 bytes: `<code>: <message>`, then as many
+  `path: message` failure lines as fit, then ` (+N more)` for the rest.
+- R3.8 Client-supplied error codes cannot use the reserved protocol codes (`NO_ENDPOINT`, `ENDPOINT_TIMEOUT`,
+  `ENDPOINT_GONE`, `PROTOCOL_MISMATCH`, `NOT_GM`); they become `OP_FAILED`.
+- R1.5 New code `ENDPOINT_GONE`.
+- R2.5 When an endpoint disconnects while an invocation to it is pending, that invocation rejects immediately with
+  `ENDPOINT_GONE` (not after 10 s). A synchronous send failure or a missing socket is also `ENDPOINT_GONE`, not
+  `ENDPOINT_TIMEOUT`; the cause is kept in the log line.
+- R2.6 Identify limits: `userId` at most 64 bytes, `userName` at most 128 bytes (longer is `PROTOCOL_MISMATCH`), at most
+  64 registered endpoints (the next identify is refused with `PROTOCOL_MISMATCH`-style code `NOT_GM` is wrong, so use
+  `ENDPOINT_LIMIT`, a new reserved code), and refused-identify log lines throttled to at most 10 per minute in total.
+- R1.6 New code `ENDPOINT_LIMIT` (reserved per R3.8).
+- R3.9 `truncateUtf8` is safe for any `maxBytes` (returns an empty string below the ellipsis size) and is tested on
+  2-, 3- and 4-byte characters.
+- R5.6 Added tests: hostile ack shapes (null ack, `ok:true` without result, array/string `error`, numeric `message`,
+  non-array `failures`), identify during an in-flight invoke, a timeout test with fake timers (not an immediate reject),
+  requestId reaching the client, disconnect during the ack wait.
+- R4.5 (client) Changing `endpointKind` re-identifies (setting `onChange`); the late-ack guard uses a per-attempt token
+  so an ack from an earlier connection cannot mark a later one identified; op lookup uses `Object.hasOwn` so inherited
+  names (`constructor`) are unknown ops.
+- R8 Cleanups: lines over 120 columns in touched files; typed + commented declarations flagged by the review; the double
+  blank line in `src/bridge/foundryBridge.js`; the `plan.md` §4 component-table registry row matches M1; the
+  `mcpConfigFile.test.js` scratch root includes a timestamp (open bug in `docs/OPEN_BUGS.md` moves to CLOSED when fixed).
+- Deferred (needs a decision, logged in `TODO.md`): endpoint health and fallback after a timeout (a hung preferred
+  endpoint blocks later calls; automatic retry of a mutation on another endpoint risks a double apply).
