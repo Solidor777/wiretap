@@ -63,10 +63,20 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 ## Shared protocol
 
-`shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (2), `BRIDGE_IDENTIFY`,
+`shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (3), `BRIDGE_IDENTIFY`, `BRIDGE_GATE_STATE`,
 `BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CREATE_ACTOR`, `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
-`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, and typedefs for the identify, identify ack, invoke, op ack and error payloads. Routing,
+`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, `GATE_DENIED`, and typedefs for the identify (with its optional `gateState`), identify ack, gate-state ack, invoke, op ack and error payloads. Routing,
 the endpoint registry and the error contract are in `server/endpoints.ts` (see `wiretap-mcp-bridge`). Both sides import these constants; adding an event means editing this file and both consumers.
+
+## Risk gates (`shared/gates.js`)
+
+Plain JS, no dependencies, shared by both sides (today only `server/` imports it; `src/` does not yet). `GATES` is the one deep-frozen registry: entries `{ type: 'boolean' | 'moduleList', default, unlocks }` for `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`, `allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites`, `allowAgentScripts` (boolean, default false) and `allowedPluginModules` (module-id list, default empty). There is no delete or undo gate. A `GateState` is an object with exactly those keys.
+
+- `closedGateState()` returns a fresh all-closed snapshot. `sanitizeGateState(input)` returns a fresh complete snapshot: only registry names, only own properties, booleans only for boolean gates, the module list only when an array of at most `GATE_MODULES_MAX` (64) entries (a longer array is treated as empty without being walked) keeping module ids (`/^[a-z0-9][a-z0-9_-]*$/`, 1 to `GATE_MODULE_ID_MAX_CHARS` (64) characters, duplicates removed); anything else is dropped and the gate stays closed; a non-object, or an input whose reads throw, gives the closed state.
+- `gateDenial(gateState, name, moduleId?)` returns null when open, else `{ code: 'GATE_DENIED', message }` (message at most 256 bytes, names the gate, says only a GM can enable it in the Wiretap module settings). It always sanitizes the state first, so raw or oversized module lists are never open. Deny when the name is not an own key of `GATES` (unknown-gate message names no caller text) or the sanitized value is not exactly `true`; for `allowedPluginModules` a missing `moduleId` denies and a `moduleId` must be a member of the sanitized list (the id is ignored for boolean gates). `isGateOpen(state, name, moduleId?)` is `gateDenial(...) === null`; `isModuleAllowed(state, id)` is the plugin-module form. `GATE_DENIED` is not a reserved protocol code (the client may send it).
+- `isWiretapSettingKey(key)`: non-strings never match; the key is NFKC-normalized, whitespace and control/format characters removed, lowercased; it matches the bare `wiretap` or anything starting `wiretap.`. `resolveSettingKey(documentOrKey)` reads each property once inside try/catch and returns the string key (a string input, `document.key`, or `${namespace}.${key}` when `namespace` is a string) or null. `denyWiretapSettingWrite(documentOrKey)` never throws: it returns null when the resolved key is outside the namespace and a `GATE_DENIED` denial otherwise, including when no key resolves (a by-id payload without `key`, a throwing getter or Proxy). Contract: every Setting write path calls it before any gate check and writes the string `resolveSettingKey` returned, never a re-read of the input; by-id updates are resolved to a key first; namespaced settings are passed as `{ namespace, key }`.
+
+Tests: `tests/unit/gates.test.js` (every branch enumerated; no coverage provider is installed).
 
 ## Shared budgets and document paths
 
@@ -113,5 +123,5 @@ Plain JS with no dependencies and JSDoc types, shared by both sides. Today only 
 - Windows console-window-close (CTRL_CLOSE) cannot be trapped by Node; PTY teardown covers Ctrl-C, SIGTERM, e2e
   teardown.
 - Tests: `tests/unit/sidecarPty.test.js` (incl. auto-wiring), `terminalPayloads` (input/resize/launch payload validation), `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`; `tests/integration/terminal.test.js`, `serverModes.test.js`,
-  `endpointRouting.test.js` (fake v2 clients), `endpointHealth.test.js` (ping/probe health over real sockets with fake timers), `originValidation.test.js` (hostile, allowed and absent Origin on the
+  `endpointRouting.test.js` (fake GM clients), `gateState.test.js` (risk-gate snapshots over real sockets), `endpointHealth.test.js` (ping/probe health over real sockets with fake timers), `originValidation.test.js` (hostile, allowed and absent Origin on the
   socket handshake; Origin and Host on `/mcp`), unit `origins`, `logThrottle`, `serverStartup.test.js` (occupied Socket.IO/MCP port rejects `ready`; `awaitStartup` exits 1 and frees the other port), `serverDispose.test.js` (terminal.dispose / mcp.close throwing still release both ports).

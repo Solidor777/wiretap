@@ -23,7 +23,7 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
   a Playwright page can wait on it. The e2e probe (`test-probe/registerProbe.js`) is loaded from there
   by a guarded dynamic import that is only valid in the e2e build.
 - `OnceReady.js` connects the shared `connection` (TerminalConnection) and calls `initFoundryBridge(connection)`
-  (see `wiretap-mcp-bridge`). `initFoundryBridge` emits the protocol v2 identify
+  (see `wiretap-mcp-bridge`). `initFoundryBridge` emits the identify (protocol v3, no `gateState` yet)
   `{ protocolVersion, userId, userName, isGM, kind, dom: true }` with an ack callback on every (re)connect; a refused
   ack is logged with `console.error` (`Wiretap | bridge identify refused (<code>): <message>`, plus a reload-Foundry
   hint for `PROTOCOL_MISMATCH`). Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`.

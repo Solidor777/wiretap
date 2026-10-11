@@ -127,7 +127,7 @@ origins, plus `http://localhost:30001` and `http://127.0.0.1:30001`, the Vite de
 
 The list is not configurable yet; a Foundry served from another port or host needs the constant edited.
 
-## Bridge routing and identify (protocol v2)
+## Bridge routing and identify (protocol v3)
 
 Foundry GM clients register with the sidecar as **endpoints** over Socket.IO. Each endpoint has a `kind`: `human` (a
 person's tab) or `agent` (an agent-runner browser).
@@ -156,12 +156,13 @@ checks before retrying.
 
 ```js
 socket.emit('bridge:identify', {
-   protocolVersion: 2,
+   protocolVersion: 3,
    userId,
    userName,
    isGM: true,
    kind: 'human', // or 'agent'
    dom: true,
+   gateState, // optional risk-gate snapshot, see below
 }, (ack) => { /* { ok: true } or { ok: false, error: { code, message } } */ });
 ```
 
@@ -173,12 +174,42 @@ entry; a disconnect removes it. Limits: `userId` is at most 64 bytes and `userNa
 `PROTOCOL_MISMATCH`), and at most 64 endpoints are registered (an identify from a new socket beyond that acks
 `ENDPOINT_LIMIT`). Refused-identify log lines are throttled to 10 per minute in total; the ack is never throttled.
 
-**Wiretap client.** The module's Foundry client sends this identify (protocol 2, `dom: true`) on every (re)connect, with
+**Risk gates.** A gate is a world-scope GM setting that unlocks a class of dangerous operation. The registry is
+`shared/gates.js` (`GATES`): the boolean gates `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`,
+`allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites` and `allowAgentScripts`
+(all default `false`) and `allowedPluginModules` (an array of module ids, default empty). There is no delete gate and no
+undo gate. The client reports its gate values as a snapshot object with exactly those keys: in the identify's optional
+`gateState`, and again by emitting `bridge:gateState` with the snapshot as the payload (ack callback optional) whenever
+a gate changes. The sidecar sanitizes every snapshot: only the registry names are read, each only as an own property and
+only with its registry type (booleans; `allowedPluginModules` is at most 64 entries, each a Foundry module id of 1 to 64
+characters from `[a-z0-9_-]` starting with a letter or digit, duplicates removed, and a longer list is treated as
+empty); every other key and every wrong-typed value is dropped and the gate stays closed. An absent or non-object
+snapshot closes every gate. The snapshot belongs to the sending endpoint: a repeated identify replaces it, a
+`bridge:gateState` from a registered GM endpoint replaces only that endpoint's snapshot and acks `{ ok: true }`, and one
+from a socket that is not a registered endpoint (never identified, refused, disconnected) changes nothing and acks
+`{ ok: false, error: { code: 'NOT_GM', message } }`; those refusals are logged at most 10 per minute. If handling a
+snapshot throws, that endpoint's gates are all closed and the sender gets `{ ok: false, error: { code: 'OP_FAILED',
+message } }`. Snapshots never appear in a tool result or a log line.
+
+The sidecar snapshot is a **pre-check only**. The executing browser re-enforces every gate from its own world settings
+and never from a parameter, because the identify payload is self-declared and same-machine processes are trusted until
+tokens exist: a forged GM endpoint can claim open gates, which is why the client re-checks. The sidecar enforces a gate
+by passing `requireGate: { gate, moduleId? }` to `invoke`: the router picks one endpoint, judges that endpoint's own
+snapshot, throws `GATE_DENIED` before sending when it is closed, and otherwise sends to that same endpoint, so no
+endpoint change can split the check from the send. `bridge.gateState()` is a display accessor only. A gate denial is a
+`GATE_DENIED` error of at most 256 bytes that names the gate and says only a GM can enable it in the Wiretap module
+settings; `GATE_DENIED` is not a reserved code (the executing client may send it), so a received one is never proof that
+a sidecar check ran. No write path may write a `Setting` whose key is in the `wiretap` namespace:
+`denyWiretapSettingWrite` refuses it, and callers write the string `resolveSettingKey` returns (resolve a by-id update
+to its key first; pass a namespaced setting as `{ namespace, key }`). The module's own client sends no snapshot, so every
+gate reads closed.
+
+**Wiretap client.** The module's Foundry client sends this identify (protocol 3, `dom: true`) on every (re)connect, with
 `kind` taken from the client-scope setting `wiretap.endpointKind` (`human` by default; an agent runner sets `agent`). The
 client counts as identified only after an `{ ok: true }` ack: `game.modules.get('wiretap').api.bridge.identified` is
 `true` from that ack until a disconnect or a refusal, so a runner waits on it before invoking tools. A refused ack is
 logged to the browser console with the sidecar's message; for `PROTOCOL_MISMATCH` reload Foundry. The client has no
-protocol 1 fallback.
+fallback to an older protocol.
 
 **Invocation and errors.** The sidecar emits `bridge:invoke` `{ op, params, requestId }` (`requestId` is a UUID per call
 and appears in sidecar log lines). The client acks `{ ok: true, result }` or `{ ok: false, error: { code?, message,

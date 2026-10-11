@@ -87,4 +87,13 @@
 
 ## Deferred (later)
 
+- [ ] Risk gates, client half (next step after the sidecar half): register the world-scope `restricted` gate settings,
+      `lang/en.json` labels and hints (with the arbitrary-code caveat), the client-side `requireGate` that re-enforces
+      every gate from `game.settings`, the gate snapshot in the identify and the `bridge:gateState` push on
+      `updateSetting`, and the e2e that toggles a gate and restores it.
+- [ ] Wire `denyWiretapSettingWrite` / `resolveSettingKey` into every Setting write path (CRUD, path-scoped writes,
+      batch, replace, delete, settings skills, scripts' `ctx.core.*`) as those paths land; each path gets a test that
+      it refuses `wiretap.*` and writes the string `resolveSettingKey` returned.
+- [ ] `list_endpoints` must not serialize `Endpoint` objects directly: gate state is shown only as one compact line.
+
 - [ ] Settings menu beyond serverUrl/terminalCommand, keybindings, fonts, compendium packs
