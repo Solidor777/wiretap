@@ -38,6 +38,8 @@ export interface ToolRegistration {
 export interface McpServerOptions {
    /** Tools registered after the built-in ones; each is wrapped by the result enforcer. */
    tools?: ToolRegistration[];
+   /** The server `instructions` text the client receives at session start; none when absent. */
+   instructions?: string;
 }
 
 /** The arguments of `read_handle`. */
@@ -221,14 +223,23 @@ export function makeReadHandleHandler(store: HandleStore, ownerKey: string): Too
  * @param {FoundryBridge} bridge - The Foundry bridge passed to the tool handler.
  * @param {HandleStore} store - The store receiving results over the limit.
  * @param {ToolRegistration[]} extraTools - Tools registered after the built-in ones.
+ * @param {string} [instructions] - The server instructions text, when there is one.
  * @returns {McpServer} A configured McpServer.
  */
-function buildServer(bridge: FoundryBridge, store: HandleStore, extraTools: ToolRegistration[]): McpServer {
+function buildServer(
+   bridge: FoundryBridge,
+   store: HandleStore,
+   extraTools: ToolRegistration[],
+   instructions?: string,
+): McpServer {
    // The per-request MCP server.
-   const server: McpServer = new McpServer({
-      name: 'wiretap',
-      version: '0.0.1',
-   });
+   const server: McpServer = new McpServer(
+      {
+         name: 'wiretap',
+         version: '0.0.1',
+      },
+      instructions === undefined ? undefined : { instructions },
+   );
    // The owner key shared by the `read_handle` reader and every tool's enforcer, so a handle stored by one is readable
    // by the other.
    const ownerKey: string = PROCESS_OWNER_KEY;
@@ -249,6 +260,8 @@ function buildServer(bridge: FoundryBridge, store: HandleStore, extraTools: Tool
                ),
          },
          handler: makeCreateActorHandler(bridge),
+         // A write answers with an acknowledgement; anything larger becomes a handle.
+         budgetBytes: getBudget('ACK_MAX_BYTES').value,
       },
       {
          name: 'read_handle',
@@ -296,7 +309,7 @@ function buildServer(bridge: FoundryBridge, store: HandleStore, extraTools: Tool
  * Start the MCP HTTP server (Streamable HTTP, stateless) bound to localhost only.
  * @param {FoundryBridge} bridge - The Foundry bridge the tools execute against.
  * @param {number} port - The TCP port to listen on.
- * @param {McpServerOptions} [options] - Extra tools.
+ * @param {McpServerOptions} [options] - Extra tools and the server instructions.
  * @returns {{ close: () => void; ready: Promise<void>; port: () => number }} A handle with a `close` method to stop the
  *          HTTP server, a promise that resolves once the port is bound or rejects (for example EADDRINUSE) when
  *          binding fails, and `port()`, the port actually bound (the requested port until `ready` resolves).
@@ -335,7 +348,7 @@ export function startMcpServer(
             return;
          }
          // The per-request MCP server and its stateless transport.
-         const server: McpServer = buildServer(bridge, store, options.tools ?? []);
+         const server: McpServer = buildServer(bridge, store, options.tools ?? [], options.instructions);
          const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
          });

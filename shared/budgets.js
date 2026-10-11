@@ -78,6 +78,8 @@ export const BUDGETS = table([
    budget('DESCRIPTION_TARGET_CHARS', 160, 'chars', BUDGET_SEVERITY.WARN),
    // Description length above which the definition is refused.
    budget('DESCRIPTION_MAX_CHARS', 240, 'chars', BUDGET_SEVERITY.HARD),
+   // Server `instructions` text sent to the client at session start; it points to the skills and tool families.
+   budget('INSTRUCTIONS_MAX_CHARS', 600, 'chars', BUDGET_SEVERITY.HARD),
    // Tools listed to the client at all times (core plus shipped).
    budget('ALWAYS_LISTED_TOOLS_MAX', 30, 'count', BUDGET_SEVERITY.HARD),
    // Serialized size of all core and shipped definitions together (16 KB).

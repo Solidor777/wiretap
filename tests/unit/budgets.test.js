@@ -39,6 +39,12 @@ const EXPECTED = [
       'hard',
    ],
    [
+      'INSTRUCTIONS_MAX_CHARS',
+      600,
+      'chars',
+      'hard',
+   ],
+   [
       'ALWAYS_LISTED_TOOLS_MAX',
       30,
       'count',
