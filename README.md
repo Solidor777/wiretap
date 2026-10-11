@@ -59,6 +59,53 @@ port with `WIRETAP_MCP_PORT`) whose tools run against the live world through a G
   up (the Socket.IO server, like the MCP endpoint, binds `127.0.0.1` only and is not reachable from other machines) so
   the Foundry client can still identify as a GM.
 
+## Large results and handles
+
+Every MCP tool result passes through a result enforcer (`server/resultBudget.ts`). A text result of at most 8,000
+bytes is returned as is. A larger one is kept in the sidecar's memory and the caller gets `{handle, bytes, summary}`
+(at most 256 bytes). Budgets count the raw UTF-8 bytes of the text, not the JSON-escaped bytes of the MCP wire message
+(1 KB is 1000 bytes), so a result at the cap can be larger on the wire. `bytes` is the size of the stored text. Only a
+result that is a single text item holding JSON is described by its top-level keys, entry counts and `name`/`type`
+(keys that collide once shortened to 32 bytes are skipped and counted in `omitted`; keys are listed in JavaScript
+property order, integer-like keys first). A result with several items or structured content is stored as the items
+joined by newlines and described as `text`.
+
+**Raising the limit.** A tool call may pass `maxBytes` (1 to 16,000) to change the limit for that call, but the MCP SDK
+strips arguments a tool's input schema does not declare. `read_handle` declares `maxBytes` (128 to 16,000); any other tool opts in by
+declaring an optional integer `maxBytes` in its schema, which adds to that tool's definition size. Without the
+declaration the 8,000-byte limit applies.
+
+**Reading a handle.** `read_handle` takes `handle` and optionally `paths` (document paths over the stored JSON, the
+grammar of `shared/docPath.js`), `offset`, `length` and `maxBytes` (128 to 16,000; the 64 bytes above the window are the
+footer reserve). Offsets and lengths count UTF-16 units. The first
+item is the window text, the second a footer `{offset, length, total}`; the window plus footer stay within `maxBytes`.
+A window never ends inside a surrogate pair, an `offset` inside a pair moves back to the pair's first unit (the footer
+reports the real offset), and `length: 1` at a pair returns the whole pair. When `maxBytes` is too small for the next
+character the call fails with `HANDLE_WINDOW_TOO_SMALL`. A `paths` result is built only as far as one window can reach:
+a result longer than the window is cut to it and the footer adds `"truncated": true`. The cut depends on the call's
+`maxBytes`, and the cut-off tail is reachable only by narrowing `paths`, not by paging. Each `paths` read parses the
+stored text again (nothing is cached); measured on this machine, parse plus 20 wildcard paths took about 17 ms for an
+8 MB document of long strings and about 185 ms (parse 26 to 55 ms, resolve 153 to 170 ms) for 7.7 MB of 106,000 small
+objects. A read that fails (bad range, bad path, not JSON) does not keep the handle alive.
+
+**Limits.** Handles live only in memory, and nothing is written to disk; a sidecar restart loses them. One stored
+result is at most 8,000,000 bytes (a larger one is refused with `HANDLE_TOO_LARGE`) and at most 1,024 handles are held
+(the least recently used is evicted beyond that). Eviction is global: until handles are owned per session, one caller's
+large results can evict another's. Inside the 64 MB total each entry is accounted as the larger of its
+UTF-8 size and twice its character count, plus 256 bytes of overhead; least recently used entries are evicted first, and
+a handle not read for 30 minutes (measured on a monotonic clock) expires.
+
+**Errors and images.** Error text is capped at 512 bytes. A thrown `BridgeError` passes as `<code>: <message>`; any
+other failure (`create_actor` rethrows them too), and any result the enforcer cannot read (no `content`, non-string text, unserializable content), becomes a fixed short
+error (`Tool failed.` or `Tool returned an invalid result.`) and the real cause is written to the sidecar log only, with
+control characters and line breaks replaced by spaces and the text cut to 512 bytes. A
+result is refused with `IMAGE_LIMIT` when it carries more than one image, an image whose `mimeType` is not `image/png`,
+base64 data that is longer than 1,000,000 characters or has any character outside the standard base64 alphabet
+(whitespace included), or a PNG whose longest side exceeds 1280 px. The enforcer returns only what it measured: image items as exactly
+`type`, `data` and `mimeType`, text items as exactly `type` and `text`, and the result as `content` plus
+`structuredContent` when present. `_meta`, `annotations` and any unknown field, on an item or on the result, are dropped. The 480,000 px default image area is applied when a
+capture tool takes the picture, not by the enforcer.
+
 ## Origin validation
 
 Both listeners refuse a request from a browser page of another origin. The allowed origins are the single constant

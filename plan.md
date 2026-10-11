@@ -276,6 +276,14 @@ the † changes are DECIDED (accepted 2026-10-11).
 | Image | `screenshot` only; default ≤ 480,000 px (the 800×600 area), aspect kept ‡ (D28, DECIDED); max 1280 px longest side; one per result | CI hard (capture unit) | +972 measured at 800×600; larger sizes not measured. Titan sheets are 850×926 (actor) and 700×650 (item) (E9): the actor sheet does not fit an 800×600 box without distortion-free downscaling to 551×600, so the default is expressed as area |
 | Live recalibration | `tests/measure/measureContext.mjs`, manual, ≤ 6 `claude -p` runs | Report only | Tokenizers and Claude Code behaviour change between versions |
 
+**Counting rule.** Every byte budget counts the raw UTF-8 bytes of the text a tool returns, not the JSON-escaped bytes
+of the MCP wire message: quotes, backslashes and control characters in a result are escaped on the wire, so the wire
+form of a result at the cap can be larger than the cap. Runtime bounds that protect the sidecar rather than the client
+context: one stored result ≤ 8,000,000 B (`HANDLE_ENTRY_MAX_BYTES`), ≤ 1,024 stored results (`HANDLE_MAX_COUNT`), each
+entry accounted as the larger of its UTF-8 size and twice its character count plus 256 B inside the 64 MB total, one
+image ≤ 1,000,000 base64 characters (`IMAGE_DATA_MAX_BYTES`) and `image/png` only. The 480,000 px image area is a
+capture-time default, not enforced by the result enforcer.
+
 ### 2.7 Skills as the discovery layer (part of D18, DECIDED)
 
 The user's addition: Wiretap skills may reference the MCP tools to point agents to them.

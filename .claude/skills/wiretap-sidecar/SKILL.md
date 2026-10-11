@@ -70,12 +70,12 @@ the endpoint registry and the error contract are in `server/endpoints.ts` (see `
 
 ## Shared budgets and document paths
 
-Plain JS with no dependencies and JSDoc types, imported by both sides; nothing in `server/` or `src/` imports them yet.
+Plain JS with no dependencies and JSDoc types, shared by both sides. Today only `server/` imports them: `handles.ts` (`getBudget`, `resolvePaths`), `resultBudget.ts` and `mcp.ts` (`getBudget`); nothing in `src/` does.
 
 - `shared/budgets.js` — `BUDGETS` (frozen table of named entries `{ name, value, unit, severity }`), `BUDGET_SEVERITY`
   (`hard` | `warn`) and `getBudget(name)` (throws on an unknown name; inherited properties are not budgets). The numbers
   are the context budgets (tool name, definition, description, ack, compact view, search page, error, text hard cap and
-  per-call maximum, sheet layout, image, live recalibration, paths per call, path-error bytes, `PATH_BYTES_MAX` 512,
+  per-call maximum, sheet layout, image side, count and data size, stored-result entry size and count, live recalibration, paths per call, path-error bytes, `PATH_BYTES_MAX` 512,
   `PATH_SEGMENTS_MAX` 16). `warn` entries are `DESCRIPTION_TARGET_CHARS`, `PROJECTION_BYTES_PER_10_FIELDS`,
   `LIVE_RECALIBRATION_MAX_RUNS`. 1 KB is 1000 bytes (8000, 16000, 2000, 1000, 4000).
 - `shared/docPath.js` — the path grammar over a canonical document export. `parsePath(path)` refuses non-strings,
@@ -98,6 +98,10 @@ Plain JS with no dependencies and JSDoc types, imported by both sides; nothing i
   or replace value with an own `__proto__`/`constructor`/`prototype` key or nesting over 32 levels (`PATH_UNSAFE_VALUE`).
   Errors are `{ code, message }` (message within `PATH_ERROR_MAX_BYTES`) with `PATH_*` codes. Tests:
   `tests/unit/budgets.test.js`, `docPath.test.js`.
+
+## Result enforcer and handle store
+
+`server/handles.ts`, `server/resultBudget.ts` and `server/utf8.ts` are pure in-memory modules (no file-system import or write/delete call, enforced by a unit test that resolves the sources from `import.meta.url`). They are consumed by `server/mcp.ts`; the details are in `wiretap-mcp-bridge`. Tests: `tests/unit/handles.test.js`, `resultBudget.test.js`, `tests/integration/resultHandles.test.js`.
 
 ## Rules specific to this subsystem
 

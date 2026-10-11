@@ -45,6 +45,20 @@
 - [ ] `server/index.ts` invalid-`WIRETAP_MODE` branch (`process.exit(1)` before listening) is untested; the entry file
       runs on import, so covering it needs the mode check extracted into a testable function
 
+- [ ] Result handles are keyed by one process-wide owner key (`PROCESS_OWNER_KEY` in `server/mcp.ts`) because MCP
+      sessions are stateless: any MCP caller can read any handle. When sessions become stateful, key the handle store by
+      the MCP session id and release a session's handles when it ends. Until then handle eviction is global across
+      owners (one caller's results can evict another's)
+- [ ] A `read_handle` `paths` read parses the whole stored text again on every call (nothing cached). Measured: ~185 ms
+      worst case for 7.7 MB of small objects, of which parsing is 26 to 55 ms and path resolution 153 to 170 ms, so a
+      parsed-document cache would not bring it under 150 ms; make `resolvePaths` cheaper for wildcard reads over large
+      arrays if it matters
+- [ ] `create_actor` has no per-tool acknowledgement budget yet (`budgetBytes` is unset, so only the 8,000-byte hard cap
+      applies): set it to the 256-byte `ACK_MAX_BYTES` and assert the ack size for write tools in the context-budget test
+- [ ] Screenshot capture must enforce the 480,000 px default area (`IMAGE_DEFAULT_MAX_PIXELS`) when the capture tool
+      exists; the result enforcer checks only the longest side (1280 px), the 1,000,000-character data size and the
+      PNG type, never the area
+
 ## Carried-over cleanups
 
 - [x] Sidecar: kill a running PTY on server shutdown — `dispose()` on the manager + SIGINT/SIGTERM teardown in `index.ts` (Windows console-window-close / CTRL_CLOSE still uncatchable by Node)
