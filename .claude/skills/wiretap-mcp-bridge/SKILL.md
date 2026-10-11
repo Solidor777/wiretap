@@ -48,38 +48,55 @@ way as the tool result.
     (for example `EADDRINUSE`), so `createWiretapServer` folds it into its own `ready`.
 - `server/endpoints.ts` — protocol v2 core, no sockets: `createEndpointRegistry(now?)` (`register` returns false when a
   new socket would exceed `MAX_ENDPOINTS` (64) / `remove` / `list` / `firstOfKind`; an endpoint is `{ socketId, userId, userName, kind, dom, registeredAt }`, insertion order is
-  the tiebreak, a repeated identify keeps position and `registeredAt`); `validateIdentify(payload)`
+  the tiebreak, a repeated identify keeps position and `registeredAt`); every endpoint also has
+  `health: 'healthy' | 'unresponsive'` (`register` starts a new socket healthy and keeps the health of an already-registered socket, so a re-identify never restores routing; only a ping ack does; `get(socketId)`,
+  `setHealth(socketId, health)`; `firstOfKind` and so every route, `endpoint` override included, skips unresponsive
+  endpoints while `list()` still returns them); `validateIdentify(payload)`
   (`PROTOCOL_MISMATCH` for a non-object, a `protocolVersion` other than `PROTOCOL_VERSION` (2), any malformed field, a
   `userId` over 64 bytes or a `userName` over 128 bytes; `NOT_GM` for `isGM:false`); `ROUTE_ORDER = ['agent', 'human']` (the one place the default order is defined);
-  `createRouter(registry, { send, log, newRequestId? })` whose `invoke(op, params, { endpoint? })` picks the first
-  endpoint of the first kind in `ROUTE_ORDER` (an `endpoint` option restricts to that kind, no fallback), generates a
+  `createRouter(registry, { send, ping, timers?, log, logHealth?, newRequestId? })` whose `invoke(op, params, { endpoint? })` picks
+  the first healthy endpoint of the first kind in `ROUTE_ORDER` (an `endpoint` option restricts to that kind, no
+  fallback; when no healthy endpoint is eligible but a connected one of an eligible kind is unresponsive the call fails
+  at once with `ENDPOINT_UNAVAILABLE`, at most 256 bytes, and `NO_ENDPOINT` stays for no connected endpoint of the kind), generates a
   UUID `requestId`, logs it, and resolves the ack `result` or throws a `BridgeError`;
   `BridgeError { code, message, failures?, failureCount? }`; `EndpointGoneError` (thrown by a transport); `normalizeAckError`
   (code kept only if `/^[A-Z][A-Z0-9_]{0,63}$/` and not reserved (`NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_GONE`,
-  `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH`, `NOT_GM`), else `OP_FAILED`; message and each failure path/message bounded to 512 bytes by
+  `ENDPOINT_UNAVAILABLE`, `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH`, `NOT_GM`), else `OP_FAILED`; message and each failure path/message bounded to 512 bytes by
   `truncateUtf8`; 10 failures max; `failureCount` is the larger of the sent count and the client's reported count);
   `formatBridgeError` (whole text at most 512 bytes: `<code>: <message>`, then `path: message` failure lines, one per line,
   as many as fit, then ` (+N more)` for the failures not shown). `truncateUtf8` returns `''` when the limit is below the
   3-byte ellipsis. `NO_ENDPOINT` is at most 256 bytes and names the fix. A transport rejection with an
-  `EndpointTimeoutError` (no ack within 10 s) becomes `ENDPOINT_TIMEOUT`; every other transport rejection (an
+  `EndpointTimeoutError` (no ack within 10 s) first runs the endpoint health check, then becomes `ENDPOINT_TIMEOUT` with
+  the message `Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.`. The
+  check pings the endpoint (`ping`, 1 s window in `foundryBridge.ts`; the router awaits it before throwing, so a timed-out call reports after up to 11 s: the 10 s ack window plus at most 1 s): an acked ping leaves it healthy; a failed ping
+  marks it unresponsive and starts one `timers.setInterval` probe (every `PROBE_INTERVAL_MS` = 5 s; defaults to the
+  global interval timers, looked up at call time) that pings it with at most one ping in flight and, on an ack,
+  restores it and clears the interval. Health log lines (failed ping, unresponsive, recovery) go to `logHealth` (default `log`); the bridge passes a `createLogThrottle` of 10 per minute (noun `endpoint health lines`), so a never-acking endpoint cannot flood the log. Concurrent timeouts on one endpoint share one check; a tick for a removed or
+  healthy endpoint clears the probe. `router.forget(socketId)` and `router.dispose()` clear probes, and nothing starts
+  after dispose. A call is sent exactly once; nothing retries it. The router has no clock (the registry takes `now`).
+  Other transport rejections never ping; every other transport rejection (an
   `EndpointGoneError` or any error from the send) becomes `ENDPOINT_GONE` (the cause is logged, not returned). `requestId` is in the payload and sidecar log lines, not in error text or tool results.
 - `server/foundryBridge.ts` — `createFoundryBridge({ log? })` returns `{ handleConnection(socket), invoke }`. It keeps
-  a socket map, the registry and the router (the transport is `socket.timeout(10 s).emit(BRIDGE_INVOKE, ...)`, whose ack-callback error becomes an `EndpointTimeoutError`; a missing socket, a synchronous emit failure or a
-  disconnect while an invocation awaits its ack rejects with `EndpointGoneError`, the disconnect immediately).
+  a socket map, the registry and the router (the invoke and ping transports share one `emitWithAck` helper (`socket.timeout(ms).emit(event, [payload,] ack)`; the ack-callback error becomes an `EndpointTimeoutError`; invoke uses a 10 s window and tracks the call so a disconnect rejects it); a missing socket, a synchronous emit failure or a
+  disconnect while an invocation awaits its ack rejects with `EndpointGoneError`, the disconnect immediately; the
+  router's `ping` is the same helper with a 1 s window and no payload, untracked). The returned bridge also has `dispose()` (stops every
+  health probe; `createWiretapServer.dispose()` calls it).
   `handleConnection` handles `BRIDGE_IDENTIFY` `(payload, ack?)`: validate, register (a new socket beyond 64 endpoints is
-  refused with `ENDPOINT_LIMIT`) or, when refused, remove any earlier entry of the socket and log
+  refused with `ENDPOINT_LIMIT`) or, when refused, drop any earlier entry of the socket (`dropEndpoint`: registry remove plus `router.forget`, so no probe survives) and log
   `Wiretap sidecar | refused identify from <id>: <code>` (at most 10 such lines per minute in total via `createLogThrottle`, followed by one
   `N further identify refusals suppressed` line after the window; clock injectable as `options.now`; the ack is never
   throttled), then call `ack` with
   `{ ok: true }` or `{ ok: false, error: { code, message } }` (an absent ack callback is tolerated); `disconnect`
-  removes the endpoint. `createWiretapServer` returns the bridge as `bridge` so tests can pass the `endpoint` option
+  calls `dropEndpoint(socket.id)` (removes the endpoint and stops its probe). `createWiretapServer` returns the bridge as `bridge` so tests can pass the `endpoint` option
   (no MCP tool takes it yet).
 - `src/bridge/foundryBridge.js` — `initFoundryBridge(connection)` (called from `OnceReady`) attaches to the shared
   socket via `TerminalConnection.onSocket`; `createActor` executes the world mutation on a GM client.
   On each (re)connect it emits the v2 identify (`kind` from the `wiretap.endpointKind` client setting, `dom: true`)
   with an ack callback and sets `bridgeState.identified` (exposed as `api.bridge.identified`) true only on an ok ack
   while the socket is connected; a disconnect or refused ack sets it false and a refusal is logged with the sidecar's
-  message. Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`.
+  message. Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`. It also listens for `BRIDGE_PING` and
+  acks `{ ok: true }` regardless of identify state (no ack, or a non-function ack, is ignored); the sidecar's health
+  check relies on this.
 
 ## Adding a tool or op
 

@@ -31,12 +31,13 @@ Current-state reference; verify against code before relying on a detail. Core co
   before reading `io.httpServer.address().port`, `createFoundryBridge()`, `startMcpServer`. In `full` mode
   it also creates `createTerminalManager(io, undefined, { mcpPort })` and calls `terminal.handleConnection(socket)`;
   in `mcp-only` mode there is no terminal manager and terminal events are not handled. Every connection gets
-  `bridge.handleConnection(socket)`. `dispose()` kills any PTY (full mode), then closes MCP, then Socket.IO, in nested try/finally so each step runs even if
-  an earlier one throws (the first error propagates).
+  `bridge.handleConnection(socket)`. `dispose()` kills any PTY (full mode), then closes MCP, then stops the bridge's endpoint
+  health probes (`bridge.dispose()`), then closes Socket.IO, in nested try/finally so each step runs even if an
+  earlier one throws (the first error propagates).
 - `server/logThrottle.ts` — `createLogThrottle({ log, now, limit, windowMs, noun })`: fixed-window throttle for log
   lines an unauthenticated caller can trigger; writes `limit` lines per window, counts the rest and writes one
   `Wiretap sidecar | N further <noun> suppressed` line from the first call after the window (no timer). Used by
-  `server.ts` (origin refusals) and `foundryBridge.ts` (identify refusals).
+  `server.ts` (origin refusals) and `foundryBridge.ts` (identify refusals and endpoint health lines).
 - `server/origins.ts` — `ALLOWED_ORIGINS` (`http://localhost:30000`, `http://127.0.0.1:30000` and the Vite dev-server
   page origins `http://localhost:30001`, `http://127.0.0.1:30001`; the one definition),
   `isOriginAllowed(origin)` (absent or listed; a repeated or comma-joined header never matches) and
@@ -63,8 +64,8 @@ Current-state reference; verify against code before relying on a detail. Core co
 ## Shared protocol
 
 `shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (2), `BRIDGE_IDENTIFY`,
-`BRIDGE_INVOKE`, `OP_CREATE_ACTOR`, `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`, `ENDPOINT_TIMEOUT`,
-`ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, and typedefs for the identify, identify ack, invoke, op ack and error payloads. Routing,
+`BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CREATE_ACTOR`, `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
+`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, and typedefs for the identify, identify ack, invoke, op ack and error payloads. Routing,
 the endpoint registry and the error contract are in `server/endpoints.ts` (see `wiretap-mcp-bridge`). Both sides import these constants; adding an event means editing this file and both consumers.
 
 ## Rules specific to this subsystem
@@ -77,5 +78,5 @@ the endpoint registry and the error contract are in `server/endpoints.ts` (see `
 - Windows console-window-close (CTRL_CLOSE) cannot be trapped by Node; PTY teardown covers Ctrl-C, SIGTERM, e2e
   teardown.
 - Tests: `tests/unit/sidecarPty.test.js` (incl. auto-wiring), `terminalPayloads` (input/resize/launch payload validation), `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`; `tests/integration/terminal.test.js`, `serverModes.test.js`,
-  `endpointRouting.test.js` (fake v2 clients), `originValidation.test.js` (hostile, allowed and absent Origin on the
+  `endpointRouting.test.js` (fake v2 clients), `endpointHealth.test.js` (ping/probe health over real sockets with fake timers), `originValidation.test.js` (hostile, allowed and absent Origin on the
   socket handshake; Origin and Host on `/mcp`), unit `origins`, `logThrottle`, `serverStartup.test.js` (occupied Socket.IO/MCP port rejects `ready`; `awaitStartup` exits 1 and frees the other port), `serverDispose.test.js` (terminal.dispose / mcp.close throwing still release both ports).

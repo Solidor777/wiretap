@@ -88,6 +88,20 @@ preferred and a human tab is the fallback. A call may pass `endpoint: 'agent' | 
 `invoke(op, params, { endpoint })` to restrict the choice to that kind with no fallback. With no eligible endpoint the
 call fails with `NO_ENDPOINT`.
 
+**Endpoint health.** Every endpoint is `healthy` or `unresponsive`; routing (the default order and the `endpoint`
+override alike) skips unresponsive endpoints, keeping the order above among the rest. When an invocation gets no ack in
+10 s the sidecar emits `bridge:ping` to that endpoint (the client acks `{ ok: true }` at once). A ping acked within 1 s
+leaves the endpoint healthy (the operation was slow). A ping that is not acked in 1 s, or cannot be written, marks it
+unresponsive and the sidecar pings it every 5 s, one ping in flight per endpoint, until one is acked; only a ping ack
+restores it (a new identify from an already-registered socket keeps its health and probe), and a disconnect or a refused
+identify removes it and stops its probe. The sidecar waits for that ping (at most 1 s) before answering, so a timed-out
+call reports `ENDPOINT_TIMEOUT` after up to 11 s. Health log lines are throttled to 10 per minute. Concurrent timeouts
+on one endpoint start one probe. When endpoints of the eligible kind are connected but all are unresponsive the call
+fails at once with `ENDPOINT_UNAVAILABLE` (an `endpoint` override never switches kind: it returns `ENDPOINT_UNAVAILABLE`
+when that kind has only unresponsive endpoints and `NO_ENDPOINT` when none of that kind is connected). The sidecar never
+retries a call: it is sent once, and `ENDPOINT_TIMEOUT` reports that the operation may still have applied so the caller
+checks before retrying.
+
 **Identify contract (for runner authors).** Emit `bridge:identify` on every (re)connect, with an ack callback:
 
 ```js
@@ -116,15 +130,16 @@ client counts as identified only after an `{ ok: true }` ack: `game.modules.get(
 logged to the browser console with the sidecar's message; for `PROTOCOL_MISMATCH` reload Foundry. The client has no
 protocol 1 fallback.
 
-**Invocation and errors.** The sidecar emits `bridge:invoke` `{ op, params, requestId }` (`requestId` is a UUID per
-call and appears in sidecar log lines). The client acks `{ ok: true, result }` or
-`{ ok: false, error: { code?, message, failures? } }`. Failures reach the caller as
-`{ code, message, failures?, failureCount? }` with codes `NO_ENDPOINT`, `ENDPOINT_TIMEOUT` (10 s with no ack),
-`ENDPOINT_GONE` (the endpoint disconnected, or could not be written to, before it acked; reported at once, not after
-10 s), `OP_FAILED` (the default when the client gives no code), `PROTOCOL_MISMATCH`, `NOT_GM`, `ENDPOINT_LIMIT`. The
-last six are reserved: a code of that name in a client's failure ack is reported as `OP_FAILED`. Messages are at most
-512 bytes (256 for `NO_ENDPOINT`), truncated with `…`; `failures` is capped at 10 entries with `failureCount` holding
-the true total. MCP error results are at most 512 bytes in total: `<code>: <message>`, then as many `path: message`
-failure lines as fit, then ` (+N more)` for the failures not shown. The `create_actor` result must be an object with
-string `uuid`, `name` and `type` (each bounded to 256 bytes in the tool text); any other ack result is reported as
-`OP_FAILED`.
+**Invocation and errors.** The sidecar emits `bridge:invoke` `{ op, params, requestId }` (`requestId` is a UUID per call
+and appears in sidecar log lines). The client acks `{ ok: true, result }` or `{ ok: false, error: { code?, message,
+failures? } }`. Failures reach the caller as `{ code, message, failures?, failureCount? }` with codes `NO_ENDPOINT`,
+`ENDPOINT_UNAVAILABLE` (endpoints connected, all unresponsive; refused without sending), `ENDPOINT_TIMEOUT` (10 s with
+no ack; the operation may still have applied; it is reported after up to 11 s, the 10 s ack window plus the sidecar's
+health ping of at most 1 s), `ENDPOINT_GONE` (the endpoint disconnected, or could not be written to, before it acked;
+reported at once, not after 10 s), `OP_FAILED` (the default when the client gives no code), `PROTOCOL_MISMATCH`,
+`NOT_GM`, `ENDPOINT_LIMIT`. All of them except `OP_FAILED` are reserved: a code of that name in a client's failure ack
+is reported as `OP_FAILED`. Messages are at most 512 bytes (256 for `NO_ENDPOINT`), truncated with `…`; `failures` is
+capped at 10 entries with `failureCount` holding the true total. MCP error results are at most 512 bytes in total:
+`<code>: <message>`, then as many `path: message` failure lines as fit, then ` (+N more)` for the failures not shown.
+The `create_actor` result must be an object with string `uuid`, `name` and `type` (each bounded to 256 bytes in the tool
+text); any other ack result is reported as `OP_FAILED`.

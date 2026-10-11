@@ -31,6 +31,8 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
   stale ok or refusal never changes `identified`. `endpointKind` has an `onChange` calling `reidentifyBridge()`, which
   emits a fresh identify only when the socket is connected and the setting differs from the kind last sent. Op lookup
   uses `Object.hasOwn(OP_HANDLERS, op)`, so inherited names (`constructor`, `__proto__`) ack `OP_FAILED` unknown op.
+  `initFoundryBridge` also registers a `BRIDGE_PING` listener that acks `{ ok: true }` and does nothing else; it
+  ignores identify state and does nothing when the ack argument is absent or not a function.
 
 ## Pieces
 
@@ -52,5 +54,5 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 - Settings, localization strings (`lang/en.json`) and keys must stay in sync when adding UI.
 - Unit tests live in `tests/unit/` (`Wiretap`, `TerminalToolbar`, `TerminalConnection*`, `terminalController`,
   `terminalFontSize`, `terminalThemes`, `OnceInit` which asserts the `serverUrl` default `http://127.0.0.1:31416`
-  matching the sidecar's IPv4 loopback bind, the `endpointKind` setting and `api.bridge.identified`; identify/ack
+  matching the sidecar's IPv4 loopback bind, the `endpointKind` setting and `api.bridge.identified`; identify/ack and `BRIDGE_PING`
   behavior is in `foundryBridge.identify.test.js`); e2e in `tests/e2e/` (see `wiretap-build-test`).

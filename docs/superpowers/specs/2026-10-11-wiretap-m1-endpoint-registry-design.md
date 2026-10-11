@@ -123,3 +123,40 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
   a polling handshake; the client library reports only `websocket error` / `xhr poll error`).
 - Deferred (needs a decision, logged in `TODO.md`): endpoint health and fallback after a timeout (a hung preferred
   endpoint blocks later calls; automatic retry of a mutation on another endpoint risks a double apply).
+
+## Addendum B (endpoint health, 2026-10-11; decision accepted by the owner)
+
+- R9.1 Protocol: `BRIDGE_PING` event (sidecar to client; the client acks `{ ok: true }` at once) and the reserved code
+  `ENDPOINT_UNAVAILABLE` (in `RESERVED_CODES`, so a client cannot send it; it becomes `OP_FAILED`).
+- R9.2 Registry: each endpoint has `health: 'healthy' | 'unresponsive'` (new endpoints are healthy). Routing
+  (`firstOfKind`, including the per-call `endpoint` override) skips unresponsive endpoints, keeping `ROUTE_ORDER` then
+  registration order. A new socket registers healthy; a re-identify of an already-registered socket keeps its current
+  health and its probe, so only a ping ack restores an unresponsive endpoint (a client cannot clear its own state by
+  re-identifying). A disconnect or a refused identify removes the endpoint and its probe.
+- R9.3 On an `EndpointTimeoutError` the router probes that endpoint with `BRIDGE_PING` (1 s timeout). A ping ack leaves it
+  healthy (the operation was slow). A ping timeout or failure marks it unresponsive and starts a probe every 5 s, one in
+  flight per endpoint; any ping ack restores it and stops probing. Concurrent timeouts on one endpoint start one probe.
+  Probes stop when the endpoint disconnects or the router is disposed. Timers are injected (`RouterDeps.timers`) so tests
+  use fake timers; the router reads no clock. The router awaits the probe (at most 1 s) before throwing
+  `ENDPOINT_TIMEOUT`, so the next call sees the result; a timed-out call therefore reports after up to 11 s. Health
+  log lines go through the shared log throttle.
+- R9.4 When eligible-kind endpoints are connected but all are unresponsive the call fails at once with
+  `ENDPOINT_UNAVAILABLE` (message at most 256 bytes: reload the stuck Foundry tab or connect another endpoint). With an
+  `endpoint` override "no fallback" still means no switch of kind; `ENDPOINT_UNAVAILABLE` is returned when that kind has
+  no healthy endpoint but has an unresponsive one; `NO_ENDPOINT` stays for "none of that kind connected".
+- R9.5 Nothing is ever retried automatically: a timed-out call is sent exactly once. The `ENDPOINT_TIMEOUT` message
+  becomes "Foundry did not respond in 10 s; the operation may still have applied. Check before retrying." (at most 512
+  bytes).
+- R9.6 Client: a `BRIDGE_PING` listener that acks `{ ok: true }`; no other behaviour.
+- R9.7 Tests (fake timers, no wait over 1 s): timeout plus ping ack keeps routing to the same agent; timeout plus ping
+  timeout routes the next call to the human with no 10 s wait; only-unresponsive gives `ENDPOINT_UNAVAILABLE` at most 256
+  bytes; override `agent` with the agent unresponsive gives `ENDPOINT_UNAVAILABLE` and no fallback to human; two agents,
+  the first unresponsive, override picks the second; a probe ack restores routing; a re-identify of an unresponsive socket does NOT restore routing or leave a second probe;
+  concurrent timeouts produce one probe; a timed-out call is sent once (assert the `send` count); a client sending
+  `ENDPOINT_UNAVAILABLE` is rewritten to `OP_FAILED`; the timeout message contains "may still have applied"; an
+  integration test with two fake clients (agent acks pings but never invokes; agent acks neither); client ping-handler
+  unit test.
+- R9.8 Docs: README routing section, `wiretap-sidecar`, `wiretap-mcp-bridge` and `wiretap-client` skills, the
+  `TODO.md` failover item removed, and two items logged in `TODO.md`: late-ack logging with `requestId` (so an operator
+  can tell whether a timed-out mutation applied) and retrying idempotent ops, which needs a sidecar-trusted `mutates:
+  false` on shipped ops only (M7).

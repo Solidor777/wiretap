@@ -23,9 +23,10 @@
       Wiretap settings UI (enable toggle + port); shared-secret handshake on the sidecar socket.
 
 - [ ] MCP stdio transport (not built; only Streamable HTTP exists)
-- [ ] Endpoint health and failover: a preferred endpoint that never acks blocks later calls for 10 s each, and a
-      timed-out mutation must not be retried on another endpoint (double apply). Needs a decision on cooldown/skip
-      semantics (recommended: skip an endpoint for 60 s after a timeout, never auto-retry mutations); M9 runner health
+- [ ] Late-ack logging: when an endpoint acks an invocation after the sidecar already answered ENDPOINT_TIMEOUT, log
+      the ack with its `requestId`, so an operator can tell whether a timed-out mutation applied
+- [ ] Retry idempotent ops after an ENDPOINT_TIMEOUT: needs a sidecar-trusted `mutates: false` flag on shipped ops only
+      (never client-declared), so a read can move to another endpoint and a mutation is still sent exactly once (M7)
 - [ ] Raw-socket executor (plan.md M11, dropped by D27): reads of stored source data only, for when no client
       endpoint is live. M0 showed raw creates skip the system's pre-create logic and the server accepts invalid data;
       revisit only if a raw path is ever wanted

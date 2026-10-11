@@ -21,8 +21,8 @@ hosting an AI-agent terminal and a bridge that lets agents act on the live world
 `shared/protocol.js` holds the wire constants used by both sides (imported as `$shared/protocol.js` in the client and
 `../shared/protocol.js` in the sidecar). The Foundry bridge speaks protocol v2: GM clients identify as `human` or
 `agent` endpoints (acked after registration) and the sidecar routes each invocation through an endpoint registry and
-router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_GONE`,
-`ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH` and `NOT_GM`; a client ack cannot produce them (they become `OP_FAILED`). Limits:
+router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`,
+`ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH` and `NOT_GM`; a client ack cannot produce them (they become `OP_FAILED`). Limits:
 `userId` 64 bytes, `userName` 128 bytes, 64 endpoints, 512 bytes of MCP error text.
 
 ## Subsystem map (one skill per subsystem)
