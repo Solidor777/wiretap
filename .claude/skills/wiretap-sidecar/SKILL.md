@@ -68,6 +68,37 @@ Current-state reference; verify against code before relying on a detail. Core co
 `ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, and typedefs for the identify, identify ack, invoke, op ack and error payloads. Routing,
 the endpoint registry and the error contract are in `server/endpoints.ts` (see `wiretap-mcp-bridge`). Both sides import these constants; adding an event means editing this file and both consumers.
 
+## Shared budgets and document paths
+
+Plain JS with no dependencies and JSDoc types, imported by both sides; nothing in `server/` or `src/` imports them yet.
+
+- `shared/budgets.js` — `BUDGETS` (frozen table of named entries `{ name, value, unit, severity }`), `BUDGET_SEVERITY`
+  (`hard` | `warn`) and `getBudget(name)` (throws on an unknown name; inherited properties are not budgets). The numbers
+  are the context budgets (tool name, definition, description, ack, compact view, search page, error, text hard cap and
+  per-call maximum, sheet layout, image, live recalibration, paths per call, path-error bytes, `PATH_BYTES_MAX` 512,
+  `PATH_SEGMENTS_MAX` 16). `warn` entries are `DESCRIPTION_TARGET_CHARS`, `PROJECTION_BYTES_PER_10_FIELDS`,
+  `LIVE_RECALIBRATION_MAX_RUNS`. 1 KB is 1000 bytes (8000, 16000, 2000, 1000, 4000).
+- `shared/docPath.js` — the path grammar over a canonical document export. `parsePath(path)` refuses non-strings,
+  paths over `PATH_BYTES_MAX` bytes or `PATH_SEGMENTS_MAX` segments (`PATH_LIMIT`, checked before splitting), empty
+  segments, more than one `*`, `prototype` and every member of `Object.prototype` (`UNSAFE_SEGMENTS` lists the three
+  pollution names also refused as own keys of written values). A `.` always splits, so a key containing `.` cannot be
+  addressed. `resolvePath(node, segments)` is iterative: it steps own properties on objects; on arrays a canonical
+  integer is an index and any other name is an own element `_id`; an in-range index that is also another element's
+  `_id` resolves to nothing; a `*` over an array returns `{<_id or index>: value}` (empty array `{}`; a non-empty array
+  where no element resolves, or a `*` over a non-array, is not found; two elements producing the same key make it
+  `{found: false, code: 'PATH_AMBIGUOUS'}`; a second `*` in hand-built segments is not found).
+  `resolvePaths(export, paths)` returns `{ ok, values, missing }` (up to `PATHS_PER_CALL_MAX`; repeated paths read once;
+  any malformed, over-long or unsafe path refuses the whole call; ambiguous wildcards land in `missing`).
+  `groupWrites(patches, embeddedCollections)` turns `[{ path, value, op }]` (`op` `set` | `replace` | `delete`) into
+  `{ document, embedded }`, where `embedded` is `[{ collection, entries: [{ _id, changes }] }]` with paths relative to
+  the embedded document (`collection` is the collection name such as `items`; the client maps it to the document name).
+  Refused: wildcard writes, unsafe or duplicate paths, a path that is a prefix of another patch path (`PATH_CONFLICT`),
+  unknown ops, an embedded path with no field after the id, a purely numeric id segment on an embedded write (writes
+  address documents by `_id`; reads accept an index or an `_id`), a non-string-array `embeddedCollections`, and a set
+  or replace value with an own `__proto__`/`constructor`/`prototype` key or nesting over 32 levels (`PATH_UNSAFE_VALUE`).
+  Errors are `{ code, message }` (message within `PATH_ERROR_MAX_BYTES`) with `PATH_*` codes. Tests:
+  `tests/unit/budgets.test.js`, `docPath.test.js`.
+
 ## Rules specific to this subsystem
 
 - TypeScript run by `tsx`; typecheck with `npm run typecheck` (`server/tsconfig.json`).

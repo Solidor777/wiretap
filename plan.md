@@ -252,7 +252,7 @@ verifies `sha256`, checks `allowAgentScripts` in its own `game.settings`, and ru
 
 ### 2.6 Final budgets (D20)
 
-Bytes are the enforced unit (deterministic, no API call). Tokens ≈ bytes / 2 (§2.1). **Principle:** everything
+Bytes are the enforced unit (deterministic, no API call). Tokens ≈ bytes / 2 (§2.1). In this document and in `shared/budgets.js`, 1 KB means 1000 bytes (5.8 KB = 5,817 B). **Principle:** everything
 Wiretap constructs (definitions, compact views, acks, errors, layout trees) has a hard budget that fails CI; results
 the agent explicitly asks for (`paths`, `fields`, `mode:"full"`, `read_handle`) are bounded only by the hard cap,
 which the enforcer applies at runtime (over cap → handle). Changes from revision 2 are marked †; adoption is DECIDED,
@@ -345,6 +345,30 @@ at `path` plus the field-walker constraints for that subtree (D15 scoping), so a
 **Savings (INFERRED from the measured slices, §2.1):** reading `system.attributes.hp` instead of the hero export is
 86 B vs 84,564 B (≈170 tokens at the floor vs an undeliverable result); `system` is 5,817 B (≈2.9k tokens) vs 84,564
 B; `items.*.name` on the hero returns 31 short strings instead of 77 KB of items.
+
+**Resolver notes (DECIDED; implemented in `shared/docPath.js`).**
+
+- Limits: a path is at most 512 bytes and 16 segments (`PATH_LIMIT`, bytes checked first, before splitting); error
+  texts stay within 256 B and never echo more than a refused segment. A `.` always splits segments, so a key
+  containing a literal `.` cannot be addressed.
+- Refused segments are `prototype` and every member of `Object.prototype` (`__proto__`, `constructor`, `toString`,
+  `valueOf`, `__defineGetter__`, `hasOwnProperty`, ...): Foundry's `setProperty` tests for `undefined` and sees
+  inherited members (`PATH_UNSAFE_SEGMENT`). Resolution itself reads own properties only.
+- Reads: after an array, a canonical integer is an index and any other name is an element `_id`; when an in-range
+  index and the `_id` of a different element collide, the lookup is not found. Embedded writes address documents by
+  `_id` only: a purely numeric segment after the collection is `PATH_INVALID`.
+- Wildcard results are keyed by the element's own string `_id`, else its index. If two resolved elements produce the
+  same key, the whole wildcard lookup is not found with code `PATH_AMBIGUOUS` (no silent overwrite; `resolvePaths` lists
+  the path in `missing`). An empty array under a wildcard is found as `{}`; a non-empty array where no element resolves
+  is not found. Repeated read paths are read once (first kept).
+- `groupWrites(patches, embeddedCollections)` returns `{ok, document, embedded}`; `embedded` is
+  `[{collection, entries: [{_id, changes}]}]` with paths relative to the embedded document. `collection` is the
+  collection name as written in the path (`items`); the client maps it to the document name (`Item`). It refuses a
+  path that is a prefix of another patch path (`PATH_CONFLICT`), a set or replace value with an own `__proto__`,
+  `constructor` or `prototype` key at any depth up to 32 levels or nested deeper than that (`PATH_UNSAFE_VALUE`), and an
+  `embeddedCollections` that is not an array of strings (`PATH_INVALID`, never a throw).
+- Error codes: `PATH_INVALID`, `PATH_UNSAFE_SEGMENT`, `PATH_WILDCARD_WRITE`, `PATH_LIMIT`, `PATH_INVALID_OP`,
+  `PATH_DUPLICATE`, `PATH_AMBIGUOUS`, `PATH_CONFLICT`, `PATH_UNSAFE_VALUE`.
 
 ### 2.9 Script catalogue (shipped)
 

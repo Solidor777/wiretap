@@ -108,6 +108,12 @@ way as the tool result.
    `endpoints.test.js`); routing over real sockets is in `tests/integration/endpointRouting.test.js` (fake v2 clients).
 5. Update this skill and the deferred-work file (`TODO.md` at the repo root).
 
+## Budgets and path grammar (shared, not yet wired)
+
+`shared/budgets.js` (context budgets with `hard`/`warn` severity) and `shared/docPath.js` (document path grammar:
+parse, resolve by `_id`/index/wildcard, missing list, embedded write grouping) are pure modules for the MCP tool
+layer; no MCP tool or bridge op calls them yet. Their current behaviour is described in `wiretap-sidecar`.
+
 ## Security boundary
 
 Loopback-only HTTP; browser requests with a foreign `Origin` are refused on both the socket handshake and `/mcp` (and a
