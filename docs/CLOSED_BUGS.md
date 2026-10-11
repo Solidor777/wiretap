@@ -1,5 +1,20 @@
 # Closed bugs
 
+## Terminal socket handlers did not validate payloads
+
+- **Was:** `server/terminal.ts` read `payload.data`, `payload.cols` and `payload.rows` from untrusted `TERMINAL_INPUT`,
+  `TERMINAL_RESIZE` and `TERMINAL_LAUNCH` events without validation. Reading a property of an `undefined` payload throws
+  inside a Socket.IO listener (inferred, not run against a live process, to terminate the sidecar), and a non-numeric
+  size reached node-pty and the stored `size`.
+- **Fix:** a payload that is not an object, input whose `data` is not a string, and a `cols` or `rows` that is not an
+  integer within 1..`MAX_TERMINAL_DIMENSION` (1000) are ignored with one fixed `console.warn` line; a launch with an
+  invalid size spawns nothing; an absent launch `cols`/`rows` keeps the stored size (default 80x24). Input `data` has no
+  length cap: Socket.IO's `maxHttpBufferSize` (not overridden in `server/`; its default is inferred to be 1 MB) already
+  bounds one event.
+- **Measured:** `tests/unit/terminalPayloads.test.js` failed 48 of 50 tests before the fix (the 2 valid-input tests
+  passed) and passes 50 of 50 after; removing the upper-bound check fails 4 of them (sizes 1001 and 1e9 for resize and
+  launch).
+
 ## Sidecar Socket.IO server was not bound to loopback
 
 - **Was:** `server/server.ts` passed no host to `new Server(port, { cors })`, so Node bound all interfaces; the

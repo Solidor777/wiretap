@@ -17,10 +17,13 @@ import { writeMcpConfig } from './mcpConfigFile.ts';
 // Maximum bytes of recent PTY output retained for reattach replay.
 const SCROLLBACK_LIMIT: number = 64 * 1024;
 
+// Largest accepted terminal dimension in columns or rows; bounds what an untrusted client can hand to node-pty.
+const MAX_TERMINAL_DIMENSION: number = 1000;
+
 interface LaunchPayload {
    command?: string;
-   cols: number;
-   rows: number;
+   cols?: number;
+   rows?: number;
 }
 
 /** Options for the terminal manager. */
@@ -104,6 +107,24 @@ export function createTerminalManager(
    }
 
    /**
+    * Report whether a value is a usable terminal dimension.
+    * @param {unknown} value - The candidate columns or rows value from a socket payload.
+    * @returns {boolean} True when the value is an integer within 1..MAX_TERMINAL_DIMENSION.
+    */
+   function isValidDimension(value: unknown): value is number {
+      return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= MAX_TERMINAL_DIMENSION;
+   }
+
+   /**
+    * Report whether a value is a non-null, non-array object.
+    * @param {unknown} payload - The candidate socket payload.
+    * @returns {boolean} True when the payload is a plain-shaped object.
+    */
+   function isObjectPayload(payload: unknown): payload is Record<string, unknown> {
+      return typeof payload === 'object' && payload !== null && !Array.isArray(payload);
+   }
+
+   /**
     * Append a chunk to the scrollback buffer, trimming to the byte cap.
     * @param {string} chunk - The output chunk to retain.
     */
@@ -115,8 +136,9 @@ export function createTerminalManager(
    }
 
    /**
-    * Spawn the PTY if none is running. A payload that is not an object, or whose `command` is neither absent nor a
-    * string, launches nothing: the payload comes from an untrusted socket event.
+    * Spawn the PTY if none is running. A payload that is not an object, whose `command` is neither absent nor a
+    * string, or whose `cols` or `rows` is present but not an integer within 1..MAX_TERMINAL_DIMENSION, launches
+    * nothing: the payload comes from an untrusted socket event. An absent `cols` or `rows` keeps the stored size.
     * @param {LaunchPayload} payload - The launch parameters.
     */
    function launch(payload: LaunchPayload): void {
@@ -124,16 +146,22 @@ export function createTerminalManager(
          return;
       }
       if (
-         typeof payload !== 'object' ||
-         payload === null ||
+         !isObjectPayload(payload) ||
          (payload.command !== undefined && typeof payload.command !== 'string')
       ) {
          console.warn('Wiretap sidecar | terminal launch ignored: the payload command is not a string');
          return;
       }
+      if (
+         (payload.cols !== undefined && !isValidDimension(payload.cols)) ||
+         (payload.rows !== undefined && !isValidDimension(payload.rows))
+      ) {
+         console.warn('Wiretap sidecar | terminal launch ignored: the payload size is invalid');
+         return;
+      }
       // The command line to spawn, with the MCP config wired in when applicable.
       const command: string = withMcpWiring(payload.command ?? 'claude');
-      size = { cols: payload.cols, rows: payload.rows };
+      size = { cols: payload.cols ?? size.cols, rows: payload.rows ?? size.rows };
       scrollback = '';
       // The spawn executable and arguments for the host platform.
       const { file, args }: { file: string; args: string[] | string } = resolveSpawn(
@@ -172,8 +200,18 @@ export function createTerminalManager(
             socket.emit(TERMINAL_DATA, { chunk: scrollback });
          }
          socket.on(TERMINAL_LAUNCH, (payload: LaunchPayload) => launch(payload));
-         socket.on(TERMINAL_INPUT, (payload: InputPayload) => term?.write(payload.data));
+         socket.on(TERMINAL_INPUT, (payload: InputPayload) => {
+            if (!isObjectPayload(payload) || typeof payload.data !== 'string') {
+               console.warn('Wiretap sidecar | terminal input ignored: the payload data is not a string');
+               return;
+            }
+            term?.write(payload.data);
+         });
          socket.on(TERMINAL_RESIZE, (payload: ResizePayload) => {
+            if (!isObjectPayload(payload) || !isValidDimension(payload.cols) || !isValidDimension(payload.rows)) {
+               console.warn('Wiretap sidecar | terminal resize ignored: the payload size is invalid');
+               return;
+            }
             size = { cols: payload.cols, rows: payload.rows };
             term?.resize(payload.cols, payload.rows);
          });
