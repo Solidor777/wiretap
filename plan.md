@@ -157,7 +157,7 @@ Sources, in trust order:
 |---|---|---|---|
 | Shipped | `src/bridge/scripts/*.js`, static imports in the bundle | Vetted (repo review) | Always; gated categories call `requireGate` |
 | Plugin | `api.registerScript` (M7; `registerSkill` writes the same registry) | Installed module code | Module listed in `allowedPluginModules` |
-| Agent-saved | Source text saved by the agent through `save_script` | Per D21 (PENDING-USER, §2.5) | Per D21 |
+| Agent-saved | Source text saved by the agent through `save_script` | Per D21 (DECIDED option (b), §2.5) | Per D21 |
 | Ad-hoc `run_js` | — | — | Not built (D22, DECIDED) |
 
 **Execution context `ctx`:** `ctx.core.*` (the core op functions, gates apply), `ctx.shape` (projection, path
@@ -179,7 +179,7 @@ passes the sidecar enforcer: over budget → `{handle, bytes, summary}`.
 interactive session re-fetches the list on `list_changed`; `-p` and the Agent SDK refresh the tool list. Not measured:
 whether a tool added via `list_changed` is deferred like the initial ones (M3 live check).
 
-### 2.5 Agent-saved scripts and Claude Code permissions (D21, PENDING-USER)
+### 2.5 Agent-saved scripts and Claude Code permissions (D21, DECIDED: option (b))
 
 **The user's position (2026-10-11):** agent-authored scripts should be governed by "whatever allow permission is set
 to match normal Claude Code operations", i.e. Claude Code's own allow/ask/deny rules and permission modes, instead of
@@ -254,7 +254,7 @@ Bytes are the enforced unit (deterministic, no API call). Tokens ≈ bytes / 2 (
 Wiretap constructs (definitions, compact views, acks, errors, layout trees) has a hard budget that fails CI; results
 the agent explicitly asks for (`paths`, `fields`, `mode:"full"`, `read_handle`) are bounded only by the hard cap,
 which the enforcer applies at runtime (over cap → handle). Changes from revision 2 are marked †; adoption is DECIDED,
-the † changes are PENDING-USER.
+the † changes are DECIDED (accepted 2026-10-11).
 
 | Budget | Value | Kind | Rationale |
 |---|---|---|---|
@@ -292,7 +292,7 @@ The user's addition: Wiretap skills may reference the MCP tools to point agents 
 - **Delivery of user-facing skills** (repo directory, Claude Code plugin, or install instructions) is a layout choice
   made with consent at M14. The M13 test checks that every tool name a shipped skill mentions exists.
 
-### 2.8 Path-scoped reads and writes (user request A; D26, PENDING-USER)
+### 2.8 Path-scoped reads and writes (user request A; D26, DECIDED)
 
 **Feasibility (READ).** `foundry.utils.getProperty` resolves dot paths and array indices but not embedded ids, and it
 does not skip `__proto__`/`constructor`/`prototype` (only `setProperty` does) (READ
@@ -384,12 +384,12 @@ entries of the same registry with the budgets of §2.6.
 | D5 | Routing: prefer an agent endpoint, fall back to a human GM tab, per-call `endpoint` override | DECIDED | User 2026-10-11 |
 | D6 | Trust: loopback unauthenticated (same machine is trusted). External access is an opt-in bind that requires a bearer token on `/mcp` and a token on socket identify, plus TLS/reverse-proxy guidance. Reopens the loopback-only rule when enabled | DECIDED | User |
 | D7 | Acting user: optional advisory `actAs` pre-check (`testUserPermission` / `canUserModify`); the write runs as the endpoint user | DECIDED | User |
-| D8 | Risky capabilities are GM-only world settings, default OFF; gate settings can never be changed by any skill | DECIDED (gate list in §4.6; additions PENDING-USER) | User |
+| D8 | Risky capabilities are GM-only world settings, default OFF; gate settings can never be changed by any skill | DECIDED (gate list in §4.6; the three proposed additions are DECIDED, see §4.6) | User |
 | D9 | Plugin handlers run client-side only | DECIDED | User |
 | D10 | Plugin surface: `Hooks.callAll('wiretap.registerSkills', api)` + `api.registerSkill`, integer `apiVersion`, tool names `<moduleId>__<skill>`, no dots | DECIDED | User; MEASURED (coord.) (claude 2.1.296): `.` rewritten to `_`; `__`, `-`, 110-char names work |
 | D11 | MCP transport moves to stateful Streamable HTTP sessions with `notifications/tools/list_changed`; no sampling | DECIDED | User 2026-10-11; MEASURED (coord.) (claude 2.1.296): stateless lists tools once; stateful list_changed honoured; sampling `-32601` |
 | D12 | Deletion: the ban is on deleting **files**. Foundry documents may be created, updated and deleted through Foundry document calls; `delete_documents` and undo of a create are built | DECIDED | User 2026-10-11 |
-| D12a | Is `delete_documents` behind a GM gate? Recommendation: no gate for ordinary documents (Claude Code `ask` rules govern it, README shows `"ask": ["mcp__wiretap__delete_documents"]`); `dryRun` preview; `User` deletion stays under `allowUserWrites`, `Setting` under `allowSettingWrites`; compendium **pack** deletion is not exposed (§9 C1). `allowUndo` follows the same answer | PENDING-USER | §9 C1 |
+| D12a | Is `delete_documents` behind a GM gate? Recommendation: no gate for ordinary documents (Claude Code `ask` rules govern it, README shows `"ask": ["mcp__wiretap__delete_documents"]`); `dryRun` preview; `User` deletion stays under `allowUserWrites`, `Setting` under `allowSettingWrites`; compendium **pack** deletion is not exposed (§9 C1). `allowUndo` follows the same answer | DECIDED (user accepted the recommendation, 2026-10-11) | §9 C1 |
 | D13 | Replace semantics fire normal update hooks (not `importFromJSON`'s `noHook: true`) | DECIDED | User; READ `client-document.mjs:1065` |
 | D14 | Canonical document representation = the `toCompendium` export format (as used by `exportToJSON`), with `keepId: true` for reads | DECIDED (incl. `keepId`) | User 2026-10-11; READ `client-document.mjs:928-944,1113-1134` |
 | D15 | `describe_schema` = "schema by example" (blank export per type/subtype) first; DataModel field-walker for constraints second, scoped by path (§2.8 grammar) | PENDING-M0 E8 (sizes) | User; READ: no JSON-Schema export in `common/data/fields.mjs` |
@@ -397,13 +397,13 @@ entries of the same registry with the budgets of §2.6.
 | D17 | Context minimisation is a top-priority, cross-cutting requirement; every milestone has a context-budget criterion | DECIDED | User 2026-10-10 |
 | D18 | The user's script proposal: adopted as modified in §2.3 (one registry with the core tools; each script its own deferred MCP tool; combined with result shaping); skills may reference tools as the discovery layer (§2.7) | DECIDED | User 2026-10-11; MEASURED (coord.) §2.1 R1–R6 |
 | D19 | Dispatcher mode (`list_scripts` / `describe_script` / `run_script`) for clients that do not defer tools | DEFERRED (logged in `TODO.md`) | User 2026-10-11 |
-| D20 | Budgets of §2.6 enforced in bytes; constructed outputs CI-hard, requested outputs bounded by the runtime hard cap | DECIDED (adoption); the † value changes of revision 3 PENDING-USER | User 2026-10-11; MEASURED (coord.) §2.1 |
-| D21 | Agent-saved scripts governed by Claude Code permissions (user's position); option (a) as stated vs (b) with minimal Wiretap safeguards (recommended) vs (c) Foundry-UI approval | PENDING-USER | §2.5; READ Claude Code permission and MCP docs |
+| D20 | Budgets of §2.6 enforced in bytes; constructed outputs CI-hard, requested outputs bounded by the runtime hard cap | DECIDED (adoption); the † value changes of revision 3 DECIDED (accepted 2026-10-11) | User 2026-10-11; MEASURED (coord.) §2.1 |
+| D21 | Agent-saved scripts governed by Claude Code permissions (user's position); option (a) as stated vs (b) with minimal Wiretap safeguards (recommended) vs (c) Foundry-UI approval | DECIDED: option (b) (accepted 2026-10-11) | §2.5; READ Claude Code permission and MCP docs |
 | D22 | Ad-hoc agent code `run_js` is not built. Rationale: arbitrary GM-authority code per call defeats the gate hard rule (§4.6); its code travels in every call's arguments (the opposite of the context goal); `execute_macro` (gated) and D21 cover reuse | DECIDED (coordinator's judgement, delegated by the user) | User 2026-10-11 |
 | D23 | Saved-result handles: in-memory sidecar store per MCP session, LRU-bounded (64 MB total, 30 min idle), lost on sidecar restart; never on disk | DECIDED | User 2026-10-11 |
 | D24 | Default read view = compact; the canonical D14 export with `mode:"full"` or by `paths`, all under the hard cap | DECIDED (in principle) | User 2026-10-11 ("I think this can work") |
 | D25 | DOM scripts route to the agent endpoint by default; a human GM tab only by explicit `endpoint` override | DECIDED | User 2026-10-11 |
-| D26 | Path-scoped reads and writes (§2.8): `paths` parameter on `get_document`, same grammar in `update_documents`, `read_handle`, `describe_schema`; no new tools; `edit` merged into `update_documents` | PENDING-USER (recommendation) | User request 2026-10-11; READ `helpers.mjs:821-868`, `global.d.mts:6-7` |
+| D26 | Path-scoped reads and writes (§2.8): `paths` parameter on `get_document`, same grammar in `update_documents`, `read_handle`, `describe_schema`; no new tools; `edit` merged into `update_documents` | DECIDED (accepted 2026-10-11; recommendation) | User request 2026-10-11; READ `helpers.mjs:821-868`, `global.d.mts:6-7` |
 
 ## 4. Architecture
 
@@ -505,7 +505,7 @@ World-scope settings, `restricted: true` (GM only), `config: true`, all default 
 | `allowDelete` | `delete_documents` | Exists only if D12a chooses a gate (recommendation: none) |
 | `allowedPluginModules` | Plugin skills and scripts per module id | Default: none enabled |
 | `allowAgentScripts` | `save_script`, `disable_script`, running agent-saved scripts | Only if D21 = (b); arbitrary-code caveat |
-| Proposed (PENDING-USER) | `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites` (`core.moduleConfiguration`) | Each is escalation-capable |
+| DECIDED (accepted 2026-10-11) | `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites` (`core.moduleConfiguration`) | Each is escalation-capable |
 
 **Hard rule.** No skill can change a gate. Enforcement:
 
@@ -1080,8 +1080,8 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
   tool exists.
 - **C2 Test files.** The brief says "fixed names under `test/tmp`". The `wiretap-build-test` skill says unique
   `<pid>-<counter>` roots that must not pre-exist. The plan follows the skill. The §4.8 running list is a fixed,
-  overwritten file outside `test/tmp/` (TITAN uses `test/state/registry.json`); its Wiretap location is a consent
-  item at M4.
+  overwritten file outside `test/tmp/` (TITAN uses `test/state/registry.json`); its Wiretap location is DECIDED
+  (accepted 2026-10-11): `test/state/registry.json`, gitignored, overwritten, never deleted (same as TITAN).
 - **C3 "Authenticated sidecar socket" for credential push.** In the default loopback mode the socket is
   unauthenticated by D6. It is authenticated only in external mode (M10).
 - **C4 Build hygiene.** `.claude/claude.md` says stale built files are deleted after every build, which conflicts
@@ -1135,3 +1135,10 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
 **Revision 2 (2026-10-10):** added G0 and §2 (cost model, ranking, script verdict, design, catalogue, budgets);
 renumbered sections; D17–D25; architecture components for budgets, handles and scripts; milestones M13–M16; a
 context-budget criterion in every milestone.
+
+**Revision 4 (2026-10-11):** the user accepted the open recommendations: D12a (no gate for ordinary document
+deletes; `User`/`Setting` deletes stay behind their gates; no pack deletion), D20 † value changes (8 KB default hard
+cap, name and description limits), D21 option (b) (Claude Code permissions plus the minimal Wiretap safeguards), D26
+(`paths` parameter on `get_document`, shared grammar), the three proposed extra gates (`allowOwnershipWrites`,
+`allowCompendiumWrites`, `allowModuleConfigWrites`) and the e2e running-list location. No PENDING-USER decisions
+remain except those that wait on M0 results.
