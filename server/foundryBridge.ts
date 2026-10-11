@@ -1,5 +1,14 @@
 import type { Socket } from 'socket.io';
-import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, BRIDGE_PING, ENDPOINT_LIMIT } from '../shared/protocol.js';
+import {
+   BRIDGE_GATE_STATE,
+   BRIDGE_IDENTIFY,
+   BRIDGE_INVOKE,
+   BRIDGE_PING,
+   ENDPOINT_LIMIT,
+   NOT_GM,
+   OP_FAILED,
+} from '../shared/protocol.js';
+import { closedGateState, sanitizeGateState, type GateState } from '../shared/gates.js';
 import {
    EndpointGoneError,
    EndpointTimeoutError,
@@ -26,6 +35,12 @@ const REFUSAL_LOG_WINDOW_MS: number = 60_000;
 // Maximum refused-identify log lines inside one window, across all sockets.
 const REFUSAL_LOG_LIMIT: number = 10;
 
+// Length in milliseconds of the window that bounds refused-gate-state log lines.
+const GATE_REFUSAL_LOG_WINDOW_MS: number = 60_000;
+
+// Maximum refused-gate-state log lines inside one window, across all sockets.
+const GATE_REFUSAL_LOG_LIMIT: number = 10;
+
 // Length in milliseconds of the window that bounds endpoint-health log lines.
 const HEALTH_LOG_WINDOW_MS: number = 60_000;
 
@@ -45,13 +60,16 @@ export interface FoundryBridgeOptions {
  * operation to the chosen endpoint and awaits its ack. Knows nothing about which operations exist — callers pass an
  * op name and params.
  * @param {FoundryBridgeOptions} [options] - Injectable logger and clock.
- * @returns {{ handleConnection: (socket: Socket) => void, invoke: Function, dispose: () => void }} The bridge with a
- *          per-socket connection handler, the router's `invoke(op, params, { endpoint? })`, and `dispose`, which stops
+ * @returns {{ handleConnection: (socket: Socket) => void, invoke: Function, gateState: Function, dispose: () => void }}
+ *          The bridge with a per-socket connection handler, the router's `invoke(op, params, { endpoint? })`, the
+ *          router's `gateState({ endpoint? })` (a copy of the risk-gate snapshot of the endpoint such a call would
+ *          reach, every gate closed when none is eligible; never part of a tool result), and `dispose`, which stops
  *          every endpoint health probe.
  */
 export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    handleConnection: (socket: Socket) => void;
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
+   gateState: (options?: InvokeOptions) => GateState;
    dispose: () => void;
 } {
    // The sidecar log sink.
@@ -69,6 +87,14 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       limit: REFUSAL_LOG_LIMIT,
       windowMs: REFUSAL_LOG_WINDOW_MS,
       noun: 'identify refusals',
+   });
+   // Writes a refused-gate-state log line subject to the per-window limit, with one summary line per window.
+   const logGateRefusal: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: GATE_REFUSAL_LOG_LIMIT,
+      windowMs: GATE_REFUSAL_LOG_WINDOW_MS,
+      noun: 'gate state refusals',
    });
    // Writes an endpoint-health log line subject to the per-window limit; a never-acking endpoint is probed every 5 s
    // and would otherwise log without bound.
@@ -155,8 +181,9 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    return {
       /**
        * Register per-socket bridge handlers: validate and register an endpoint on identify (acking the result after
-       * registration), and on disconnect drop the endpoint, stop its health probe and fail its pending invocations
-       * with ENDPOINT_GONE.
+       * registration), apply a registered endpoint's `bridge:gateState` snapshot (sanitized; a non-registered socket is
+       * refused with NOT_GM, logged through a throttle, and changes nothing), and on disconnect drop the endpoint, stop
+       * its health probe and fail its pending invocations with ENDPOINT_GONE.
        * @param {Socket} socket - The connected Socket.IO socket.
        * @returns {void}
        */
@@ -181,6 +208,45 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
                ack(result.ok ? { ok: true } : { ok: false, error: result.error });
             }
          });
+         socket.on(BRIDGE_GATE_STATE, (payload: unknown, ack?: unknown) => {
+            try {
+               // Only a socket that holds a live GM registration may set a snapshot; it is stored per endpoint.
+               const registered: boolean = registry.get(socket.id) !== undefined;
+               if (registered) {
+                  registry.setGateState(socket.id, sanitizeGateState(payload));
+               } else {
+                  logGateRefusal(`Wiretap sidecar | refused gate state from ${socket.id}: ${NOT_GM}`);
+               }
+               if (typeof ack === 'function') {
+                  ack(
+                     registered
+                        ? { ok: true }
+                        : {
+                             ok: false,
+                             error: { code: NOT_GM, message: 'Only a registered GM endpoint may push a gate state.' },
+                          },
+                  );
+               }
+            } catch (cause) {
+               // Fail closed: whatever threw, this endpoint's gates are all closed and the sender is told.
+               registry.setGateState(socket.id, closedGateState());
+               log(
+                  `Wiretap sidecar | gate state from ${socket.id} failed: ${
+                     cause instanceof Error ? cause.message : String(cause)
+                  }`,
+               );
+               try {
+                  if (typeof ack === 'function') {
+                     ack({
+                        ok: false,
+                        error: { code: OP_FAILED, message: 'Gate state could not be applied; every gate is closed.' },
+                     });
+                  }
+               } catch {
+                  // The sender's ack callback failed twice; the endpoint is already closed, so nothing more is done.
+               }
+            }
+         });
          socket.on('disconnect', () => {
             dropEndpoint(socket.id);
             sockets.delete(socket.id);
@@ -192,6 +258,8 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       },
 
       invoke: router.invoke,
+
+      gateState: router.gateState,
 
       /**
        * Stop every endpoint health probe so no timer outlives the bridge.

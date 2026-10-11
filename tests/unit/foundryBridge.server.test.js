@@ -58,7 +58,7 @@ function makeSocket(id, ackResponder = () => ({ ok: true, result: {} }), pingRes
 }
 
 /**
- * Build a valid v2 identify payload.
+ * Build a valid identify payload.
  * @param {object} [overrides] - Fields replacing the defaults.
  * @returns {object} The payload.
  */
@@ -85,7 +85,7 @@ function makeBridge(now) {
 }
 
 describe('createFoundryBridge identify', () => {
-   it('acks { ok: true } after registering a valid v2 GM identify', async () => {
+   it('acks { ok: true } after registering a valid GM identify', async () => {
       const { bridge } = makeBridge();
       const { socket, fire } = makeSocket('a');
       bridge.handleConnection(socket);

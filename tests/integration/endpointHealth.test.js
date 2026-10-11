@@ -73,7 +73,7 @@ async function until(check, what) {
 }
 
 /**
- * Build a v2 identify payload.
+ * Build an identify payload.
  * @param {object} overrides - Fields replacing the defaults.
  * @returns {object} The payload.
  */

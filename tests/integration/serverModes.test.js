@@ -105,8 +105,8 @@ function isListening(port) {
 }
 
 /**
- * Build a valid v2 identify payload for a human GM endpoint in the fake clients below.
- * @returns {object} A v2 identify payload with kind human and isGM true.
+ * Build a valid identify payload for a human GM endpoint in the fake clients below.
+ * @returns {object} An identify payload with kind human and isGM true.
  */
 function identifyPayload() {
    return { protocolVersion: PROTOCOL_VERSION, userId: 'u1', userName: 'GM', isGM: true, kind: 'human', dom: true };

@@ -58,8 +58,8 @@ afterEach(() => {
    vi.restoreAllMocks();
 });
 
-describe('bridge identify v2', () => {
-   it('emits the v2 payload with an ack callback on connect', () => {
+describe('bridge identify', () => {
+   it('emits the identify payload with an ack callback on connect', () => {
       const socket = makeFakeSocket(false);
       wire(socket);
       socket.fire('connect');

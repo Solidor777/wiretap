@@ -67,11 +67,16 @@ export const TERMINAL_EXIT = 'terminal:exit';
 
 // Bridge protocol version carried by every identify; the sidecar refuses any other value (no translation of older
 // payloads).
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 // Client → server, once per (re)connect, with an ack callback: register this socket as a live Foundry-GM bridge
 // endpoint. The sidecar acks after registration (or refusal).
 export const BRIDGE_IDENTIFY = 'bridge:identify';
+
+// Client → server, with an optional ack callback: the registered GM endpoint's current risk-gate snapshot (a
+// GateState). Sent when a gate setting changes; the identify carries the first snapshot. A
+// socket that is not a registered endpoint is refused and its snapshot is not applied.
+export const BRIDGE_GATE_STATE = 'bridge:gateState';
 
 // Server → client, with an ack callback: run a Foundry operation and return its result.
 export const BRIDGE_INVOKE = 'bridge:invoke';
@@ -105,11 +110,17 @@ export const ENDPOINT_GONE = 'ENDPOINT_GONE';
 // Error code: an identify was refused because the registry already holds the maximum number of endpoints.
 export const ENDPOINT_LIMIT = 'ENDPOINT_LIMIT';
 
-// Error code: an identify payload is not protocol version 2 (or is malformed).
+// Error code: an identify payload is not protocol version 3 (or is malformed).
 export const PROTOCOL_MISMATCH = 'PROTOCOL_MISMATCH';
 
 // Error code: an identify came from a user that is not a GM.
 export const NOT_GM = 'NOT_GM';
+
+// Error code: an operation was refused by a risk gate (a closed gate, or a write to a Wiretap setting). Both sides
+// may produce it: the sidecar pre-checks the endpoint's snapshot, and the executing client re-enforces every gate from
+// its own settings, so a client ack may carry it. It is therefore not reserved, and a received GATE_DENIED is never
+// proof that a sidecar check ran.
+export const GATE_DENIED = 'GATE_DENIED';
 
 /**
  * @typedef {'human' | 'agent'} EndpointKind
@@ -123,6 +134,13 @@ export const NOT_GM = 'NOT_GM';
  * @property {boolean} isGM - Whether the identifying user is a GM.
  * @property {EndpointKind} kind - Whether this client is a person's tab or an agent runner.
  * @property {boolean} dom - Whether this endpoint is a browser client able to run DOM operations.
+ * @property {import('./gates.js').GateState} [gateState] - Risk-gate snapshot; absent or invalid closes every gate.
+ */
+
+/**
+ * @typedef {object} BridgeGateStateAck
+ * @property {boolean} ok - True when the snapshot was applied to the sender's endpoint.
+ * @property {{ code: string, message: string }} [error] - NOT_GM when the socket is not a registered endpoint.
  */
 
 /**

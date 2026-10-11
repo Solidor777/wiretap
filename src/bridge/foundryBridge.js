@@ -61,7 +61,7 @@ const OP_HANDLERS = {
 };
 
 /**
- * Wire the Foundry bridge onto the connection's socket: send the protocol v2 identify on each connect (acked by the
+ * Wire the Foundry bridge onto the connection's socket: send the identify on each connect (acked by the
  * sidecar), track the identified state, answer BRIDGE_INVOKE requests by dispatching through the op registry, and ack
  * BRIDGE_PING liveness probes with `{ ok: true }`.
  * Reuses the single socket owned by the TerminalConnection (no second connection is opened).

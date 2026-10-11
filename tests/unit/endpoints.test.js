@@ -13,8 +13,10 @@ import {
    validateIdentify,
 } from '../../server/endpoints.ts';
 import { truncateUtf8 } from '../../server/utf8.ts';
+import { closedGateState } from '../../shared/gates.js';
 import {
    ENDPOINT_GONE,
+   GATE_DENIED,
    ENDPOINT_LIMIT,
    ENDPOINT_TIMEOUT,
    ENDPOINT_UNAVAILABLE,
@@ -27,7 +29,7 @@ import {
 } from '$shared/protocol.js';
 
 /**
- * Build a valid v2 identify payload.
+ * Build a valid identify payload.
  * @param {object} [overrides] - Fields replacing the defaults.
  * @returns {object} The payload.
  */
@@ -65,6 +67,7 @@ describe('createEndpointRegistry', () => {
             userName: 'GM',
             kind: 'agent',
             dom: true,
+            gateState: closedGateState(),
             health: 'healthy',
             registeredAt: 1234,
          },
@@ -94,6 +97,35 @@ describe('createEndpointRegistry', () => {
       add(registry, 'c', 'agent');
       expect(registry.firstOfKind('agent')?.socketId).toBe('b');
       expect(registry.firstOfKind('human')?.socketId).toBe('a');
+   });
+});
+
+describe('createEndpointRegistry gate state', () => {
+   it('stores the gate state of the identity', () => {
+      const registry = createEndpointRegistry();
+      registry.register('s1', validateIdentify(identify({ gateState: { allowFileUpload: true } })).identity);
+      expect(registry.get('s1').gateState).toEqual({ ...closedGateState(), allowFileUpload: true });
+   });
+
+   it('replaces the gate state with setGateState', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 's1', 'human');
+      registry.setGateState('s1', { ...closedGateState(), allowMacroExecution: true });
+      expect(registry.get('s1').gateState.allowMacroExecution).toBe(true);
+   });
+
+   it('ignores setGateState for an unregistered socket', () => {
+      const registry = createEndpointRegistry();
+      registry.setGateState('ghost', { ...closedGateState(), allowMacroExecution: true });
+      expect(registry.get('ghost')).toBeUndefined();
+      expect(registry.list()).toEqual([]);
+   });
+
+   it('replaces the gate state when the same socket identifies again', () => {
+      const registry = createEndpointRegistry();
+      registry.register('s1', validateIdentify(identify({ gateState: { allowFileUpload: true } })).identity);
+      add(registry, 's1', 'human');
+      expect(registry.get('s1').gateState).toEqual(closedGateState());
    });
 });
 
@@ -167,11 +199,35 @@ describe('createEndpointRegistry limit', () => {
 });
 
 describe('validateIdentify', () => {
-   it('accepts a valid v2 GM payload', () => {
+   it('accepts a valid GM payload', () => {
       expect(validateIdentify(identify())).toEqual({
          ok: true,
-         identity: { userId: 'u1', userName: 'GM', kind: 'human', dom: true },
+         identity: { userId: 'u1', userName: 'GM', kind: 'human', dom: true, gateState: closedGateState() },
       });
+   });
+
+   it('closes every gate when the identify carries no gateState', () => {
+      expect(validateIdentify(identify()).identity.gateState).toEqual(closedGateState());
+   });
+
+   it('sanitizes the gateState of the identify', () => {
+      const hostile = JSON.parse(
+         '{"__proto__":{"allowMacroExecution":true},"allowUserWrites":true,"allowFileUpload":"yes","extra":1,' +
+            '"allowedPluginModules":["ok",5]}',
+      );
+      expect(validateIdentify(identify({ gateState: hostile })).identity.gateState).toEqual({
+         ...closedGateState(),
+         allowUserWrites: true,
+         allowedPluginModules: ['ok'],
+      });
+   });
+
+   it('accepts an identify whose gateState is not an object and closes every gate', () => {
+      for (const gateState of ['open', 5, null, [], true]) {
+         const result = validateIdentify(identify({ gateState }));
+         expect(result.ok).toBe(true);
+         expect(result.identity.gateState).toEqual(closedGateState());
+      }
    });
 
    it('refuses a v1 payload without protocolVersion as PROTOCOL_MISMATCH', () => {
@@ -182,7 +238,7 @@ describe('validateIdentify', () => {
    });
 
    it('refuses a wrong protocolVersion', () => {
-      expect(validateIdentify(identify({ protocolVersion: 3 })).error.code).toBe(PROTOCOL_MISMATCH);
+      expect(validateIdentify(identify({ protocolVersion: 2 })).error.code).toBe(PROTOCOL_MISMATCH);
    });
 
    it('refuses a non-object payload', () => {
@@ -190,7 +246,7 @@ describe('validateIdentify', () => {
       expect(validateIdentify('x').error.code).toBe(PROTOCOL_MISMATCH);
    });
 
-   it('refuses a v2 payload with a malformed field as PROTOCOL_MISMATCH', () => {
+   it('refuses a current-version payload with a malformed field as PROTOCOL_MISMATCH', () => {
       expect(validateIdentify(identify({ kind: 'robot' })).error.code).toBe(PROTOCOL_MISMATCH);
       expect(validateIdentify(identify({ dom: 'yes' })).error.code).toBe(PROTOCOL_MISMATCH);
       expect(validateIdentify(identify({ userId: 5 })).error.code).toBe(PROTOCOL_MISMATCH);
@@ -269,6 +325,12 @@ describe('normalizeAckError', () => {
       expect(err).toBeInstanceOf(BridgeError);
       expect(err.code).toBe(OP_FAILED);
       expect(err.message).toBe('bad type');
+   });
+
+   it('keeps a client-sent GATE_DENIED code and bounds its message to 512 bytes', () => {
+      const err = normalizeAckError({ ok: false, error: { code: GATE_DENIED, message: 'g'.repeat(2000) } });
+      expect(err.code).toBe(GATE_DENIED);
+      expect(Buffer.byteLength(err.message, 'utf8')).toBeLessThanOrEqual(512);
    });
 
    it('keeps a client-supplied code', () => {
@@ -419,6 +481,152 @@ describe('createRouter', () => {
 
    it('exports the default order as one constant', () => {
       expect(ROUTE_ORDER).toEqual(['agent', 'human']);
+   });
+
+   it('reports the gate state of the endpoint a call would reach', () => {
+      const { router, registry } = setup([['h', 'human'], ['a', 'agent']]);
+      registry.setGateState('h', { ...closedGateState(), allowUserWrites: true });
+      registry.setGateState('a', { ...closedGateState(), allowMacroExecution: true });
+      expect(router.gateState().allowMacroExecution).toBe(true);
+      expect(router.gateState().allowUserWrites).toBe(false);
+      expect(router.gateState({ endpoint: 'human' }).allowUserWrites).toBe(true);
+      expect(router.gateState({ endpoint: 'agent' }).allowMacroExecution).toBe(true);
+   });
+
+   it('reports every gate closed when no healthy endpoint is eligible', () => {
+      const { router, registry } = setup([['h', 'human']]);
+      registry.setGateState('h', { ...closedGateState(), allowUserWrites: true });
+      expect(router.gateState({ endpoint: 'agent' })).toEqual(closedGateState());
+      registry.setHealth('h', 'unresponsive');
+      expect(router.gateState()).toEqual(closedGateState());
+      expect(setup([]).router.gateState()).toEqual(closedGateState());
+   });
+
+   it('returns a copy of the gate state that cannot change the stored snapshot', () => {
+      const { router, registry } = setup([['h', 'human']]);
+      registry.setGateState('h', { ...closedGateState(), allowedPluginModules: ['m'] });
+      const copy = router.gateState();
+      copy.allowMacroExecution = true;
+      copy.allowedPluginModules.push('x');
+      expect(router.gateState().allowMacroExecution).toBe(false);
+      expect(router.gateState().allowedPluginModules).toEqual(['m']);
+   });
+
+   describe('requireGate', () => {
+      /**
+       * Open a boolean gate on a registered endpoint.
+       * @param {object} registry - The endpoint registry to modify.
+       * @param {string} socketId - The endpoint's socket id.
+       * @param {string} gate - The gate to open.
+       * @returns {void}
+       */
+      function open(registry, socketId, gate) {
+         registry.setGateState(socketId, { ...closedGateState(), [gate]: true });
+      }
+
+      it('throws GATE_DENIED before sending when the picked endpoint has the gate closed', async () => {
+         const { router, sent } = setup([['a', 'agent']]);
+         const rejection = router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } });
+         await expect(rejection).rejects.toMatchObject({ name: 'BridgeError', code: GATE_DENIED });
+         await rejection.catch((error) => {
+            expect(error.message).toContain('allowMacroExecution');
+            expect(Buffer.byteLength(error.message, 'utf8')).toBeLessThanOrEqual(256);
+         });
+         expect(sent).toEqual([]);
+      });
+
+      it('sends to the same endpoint whose snapshot opened the gate', async () => {
+         const { router, registry, sent } = setup([['h', 'human'], ['a', 'agent']]);
+         open(registry, 'a', 'allowMacroExecution');
+         await router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } });
+         expect(sent.map((entry) => entry.socketId)).toEqual(['a']);
+      });
+
+      it('judges the picked endpoint only: an open gate on another endpoint does not help', async () => {
+         const { router, registry, sent } = setup([['h', 'human'], ['a', 'agent']]);
+         open(registry, 'h', 'allowMacroExecution');
+         await expect(
+            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } }),
+         ).rejects.toMatchObject({ code: GATE_DENIED });
+         expect(sent).toEqual([]);
+      });
+
+      it('cannot be split from the send by an endpoint change after the call starts', async () => {
+         const { router, registry, sent } = setup([['a', 'agent'], ['h', 'human']]);
+         open(registry, 'a', 'allowMacroExecution');
+         const pending = router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } });
+         // The pick and the gate check ran synchronously inside invoke; these changes come too late to matter.
+         registry.setGateState('a', closedGateState());
+         registry.remove('a');
+         add(registry, 'a2', 'agent');
+         await pending;
+         expect(sent.map((entry) => entry.socketId)).toEqual(['a']);
+      });
+
+      it('skips an unresponsive endpoint and judges the next healthy one', async () => {
+         const { router, registry, sent } = setup([['a1', 'agent'], ['a2', 'agent']]);
+         open(registry, 'a1', 'allowFileUpload');
+         registry.setHealth('a1', 'unresponsive');
+         await expect(
+            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowFileUpload' } }),
+         ).rejects.toMatchObject({ code: GATE_DENIED });
+         expect(sent).toEqual([]);
+      });
+
+      it('honours the endpoint override when judging the gate', async () => {
+         const { router, registry, sent } = setup([['h', 'human'], ['a', 'agent']]);
+         open(registry, 'h', 'allowUserWrites');
+         await router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'human', requireGate: { gate: 'allowUserWrites' } });
+         expect(sent.map((entry) => entry.socketId)).toEqual(['h']);
+         await expect(
+            router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent', requireGate: { gate: 'allowUserWrites' } }),
+         ).rejects.toMatchObject({ code: GATE_DENIED });
+      });
+
+      it('reports NO_ENDPOINT, not GATE_DENIED, when nothing is connected', async () => {
+         const { router } = setup([]);
+         await expect(
+            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } }),
+         ).rejects.toMatchObject({ code: NO_ENDPOINT });
+      });
+
+      it('reports ENDPOINT_UNAVAILABLE, not GATE_DENIED, when every endpoint is unresponsive', async () => {
+         const { router, registry } = setup([['a', 'agent']]);
+         registry.setHealth('a', 'unresponsive');
+         await expect(
+            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } }),
+         ).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
+      });
+
+      it('requires the module id to be listed for the plugin module gate', async () => {
+         const { router, registry, sent } = setup([['a', 'agent']]);
+         registry.setGateState('a', { ...closedGateState(), allowedPluginModules: ['my-module'] });
+         await router.invoke(OP_CREATE_ACTOR, {}, {
+            requireGate: { gate: 'allowedPluginModules', moduleId: 'my-module' },
+         });
+         expect(sent).toHaveLength(1);
+         await expect(
+            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowedPluginModules', moduleId: 'other' } }),
+         ).rejects.toMatchObject({ code: GATE_DENIED });
+         await expect(
+            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowedPluginModules' } }),
+         ).rejects.toMatchObject({ code: GATE_DENIED });
+         expect(sent).toHaveLength(1);
+      });
+
+      it('denies an unknown gate name', async () => {
+         const { router, sent } = setup([['a', 'agent']]);
+         await expect(
+            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowDelete' } }),
+         ).rejects.toMatchObject({ code: GATE_DENIED });
+         expect(sent).toEqual([]);
+      });
+
+      it('does not gate a call that sets no requireGate', async () => {
+         const { router, sent } = setup([['a', 'agent']]);
+         await router.invoke(OP_CREATE_ACTOR, {});
+         expect(sent).toHaveLength(1);
+      });
    });
 
    it('prefers an agent endpoint over an earlier human endpoint', async () => {

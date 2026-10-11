@@ -7,10 +7,12 @@ import {
    ENDPOINT_UNAVAILABLE,
    NOT_GM,
    NO_ENDPOINT,
+   GATE_DENIED,
    OP_FAILED,
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
 } from '../shared/protocol.js';
+import { closedGateState, gateDenial, sanitizeGateState, type GateState } from '../shared/gates.js';
 import { truncateUtf8 } from './utf8.ts';
 
 /** The kind of a bridge endpoint: a person's browser tab or an agent-runner browser. */
@@ -31,6 +33,8 @@ export interface EndpointIdentity {
    userName: string;
    kind: EndpointKind;
    dom: boolean;
+   // The sanitized risk-gate snapshot; every gate closed when the identify carried none or an invalid one.
+   gateState: GateState;
 }
 
 /** A registered bridge endpoint. */
@@ -45,9 +49,20 @@ export type IdentifyResult =
    | { ok: true; identity: EndpointIdentity }
    | { ok: false; error: { code: string; message: string } };
 
+/** A risk gate an invocation requires, judged against the snapshot of the endpoint that will run it. */
+export interface RequiredGate {
+   // The registry name of the gate (see `shared/gates.js`).
+   gate: string;
+   // The plugin module id, required for the `allowedPluginModules` gate.
+   moduleId?: string;
+}
+
 /** Options of a single routed invocation. */
 export interface InvokeOptions {
    endpoint?: EndpointKind;
+   // When set, the picked endpoint's own gate snapshot must open this gate, else the call fails with GATE_DENIED
+   // before anything is sent. Pick, gate check and send are one atomic step on one endpoint.
+   requireGate?: RequiredGate;
 }
 
 /** The registry of identified GM endpoints. */
@@ -62,6 +77,8 @@ export interface EndpointRegistry {
    get: (socketId: string) => Endpoint | undefined;
    // Sets a registered socket's health; ignored for an unregistered socket.
    setHealth: (socketId: string, health: EndpointHealth) => void;
+   // Replaces a registered socket's gate snapshot (already sanitized); ignored for an unregistered socket.
+   setGateState: (socketId: string, gateState: GateState) => void;
    // Finds the earliest-registered healthy endpoint of a kind.
    firstOfKind: (kind: EndpointKind) => Endpoint | undefined;
 }
@@ -69,6 +86,10 @@ export interface EndpointRegistry {
 /** The router that picks an endpoint for an invocation and runs it, and probes endpoints that stop answering. */
 export interface Router {
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
+   // Display and diagnostic accessor only: copies the gate snapshot of the endpoint a call with the same `endpoint`
+   // option would reach now, every gate closed when none is eligible. It is not a gate check, because a later `invoke`
+   // may pick a different endpoint; enforcement uses the `requireGate` option of `invoke`.
+   gateState: (options?: InvokeOptions) => GateState;
    // Stops probing a socket's endpoint; called when the socket disconnects.
    forget: (socketId: string) => void;
    // Stops every probe; the router starts no new one afterwards.
@@ -136,6 +157,9 @@ const MAX_MESSAGE_BYTES: number = 512;
 
 // Maximum UTF-8 byte length of the whole error text returned to an MCP caller.
 const MAX_ERROR_TEXT_BYTES: number = 512;
+
+// Maximum UTF-8 byte length of a GATE_DENIED message.
+const MAX_GATE_DENIAL_BYTES: number = 256;
 
 // Maximum UTF-8 byte length of the NO_ENDPOINT message.
 const MAX_NO_ENDPOINT_BYTES: number = 256;
@@ -278,6 +302,19 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       },
 
       /**
+       * Replace a registered endpoint's gate snapshot.
+       * @param {string} socketId - The socket id; an unregistered socket is ignored.
+       * @param {GateState} gateState - The new snapshot, already sanitized.
+       * @returns {void}
+       */
+      setGateState(socketId: string, gateState: GateState): void {
+         const existing: Endpoint | undefined = endpoints.get(socketId);
+         if (existing) {
+            existing.gateState = gateState;
+         }
+      },
+
+      /**
        * Find the earliest-registered healthy endpoint of a kind.
        * @param {EndpointKind} kind - The endpoint kind.
        * @returns {Endpoint | undefined} The endpoint, or undefined when no healthy endpoint of that kind is registered.
@@ -289,8 +326,9 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
 }
 
 /**
- * Validate a `bridge:identify` payload: protocol version 2, well-formed fields within the size limits (`userId` at most
- * 64 bytes, `userName` at most 128 bytes), and a GM user.
+ * Validate a `bridge:identify` payload: protocol version 3, well-formed fields within the size limits (`userId` at most
+ * 64 bytes, `userName` at most 128 bytes), and a GM user. The optional `gateState` is sanitized, never refused: an
+ * absent or invalid value yields the all-closed snapshot.
  * @param {unknown} payload - The payload received from the socket.
  * @returns {IdentifyResult} The identity to register, or the refusal (PROTOCOL_MISMATCH for a wrong version, a
  *          malformed field or an over-long field, NOT_GM for a non-GM user).
@@ -343,6 +381,7 @@ export function validateIdentify(payload: unknown): IdentifyResult {
          userName: fields.userName,
          kind: fields.kind as EndpointKind,
          dom: fields.dom,
+         gateState: sanitizeGateState(fields.gateState),
       },
    };
 }
@@ -573,28 +612,63 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       return running;
    }
 
+   // Single-pick design: `invoke` picks exactly one endpoint here and uses that same object for the gate check and the
+   // send, with no await in between, so no endpoint change can split the check from the send. `gateState` reuses the
+   // pick for display only.
+   /**
+    * Choose the endpoint a call with these options would reach: the first healthy endpoint of the first eligible kind.
+    * @param {InvokeOptions} options - `endpoint` restricts the choice to one kind with no fallback.
+    * @returns {{ endpoint: Endpoint | undefined, kinds: readonly EndpointKind[] }} The endpoint (undefined when none is
+    *          healthy) and the eligible kinds.
+    */
+   function pick(options: InvokeOptions): { endpoint: Endpoint | undefined; kinds: readonly EndpointKind[] } {
+      const kinds: readonly EndpointKind[] = options.endpoint === undefined ? ROUTE_ORDER : [options.endpoint];
+      let endpoint: Endpoint | undefined;
+      for (const kind of kinds) {
+         endpoint = registry.firstOfKind(kind);
+         if (endpoint) {
+            break;
+         }
+      }
+      return { endpoint, kinds };
+   }
+
    return {
+      /**
+       * Copy the gate snapshot of the endpoint a call with the same options would reach now. For display and
+       * diagnostics only: it is not an enforcement point, since a later `invoke` picks its endpoint again. Use
+       * `requireGate`.
+       * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback.
+       * @returns {GateState} A fresh copy of the snapshot; every gate closed when no healthy endpoint is eligible.
+       */
+      gateState(options: InvokeOptions = {}): GateState {
+         const { endpoint } = pick(options);
+         return endpoint ? sanitizeGateState(endpoint.gateState) : closedGateState();
+      },
+
       /**
        * Run an operation on a chosen endpoint.
        * @param {string} op - The operation name.
        * @param {object} params - The operation parameters.
-       * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback.
+       * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback; `requireGate`
+       *        makes the picked endpoint's own snapshot decide whether the call is sent at all.
        * @returns {Promise<unknown>} The operation result; rejects with a BridgeError (NO_ENDPOINT,
-       *          ENDPOINT_UNAVAILABLE, ENDPOINT_GONE, ENDPOINT_TIMEOUT, or the normalized client failure).
+       *          ENDPOINT_UNAVAILABLE, GATE_DENIED, ENDPOINT_GONE, ENDPOINT_TIMEOUT, or the normalized client failure).
        */
       async invoke(op: string, params: object, options: InvokeOptions = {}): Promise<unknown> {
-         const kinds: readonly EndpointKind[] = options.endpoint === undefined ? ROUTE_ORDER : [options.endpoint];
-         let endpoint: Endpoint | undefined;
-         for (const kind of kinds) {
-            endpoint = registry.firstOfKind(kind);
-            if (endpoint) {
-               break;
-            }
-         }
+         const { endpoint, kinds } = pick(options);
          if (!endpoint) {
             // No healthy endpoint of an eligible kind: unresponsive ones that are still connected make it UNAVAILABLE.
             const stuck: boolean = registry.list().some((candidate) => kinds.includes(candidate.kind));
             throw stuck ? endpointUnavailable(options.endpoint) : noEndpoint(options.endpoint);
+         }
+         if (options.requireGate) {
+            // The gate is judged on the snapshot of the endpoint picked above; a denial is thrown before any send.
+            const denial = gateDenial(endpoint.gateState, options.requireGate.gate, options.requireGate.moduleId);
+            if (denial) {
+               deps.log(`Wiretap sidecar | invoke ${op} denied by gate ${denial.code}`);
+               throw new BridgeError(GATE_DENIED, truncateUtf8(denial.message, MAX_GATE_DENIAL_BYTES));
+            }
          }
          const requestId: string = newRequestId();
          deps.log(
