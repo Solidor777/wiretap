@@ -87,7 +87,8 @@ export function planMcpWiring(command: string): McpWiringPlan {
 
 /**
  * Report whether a config path can be placed inside double quotes in the platform's shell without being altered:
- * rejects `"` and `%` everywhere and, on POSIX, `$`, the backtick and the backslash. This is the only path-safety check.
+ * rejects `"` and `%` everywhere and, on POSIX, `$`, the backtick and the backslash. This is the only path-safety
+ * check.
  * @param {string} configPath - The absolute path of the MCP config file.
  * @param {NodeJS.Platform} [platform] - The host platform; defaults to `process.platform`.
  * @returns {boolean} True when the quoted path reaches `claude` verbatim.

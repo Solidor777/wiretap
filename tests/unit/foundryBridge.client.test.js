@@ -47,7 +47,9 @@ describe('createActor op handler', () => {
          ['base', 'character', 'npc'],
          async () => { throw new Error('should not be called'); },
       );
-      await expect(createActor({ name: 'X', type: 'wizard' })).rejects.toThrow(/Unknown actor type 'wizard'.*character.*npc/);
+      await expect(createActor({ name: 'X', type: 'wizard' })).rejects.toThrow(
+         /Unknown actor type 'wizard'.*character.*npc/,
+      );
    });
 
    it('surfaces an error thrown by Actor.create', async () => {

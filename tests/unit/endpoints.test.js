@@ -10,9 +10,9 @@ import {
    createRouter,
    formatBridgeError,
    normalizeAckError,
-   truncateUtf8,
    validateIdentify,
 } from '../../server/endpoints.ts';
+import { truncateUtf8 } from '../../server/utf8.ts';
 import {
    ENDPOINT_GONE,
    ENDPOINT_LIMIT,

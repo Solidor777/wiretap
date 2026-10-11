@@ -1,15 +1,24 @@
 // @vitest-environment node
 import http from 'node:http';
 import { describe, it, expect } from 'vitest';
-import { makeCreateActorHandler, startMcpServer } from '../../server/mcp.ts';
+import { makeCreateActorHandler, makeReadHandleHandler, startMcpServer } from '../../server/mcp.ts';
+import { createHandleStore } from '../../server/handles.ts';
 import { BridgeError } from '../../server/endpoints.ts';
 import { NO_ENDPOINT, OP_CREATE_ACTOR, OP_FAILED } from '$shared/protocol.js';
 
 describe('makeCreateActorHandler', () => {
    it('returns success content containing the new actor uuid', async () => {
-      const bridge = { invoke: async () => ({ uuid: 'Actor.abc', id: 'abc', name: 'Bob', type: 'npc' }) };
+      const bridge = { invoke: async () => ({
+         uuid: 'Actor.abc',
+         id: 'abc',
+         name: 'Bob',
+         type: 'npc',
+      }) };
       const handler = makeCreateActorHandler(bridge);
-      const result = await handler({ name: 'Bob', type: 'npc' });
+      const result = await handler({
+         name: 'Bob',
+         type: 'npc',
+      });
       expect(result.isError).toBeFalsy();
       expect(result.content[0].text).toContain('Actor.abc');
       expect(result.content[0].text).toContain('Bob');
@@ -19,14 +28,24 @@ describe('makeCreateActorHandler', () => {
       let captured;
       const bridge = {
          invoke: async (op, params) => {
-            captured = { op, params };
-            return { uuid: 'Actor.x', name: 'Z', type: 'character' };
+            captured = {
+               op,
+               params,
+            };
+            return {
+               uuid: 'Actor.x',
+               name: 'Z',
+               type: 'character',
+            };
          },
       };
       const handler = makeCreateActorHandler(bridge);
       await handler({ name: 'Z' });
       expect(captured.op).toBe(OP_CREATE_ACTOR);
-      expect(captured.params).toEqual({ name: 'Z', type: undefined });
+      expect(captured.params).toEqual({
+         name: 'Z',
+         type: undefined,
+      });
    });
 
    it('forwards an explicit type to the bridge', async () => {
@@ -34,12 +53,22 @@ describe('makeCreateActorHandler', () => {
       const bridge = {
          invoke: async (op, params) => {
             captured = params;
-            return { uuid: 'Actor.y', name: 'Z', type: 'character' };
+            return {
+               uuid: 'Actor.y',
+               name: 'Z',
+               type: 'character',
+            };
          },
       };
       const handler = makeCreateActorHandler(bridge);
-      await handler({ name: 'Z', type: 'character' });
-      expect(captured).toEqual({ name: 'Z', type: 'character' });
+      await handler({
+         name: 'Z',
+         type: 'character',
+      });
+      expect(captured).toEqual({
+         name: 'Z',
+         type: 'character',
+      });
    });
 
    it('maps a BridgeError to an isError result formatted <code>: <message>', async () => {
@@ -55,7 +84,10 @@ describe('makeCreateActorHandler', () => {
    });
 
    it('lists the failures and appends (+N more) when the BridgeError carries truncated failures', async () => {
-      const failures = Array.from({ length: 10 }, (_, i) => ({ path: `p${i}`, message: 'm' }));
+      const failures = Array.from({ length: 10 }, (_, i) => ({
+         path: `p${i}`,
+         message: 'm',
+      }));
       const bridge = {
          invoke: async () => {
             throw new BridgeError(OP_FAILED, 'invalid', failures, 50);
@@ -68,7 +100,11 @@ describe('makeCreateActorHandler', () => {
    });
 
    it('bounds an actor result string to 256 bytes', async () => {
-      const bridge = { invoke: async () => ({ uuid: 'Actor.x', name: 'n'.repeat(5000), type: 'npc' }) };
+      const bridge = { invoke: async () => ({
+         uuid: 'Actor.x',
+         name: 'n'.repeat(5000),
+         type: 'npc',
+      }) };
       const result = await makeCreateActorHandler(bridge)({ name: 'Bob' });
       expect(result.isError).toBeFalsy();
       expect(Buffer.byteLength(result.content[0].text, 'utf8')).toBeLessThan(256 + 128);
@@ -76,14 +112,52 @@ describe('makeCreateActorHandler', () => {
    });
 
    it.each([
-      ['undefined', undefined],
-      ['null', null],
-      ['a string', 'Actor.x'],
-      ['an array', ['Actor.x']],
-      ['an object without a uuid', { name: 'Bob', type: 'npc' }],
-      ['an object with a numeric uuid', { uuid: 5, name: 'Bob', type: 'npc' }],
-      ['an object without a name', { uuid: 'Actor.x', type: 'npc' }],
-      ['an object with an object type', { uuid: 'Actor.x', name: 'Bob', type: {} }],
+      [
+         'undefined',
+         undefined,
+      ],
+      [
+         'null',
+         null,
+      ],
+      [
+         'a string',
+         'Actor.x',
+      ],
+      [
+         'an array',
+         ['Actor.x'],
+      ],
+      [
+         'an object without a uuid',
+         {
+            name: 'Bob',
+            type: 'npc',
+         },
+      ],
+      [
+         'an object with a numeric uuid',
+         {
+            uuid: 5,
+            name: 'Bob',
+            type: 'npc',
+         },
+      ],
+      [
+         'an object without a name',
+         {
+            uuid: 'Actor.x',
+            type: 'npc',
+         },
+      ],
+      [
+         'an object with an object type',
+         {
+            uuid: 'Actor.x',
+            name: 'Bob',
+            type: {},
+         },
+      ],
    ])('turns %s from a hostile ok:true ack into a short OP_FAILED result without throwing', async (_label, value) => {
       const bridge = { invoke: async () => value };
       const result = await makeCreateActorHandler(bridge)({ name: 'Bob' });
@@ -92,15 +166,13 @@ describe('makeCreateActorHandler', () => {
       expect(Buffer.byteLength(result.content[0].text, 'utf8')).toBeLessThanOrEqual(128);
    });
 
-   it('maps a non-BridgeError rejection to its message', async () => {
+   it('rethrows a non-BridgeError rejection instead of returning its message', async () => {
       const bridge = {
          invoke: async () => {
             throw new Error('boom');
          },
       };
-      const result = await makeCreateActorHandler(bridge)({ name: 'Bob' });
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe('boom');
+      await expect(makeCreateActorHandler(bridge)({ name: 'Bob' })).rejects.toThrow('boom');
    });
 });
 
@@ -114,7 +186,11 @@ describe('startMcpServer on an ephemeral port', () => {
    function post(port, host) {
       return new Promise((resolve, reject) => {
          /** @type {string} The JSON-RPC body. */
-         const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+         const body = JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/list',
+         });
          const req = http.request(
             {
                host: '127.0.0.1',
@@ -152,5 +228,139 @@ describe('startMcpServer on an ephemeral port', () => {
       } finally {
          mcp.close();
       }
+   });
+});
+
+describe('makeReadHandleHandler', () => {
+   /** @type {string} The owner key of the synthetic session. */
+   const OWNER = 'owner-a';
+
+   /**
+    * Store a text and build a handler for the owner.
+    * @param {string} text - The text to store.
+    * @returns {{ handle: string, handler: Function, store: ReturnType<typeof createHandleStore> }} The pieces.
+    */
+   function setup(text) {
+      /** @type {ReturnType<typeof createHandleStore>} The empty store the handler reads. */
+      const store = createHandleStore();
+      return {
+         handle: store.put(OWNER, text).handle,
+         handler: makeReadHandleHandler(store, OWNER),
+         store,
+      };
+   }
+
+   it('returns the window text and a footer with offset, length and total', async () => {
+      const { handle, handler } = setup('hello world');
+      const result = await handler({
+         handle,
+         offset: 6,
+         length: 5,
+      });
+      expect(result.isError).toBeFalsy();
+      expect(result.content[0]).toEqual({
+         type: 'text',
+         text: 'world',
+      });
+      expect(JSON.parse(result.content[1].text)).toEqual({
+         offset: 6,
+         length: 5,
+         total: 11,
+      });
+   });
+
+   it('keeps window and footer together within the 8,000-byte hard cap for a 100 KB result', async () => {
+      const { handle, handler } = setup('€'.repeat(40_000));
+      const result = await handler({ handle });
+      const bytes = result.content.reduce((sum, item) => sum + Buffer.byteLength(item.text, 'utf8'), 0);
+      expect(bytes).toBeLessThanOrEqual(8000);
+      expect(bytes).toBeGreaterThan(7800);
+   });
+
+   it('sizes the window from a requested maxBytes less the footer reserve', async () => {
+      const { handle, handler } = setup('a'.repeat(30_000));
+      const wide = await handler({
+         handle,
+         maxBytes: 12_000,
+      });
+      expect(wide.content[0].text).toHaveLength(12_000 - 64);
+      const narrow = await handler({
+         handle,
+         maxBytes: 164,
+      });
+      expect(narrow.content[0].text).toHaveLength(100);
+   });
+
+   it.each([
+      1,
+      64,
+      127,
+   ])('answers maxBytes %i, below the 128-byte minimum, with a bounded error', async (maxBytes) => {
+      const { handle, handler } = setup('a');
+      const result = await handler({
+         handle,
+         maxBytes,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content).toHaveLength(1);
+      expect(result.content[0].text.startsWith('HANDLE_WINDOW_TOO_SMALL: ')).toBe(true);
+      expect(Buffer.byteLength(result.content[0].text, 'utf8')).toBeLessThanOrEqual(128);
+   });
+
+   it('serves a 64-byte window with its footer inside maxBytes 128, even for a truncated paths result', async () => {
+      const { handle, handler } = setup(JSON.stringify({ big: 'x'.repeat(30_000) }));
+      const plain = await handler({
+         handle,
+         maxBytes: 128,
+      });
+      expect(plain.isError).toBeFalsy();
+      expect(plain.content[0].text).toHaveLength(64);
+      const cut = await handler({
+         handle,
+         paths: ['big'],
+         maxBytes: 128,
+      });
+      expect(cut.isError).toBeFalsy();
+      expect(cut.content.reduce((sum, item) => sum + Buffer.byteLength(item.text, 'utf8'), 0)).toBeLessThanOrEqual(128);
+   });
+
+   it('flags a paths result that was cut at the window size in the footer', async () => {
+      const { handle, handler } = setup(JSON.stringify({ big: 'x'.repeat(30_000) }));
+      const result = await handler({
+         handle,
+         paths: ['big'],
+      });
+      expect(JSON.parse(result.content[1].text)).toEqual({
+         offset: 0,
+         length: 7936,
+         total: 7936,
+         truncated: true,
+      });
+   });
+
+   it('resolves paths over the stored JSON', async () => {
+      const { handle, handler } = setup(JSON.stringify({ name: 'MOCK_ACTOR' }));
+      const result = await handler({
+         handle,
+         paths: ['name'],
+      });
+      expect(JSON.parse(result.content[0].text)).toEqual({
+         values: { name: 'MOCK_ACTOR' },
+         missing: [],
+      });
+   });
+
+   it('maps a store failure to an isError result formatted <code>: <message>', async () => {
+      const { handler } = setup('x');
+      const result = await handler({ handle: 'AAAAAAAAAAAAAAAAAAAAAA' });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe('HANDLE_NOT_FOUND: Handle not found or expired.');
+   });
+
+   it('refuses a handle that belongs to another owner', async () => {
+      const { handle, store } = setup('secret');
+      const result = await makeReadHandleHandler(store, 'owner-b')({ handle });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text.startsWith('HANDLE_NOT_FOUND')).toBe(true);
    });
 });

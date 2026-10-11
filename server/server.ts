@@ -3,7 +3,7 @@ import { Server } from 'socket.io';
 import { createTerminalManager } from './terminal.ts';
 import { createFoundryBridge } from './foundryBridge.ts';
 import { startMcpServer } from './mcp.ts';
-import { truncateUtf8 } from './endpoints.ts';
+import { truncateUtf8 } from './utf8.ts';
 import { createLogThrottle } from './logThrottle.ts';
 import { ALLOWED_ORIGINS, isOriginAllowed } from './origins.ts';
 import type { ServerMode } from './serverMode.ts';

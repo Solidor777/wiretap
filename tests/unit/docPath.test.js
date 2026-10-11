@@ -59,7 +59,10 @@ function makeExport() {
          },
          traits: {
             languages: {
-               value: ['common', 'elvish'],
+               value: [
+                  'common',
+                  'elvish',
+               ],
             },
          },
          zero: 0,
@@ -144,7 +147,13 @@ describe('parsePath', () => {
    });
 
    it.each(INHERITED_NAMES)('refuses the Object.prototype member %s anywhere in the path', (name) => {
-      for (const path of [name, `${name}.x`, `system.${name}`, `system.${name}.x`, `items.*.${name}`]) {
+      for (const path of [
+         name,
+         `${name}.x`,
+         `system.${name}`,
+         `system.${name}.x`,
+         `items.*.${name}`,
+      ]) {
          const result = parsePath(path);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_UNSAFE_SEGMENT');
@@ -165,7 +174,17 @@ describe('parsePath', () => {
       expect(result.error.code).toBe('PATH_INVALID');
    });
 
-   it.each(['', '.', 'a..b', '.a', 'a.', 42, null, undefined, {}])('refuses the malformed path %j', (path) => {
+   it.each([
+      '',
+      '.',
+      'a..b',
+      '.a',
+      'a.',
+      42,
+      null,
+      undefined,
+      {},
+   ])('refuses the malformed path %j', (path) => {
       const result = parsePath(path);
       expect(result.ok).toBe(false);
       expect(result.error.code).toBe('PATH_INVALID');
@@ -181,7 +200,11 @@ describe('parsePath', () => {
    });
 
    it('cannot address a key that contains a literal dot: the dot always splits segments', () => {
-      expect(parsePath('flags.a.b').segments.map((segment) => segment.name)).toEqual(['flags', 'a', 'b']);
+      expect(parsePath('flags.a.b').segments.map((segment) => segment.name)).toEqual([
+         'flags',
+         'a',
+         'b',
+      ]);
       expect(run({ flags: { 'a.b': 1 } }, 'flags.a.b')).toEqual(NOT_FOUND);
    });
 
@@ -299,18 +322,35 @@ describe('resolvePath', () => {
 
    it('steps only own properties, never inherited ones, even for hand-built segments', () => {
       const doc = makeExport();
-      for (const name of ['toString', 'hasOwnProperty', 'valueOf', 'map']) {
-         expect(resolvePath(doc, [{ type: 'key', name }])).toEqual(NOT_FOUND);
-         expect(resolvePath(doc.items, [{ type: 'key', name }])).toEqual(NOT_FOUND);
+      for (const name of [
+         'toString',
+         'hasOwnProperty',
+         'valueOf',
+         'map',
+      ]) {
+         expect(resolvePath(doc, [{
+            type: 'key',
+            name,
+         }])).toEqual(NOT_FOUND);
+         expect(resolvePath(doc.items, [{
+            type: 'key',
+            name,
+         }])).toEqual(NOT_FOUND);
       }
    });
 
    it('reports a path ambiguous between an index and another element _id as not found', () => {
       const doc = {
-         items: [{ _id: 'a' }, { _id: '0' }],
+         items: [
+            { _id: 'a' },
+            { _id: '0' },
+         ],
       };
       expect(run(doc, 'items.0._id')).toEqual(NOT_FOUND);
-      expect(run({ items: [{ _id: '0' }, { _id: 'b' }] }, 'items.0._id')).toEqual(found('0'));
+      expect(run({ items: [
+         { _id: '0' },
+         { _id: 'b' },
+      ] }, 'items.0._id')).toEqual(found('0'));
    });
 
    it('reads an own _id only: an inherited _id does not name an element', () => {
@@ -446,7 +486,10 @@ describe('resolvePath', () => {
 
    it('treats a second wildcard in hand-built segments as not found instead of recursing', () => {
       const doc = {
-         rows: [[1], [2]],
+         rows: [
+            [1],
+            [2],
+         ],
       };
       const segments = [
          {
@@ -462,7 +505,10 @@ describe('resolvePath', () => {
 
 describe('resolvePaths', () => {
    it('returns values keyed by path and an empty missing list', () => {
-      const result = resolvePaths(makeExport(), ['system.attributes.hp.max', 'name']);
+      const result = resolvePaths(makeExport(), [
+         'system.attributes.hp.max',
+         'name',
+      ]);
       expect(result).toEqual({
          ok: true,
          values: {
@@ -474,22 +520,36 @@ describe('resolvePaths', () => {
    });
 
    it('lists missing paths in request order and keeps them out of values', () => {
-      const result = resolvePaths(makeExport(), ['name', 'system.nope', 'items.NOSUCHID.name', 'system.zero']);
+      const result = resolvePaths(makeExport(), [
+         'name',
+         'system.nope',
+         'items.NOSUCHID.name',
+         'system.zero',
+      ]);
       expect(result).toEqual({
          ok: true,
          values: {
             name: 'MOCK_ACTOR',
             'system.zero': 0,
          },
-         missing: ['system.nope', 'items.NOSUCHID.name'],
+         missing: [
+            'system.nope',
+            'items.NOSUCHID.name',
+         ],
       });
    });
 
    it('returns ok with every path missing', () => {
-      expect(resolvePaths(makeExport(), ['a', 'b.c'])).toEqual({
+      expect(resolvePaths(makeExport(), [
+         'a',
+         'b.c',
+      ])).toEqual({
          ok: true,
          values: {},
-         missing: ['a', 'b.c'],
+         missing: [
+            'a',
+            'b.c',
+         ],
       });
    });
 
@@ -523,7 +583,13 @@ describe('resolvePaths', () => {
    });
 
    it('reads each repeated path once and keeps the first occurrence', () => {
-      const result = resolvePaths(makeExport(), ['name', 'system.nope', 'name', 'system.nope', 'system.zero']);
+      const result = resolvePaths(makeExport(), [
+         'name',
+         'system.nope',
+         'name',
+         'system.nope',
+         'system.zero',
+      ]);
       expect(result).toEqual({
          ok: true,
          values: {
@@ -535,16 +601,30 @@ describe('resolvePaths', () => {
    });
 
    it('refuses the whole call when any path has an unsafe segment, returning no values', () => {
-      const result = resolvePaths(makeExport(), ['name', 'system.__proto__.polluted']);
+      const result = resolvePaths(makeExport(), [
+         'name',
+         'system.__proto__.polluted',
+      ]);
       expect(result.ok).toBe(false);
       expect(result.error.code).toBe('PATH_UNSAFE_SEGMENT');
       expect(result.error.message).toContain('__proto__');
       expect(result.values).toBeUndefined();
    });
 
-   it.each(['toString', 'valueOf', '__defineGetter__'])('refuses the inherited member %s on the read path', (name) => {
-      for (const path of [`${name}.x`, `system.${name}`, name]) {
-         const result = resolvePaths(makeExport(), ['name', path]);
+   it.each([
+      'toString',
+      'valueOf',
+      '__defineGetter__',
+   ])('refuses the inherited member %s on the read path', (name) => {
+      for (const path of [
+         `${name}.x`,
+         `system.${name}`,
+         name,
+      ]) {
+         const result = resolvePaths(makeExport(), [
+            'name',
+            path,
+         ]);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_UNSAFE_SEGMENT');
          expect(result.values).toBeUndefined();
@@ -552,14 +632,20 @@ describe('resolvePaths', () => {
    });
 
    it('refuses the whole call when any path is malformed', () => {
-      expect(resolvePaths(makeExport(), ['name', 'a..b']).error.code).toBe('PATH_INVALID');
+      expect(resolvePaths(makeExport(), [
+         'name',
+         'a..b',
+      ]).error.code).toBe('PATH_INVALID');
    });
 
    it('accepts the maximum number of paths and refuses one more', () => {
       const max = getBudget('PATHS_PER_CALL_MAX').value;
       const paths = Array.from({ length: max }, () => 'name');
       expect(resolvePaths(makeExport(), paths).ok).toBe(true);
-      const over = resolvePaths(makeExport(), [...paths, 'name']);
+      const over = resolvePaths(makeExport(), [
+         ...paths,
+         'name',
+      ]);
       expect(over.ok).toBe(false);
       expect(over.error.code).toBe('PATH_LIMIT');
    });
@@ -590,10 +676,16 @@ describe('groupWrites', () => {
     * The embedded collection names of the synthetic document.
     * @type {string[]}
     */
-   const COLLECTIONS = ['items', 'effects'];
+   const COLLECTIONS = [
+      'items',
+      'effects',
+   ];
 
    it('puts paths on the document itself in the document group', () => {
-      const result = groupWrites([{ path: 'system.attributes.hp.value', value: 3 }], COLLECTIONS);
+      const result = groupWrites([{
+         path: 'system.attributes.hp.value',
+         value: 3,
+      }], COLLECTIONS);
       expect(result).toEqual({
          ok: true,
          document: [
@@ -610,11 +702,27 @@ describe('groupWrites', () => {
    it('groups embedded paths per collection and per embedded id, relative to the embedded document', () => {
       const result = groupWrites(
          [
-            { path: 'items.ITEM1.system.uses.value', value: 2 },
-            { path: 'name', value: 'MOCK_RENAMED' },
-            { path: 'items.ITEM2.name', value: 'MOCK_B', op: 'replace' },
-            { path: 'items.ITEM1.name', value: 'MOCK_A' },
-            { path: 'effects.EFF1.disabled', value: true },
+            {
+               path: 'items.ITEM1.system.uses.value',
+               value: 2,
+            },
+            {
+               path: 'name',
+               value: 'MOCK_RENAMED',
+            },
+            {
+               path: 'items.ITEM2.name',
+               value: 'MOCK_B',
+               op: 'replace',
+            },
+            {
+               path: 'items.ITEM1.name',
+               value: 'MOCK_A',
+            },
+            {
+               path: 'effects.EFF1.disabled',
+               value: true,
+            },
          ],
          COLLECTIONS,
       );
@@ -678,7 +786,11 @@ describe('groupWrites', () => {
    });
 
    it('carries the delete op and drops its value', () => {
-      const result = groupWrites([{ path: 'items.ITEM1.flags.x', value: 'ignored', op: 'delete' }], COLLECTIONS);
+      const result = groupWrites([{
+         path: 'items.ITEM1.flags.x',
+         value: 'ignored',
+         op: 'delete',
+      }], COLLECTIONS);
       expect(result.embedded[0].entries[0].changes).toEqual([
          {
             path: 'flags.x',
@@ -688,7 +800,10 @@ describe('groupWrites', () => {
    });
 
    it('treats a collection name that is not declared embedded as a document path', () => {
-      const result = groupWrites([{ path: 'items.ITEM1.name', value: 'x' }], []);
+      const result = groupWrites([{
+         path: 'items.ITEM1.name',
+         value: 'x',
+      }], []);
       expect(result.document).toEqual([
          {
             path: 'items.ITEM1.name',
@@ -700,51 +815,96 @@ describe('groupWrites', () => {
    });
 
    it('names the collection, not the document type, in the group', () => {
-      const result = groupWrites([{ path: 'items.ITEM1.name', value: 'x' }], COLLECTIONS);
+      const result = groupWrites([{
+         path: 'items.ITEM1.name',
+         value: 'x',
+      }], COLLECTIONS);
       expect(result.embedded[0].collection).toBe('items');
    });
 
    it('refuses a wildcard in a write path, in the document and in an embedded path', () => {
-      for (const path of ['items.*.name', 'system.*', '*']) {
-         const result = groupWrites([{ path, value: 1 }], COLLECTIONS);
+      for (const path of [
+         'items.*.name',
+         'system.*',
+         '*',
+      ]) {
+         const result = groupWrites([{
+            path,
+            value: 1,
+         }], COLLECTIONS);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_WILDCARD_WRITE');
       }
    });
 
    it('refuses an unsafe segment in a write path, including in the embedded id position', () => {
-      for (const path of ['system.__proto__.x', 'items.__proto__.name', 'items.ITEM1.constructor.x']) {
-         const result = groupWrites([{ path, value: 1 }], COLLECTIONS);
+      for (const path of [
+         'system.__proto__.x',
+         'items.__proto__.name',
+         'items.ITEM1.constructor.x',
+      ]) {
+         const result = groupWrites([{
+            path,
+            value: 1,
+         }], COLLECTIONS);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_UNSAFE_SEGMENT');
       }
    });
 
-   it.each(['toString', 'valueOf', '__defineGetter__'])('refuses the inherited member %s on the write path', (name) => {
-      for (const path of [`${name}.x`, `system.${name}`, `items.ITEM1.${name}.x`, `items.${name}.name`]) {
-         const result = groupWrites([{ path, value: 1 }], COLLECTIONS);
+   it.each([
+      'toString',
+      'valueOf',
+      '__defineGetter__',
+   ])('refuses the inherited member %s on the write path', (name) => {
+      for (const path of [
+         `${name}.x`,
+         `system.${name}`,
+         `items.ITEM1.${name}.x`,
+         `items.${name}.name`,
+      ]) {
+         const result = groupWrites([{
+            path,
+            value: 1,
+         }], COLLECTIONS);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_UNSAFE_SEGMENT');
       }
    });
 
    it('refuses an over-long write path with PATH_LIMIT', () => {
-      const result = groupWrites([{ path: 'a'.repeat(4 * 1024 * 1024), value: 1 }], COLLECTIONS);
+      const result = groupWrites([{
+         path: 'a'.repeat(4 * 1024 * 1024),
+         value: 1,
+      }], COLLECTIONS);
       expect(result.ok).toBe(false);
       expect(result.error.code).toBe('PATH_LIMIT');
    });
 
    it('refuses an embedded path that names no field inside the embedded document', () => {
-      for (const path of ['items', 'items.ITEM1']) {
-         const result = groupWrites([{ path, value: 1 }], COLLECTIONS);
+      for (const path of [
+         'items',
+         'items.ITEM1',
+      ]) {
+         const result = groupWrites([{
+            path,
+            value: 1,
+         }], COLLECTIONS);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_INVALID');
       }
    });
 
    it('refuses a numeric second segment on an embedded write: embedded writes address documents by _id', () => {
-      for (const path of ['items.0.name', 'items.12.system.uses.value', 'effects.007.disabled']) {
-         const result = groupWrites([{ path, value: 1 }], COLLECTIONS);
+      for (const path of [
+         'items.0.name',
+         'items.12.system.uses.value',
+         'effects.007.disabled',
+      ]) {
+         const result = groupWrites([{
+            path,
+            value: 1,
+         }], COLLECTIONS);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_INVALID');
          expect(result.error.message).toContain('_id');
@@ -753,16 +913,29 @@ describe('groupWrites', () => {
    });
 
    it('accepts a numeric segment beyond the embedded id and an id that only contains digits and letters', () => {
-      expect(groupWrites([{ path: 'items.ITEM1.system.list.0', value: 1 }], COLLECTIONS).ok).toBe(true);
-      expect(groupWrites([{ path: 'items.1a2b.name', value: 1 }], COLLECTIONS).ok).toBe(true);
+      expect(groupWrites([{
+         path: 'items.ITEM1.system.list.0',
+         value: 1,
+      }], COLLECTIONS).ok).toBe(true);
+      expect(groupWrites([{
+         path: 'items.1a2b.name',
+         value: 1,
+      }], COLLECTIONS).ok).toBe(true);
    });
 
    it('does not treat a numeric second segment of a non-embedded path as an embedded index', () => {
-      expect(groupWrites([{ path: 'system.list.0', value: 1 }], COLLECTIONS).ok).toBe(true);
+      expect(groupWrites([{
+         path: 'system.list.0',
+         value: 1,
+      }], COLLECTIONS).ok).toBe(true);
    });
 
    it('refuses an unknown op', () => {
-      const result = groupWrites([{ path: 'name', value: 'x', op: 'merge' }], COLLECTIONS);
+      const result = groupWrites([{
+         path: 'name',
+         value: 'x',
+         op: 'merge',
+      }], COLLECTIONS);
       expect(result.ok).toBe(false);
       expect(result.error.code).toBe('PATH_INVALID_OP');
    });
@@ -770,8 +943,14 @@ describe('groupWrites', () => {
    it('refuses the same path twice', () => {
       const result = groupWrites(
          [
-            { path: 'name', value: 'a' },
-            { path: 'name', value: 'b' },
+            {
+               path: 'name',
+               value: 'a',
+            },
+            {
+               path: 'name',
+               value: 'b',
+            },
          ],
          COLLECTIONS,
       );
@@ -781,15 +960,33 @@ describe('groupWrites', () => {
 
    it('refuses a path that is a prefix of another patch path, in either order', () => {
       for (const [first, second] of [
-         ['system.a', 'system.a.b'],
-         ['system.a.b', 'system.a'],
-         ['items.A.system', 'items.A.system.x'],
-         ['items.A.system.x', 'items.A.system'],
+         [
+            'system.a',
+            'system.a.b',
+         ],
+         [
+            'system.a.b',
+            'system.a',
+         ],
+         [
+            'items.A.system',
+            'items.A.system.x',
+         ],
+         [
+            'items.A.system.x',
+            'items.A.system',
+         ],
       ]) {
          const result = groupWrites(
             [
-               { path: first, value: 1 },
-               { path: second, value: 2 },
+               {
+                  path: first,
+                  value: 1,
+               },
+               {
+                  path: second,
+                  value: 2,
+               },
             ],
             COLLECTIONS,
          );
@@ -802,8 +999,14 @@ describe('groupWrites', () => {
    it('refuses a prefix conflict even when one of the patches deletes', () => {
       const result = groupWrites(
          [
-            { path: 'system.a', op: 'delete' },
-            { path: 'system.a.b', value: 2 },
+            {
+               path: 'system.a',
+               op: 'delete',
+            },
+            {
+               path: 'system.a.b',
+               value: 2,
+            },
          ],
          COLLECTIONS,
       );
@@ -813,10 +1016,22 @@ describe('groupWrites', () => {
    it('accepts sibling paths that only share a string prefix', () => {
       const result = groupWrites(
          [
-            { path: 'system.a', value: 1 },
-            { path: 'system.ab', value: 2 },
-            { path: 'items.A.system', value: 3 },
-            { path: 'items.B.system.x', value: 4 },
+            {
+               path: 'system.a',
+               value: 1,
+            },
+            {
+               path: 'system.ab',
+               value: 2,
+            },
+            {
+               path: 'items.A.system',
+               value: 3,
+            },
+            {
+               path: 'items.B.system.x',
+               value: 4,
+            },
          ],
          COLLECTIONS,
       );
@@ -824,8 +1039,22 @@ describe('groupWrites', () => {
    });
 
    it('refuses an embeddedCollections argument that is not an array of strings without throwing', () => {
-      for (const bad of [undefined, null, 'items', { items: true }, [1], ['items', null], [['items']]]) {
-         const result = groupWrites([{ path: 'name', value: 'x' }], bad);
+      for (const bad of [
+         undefined,
+         null,
+         'items',
+         { items: true },
+         [1],
+         [
+            'items',
+            null,
+         ],
+         [['items']],
+      ]) {
+         const result = groupWrites([{
+            path: 'name',
+            value: 'x',
+         }], bad);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_INVALID');
       }
@@ -840,9 +1069,18 @@ describe('groupWrites', () => {
 
    it('refuses a set or replace patch without a value but accepts an explicit null', () => {
       expect(groupWrites([{ path: 'name' }], COLLECTIONS).error.code).toBe('PATH_INVALID');
-      expect(groupWrites([{ path: 'name', op: 'replace' }], COLLECTIONS).error.code).toBe('PATH_INVALID');
-      expect(groupWrites([{ path: 'name', value: null }], COLLECTIONS).ok).toBe(true);
-      expect(groupWrites([{ path: 'name', op: 'delete' }], COLLECTIONS).ok).toBe(true);
+      expect(groupWrites([{
+         path: 'name',
+         op: 'replace',
+      }], COLLECTIONS).error.code).toBe('PATH_INVALID');
+      expect(groupWrites([{
+         path: 'name',
+         value: null,
+      }], COLLECTIONS).ok).toBe(true);
+      expect(groupWrites([{
+         path: 'name',
+         op: 'delete',
+      }], COLLECTIONS).ok).toBe(true);
    });
 
    it('refuses more patches than the per-call path limit', () => {
@@ -866,8 +1104,15 @@ describe('groupWrites', () => {
          return JSON.parse(`{${JSON.stringify(key)}: ${JSON.stringify(value)}}`);
       }
 
-      it.each(['__proto__', 'constructor', 'prototype'])('refuses a value with an own key named %s', (key) => {
-         const result = groupWrites([{ path: 'flags.x', value: withOwnKey(key, { polluted: true }) }], COLLECTIONS);
+      it.each([
+         '__proto__',
+         'constructor',
+         'prototype',
+      ])('refuses a value with an own key named %s', (key) => {
+         const result = groupWrites([{
+            path: 'flags.x',
+            value: withOwnKey(key, { polluted: true }),
+         }], COLLECTIONS);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_UNSAFE_VALUE');
          expect(byteLength(result.error.message)).toBeLessThanOrEqual(getBudget('PATH_ERROR_MAX_BYTES').value);
@@ -882,21 +1127,35 @@ describe('groupWrites', () => {
                },
             ],
          };
-         const result = groupWrites([{ path: 'flags.x', value: nested }], COLLECTIONS);
+         const result = groupWrites([{
+            path: 'flags.x',
+            value: nested,
+         }], COLLECTIONS);
          expect(result.error.code).toBe('PATH_UNSAFE_VALUE');
       });
 
       it('checks embedded writes and replace ops too', () => {
          const value = withOwnKey('__proto__', 1);
-         expect(groupWrites([{ path: 'items.A.flags', value }], COLLECTIONS).error.code).toBe('PATH_UNSAFE_VALUE');
-         expect(groupWrites([{ path: 'flags.x', value, op: 'replace' }], COLLECTIONS).error.code).toBe(
+         expect(groupWrites([{
+            path: 'items.A.flags',
+            value,
+         }], COLLECTIONS).error.code).toBe('PATH_UNSAFE_VALUE');
+         expect(groupWrites([{
+            path: 'flags.x',
+            value,
+            op: 'replace',
+         }], COLLECTIONS).error.code).toBe(
             'PATH_UNSAFE_VALUE',
          );
       });
 
       it('ignores the value of a delete', () => {
          const value = withOwnKey('__proto__', 1);
-         const result = groupWrites([{ path: 'flags.x', value, op: 'delete' }], COLLECTIONS);
+         const result = groupWrites([{
+            path: 'flags.x',
+            value,
+            op: 'delete',
+         }], COLLECTIONS);
          expect(result.ok).toBe(true);
       });
 
@@ -906,7 +1165,10 @@ describe('groupWrites', () => {
             my__proto__: 2,
             toString: 3,
          };
-         expect(groupWrites([{ path: 'flags.x', value }], COLLECTIONS).ok).toBe(true);
+         expect(groupWrites([{
+            path: 'flags.x',
+            value,
+         }], COLLECTIONS).ok).toBe(true);
       });
 
       it('accepts a value nested exactly 32 levels deep and refuses one more level', () => {
@@ -917,8 +1179,14 @@ describe('groupWrites', () => {
             }
             return value;
          };
-         expect(groupWrites([{ path: 'flags.x', value: build(32) }], COLLECTIONS).ok).toBe(true);
-         const result = groupWrites([{ path: 'flags.x', value: build(33) }], COLLECTIONS);
+         expect(groupWrites([{
+            path: 'flags.x',
+            value: build(32),
+         }], COLLECTIONS).ok).toBe(true);
+         const result = groupWrites([{
+            path: 'flags.x',
+            value: build(33),
+         }], COLLECTIONS);
          expect(result.ok).toBe(false);
          expect(result.error.code).toBe('PATH_UNSAFE_VALUE');
       });
@@ -926,7 +1194,10 @@ describe('groupWrites', () => {
       it('terminates on a cyclic value', () => {
          const cyclic = {};
          cyclic.self = cyclic;
-         expect(groupWrites([{ path: 'flags.x', value: cyclic }], COLLECTIONS).ok).toBe(true);
+         expect(groupWrites([{
+            path: 'flags.x',
+            value: cyclic,
+         }], COLLECTIONS).ok).toBe(true);
       });
    });
 });
@@ -954,30 +1225,67 @@ describe('error messages', () => {
          () => resolvePaths({}, [hugePath]),
          () => groupWrites('x', []),
          () => groupWrites([], []),
-         () => groupWrites([{ path: 'a', value: 1 }], undefined),
+         () => groupWrites([{
+            path: 'a',
+            value: 1,
+         }], undefined),
          () => groupWrites([null], []),
-         () => groupWrites([{ path: 'a', value: 1, op: 'x'.repeat(100000) }], []),
+         () => groupWrites([{
+            path: 'a',
+            value: 1,
+            op: 'x'.repeat(100000),
+         }], []),
          () => groupWrites([{ path: 'a' }], []),
-         () => groupWrites([{ path: 'a.*', value: 1 }], []),
-         () => groupWrites([{ path: hugePath, value: 1 }], []),
-         () => groupWrites([{ path: manySegments, value: 1 }], []),
-         () => groupWrites([{ path: 'items', value: 1 }], ['items']),
-         () => groupWrites([{ path: 'items.0.name', value: 1 }], ['items']),
+         () => groupWrites([{
+            path: 'a.*',
+            value: 1,
+         }], []),
+         () => groupWrites([{
+            path: hugePath,
+            value: 1,
+         }], []),
+         () => groupWrites([{
+            path: manySegments,
+            value: 1,
+         }], []),
+         () => groupWrites([{
+            path: 'items',
+            value: 1,
+         }], ['items']),
+         () => groupWrites([{
+            path: 'items.0.name',
+            value: 1,
+         }], ['items']),
          () => groupWrites(
             [
-               { path: 'a', value: 1 },
-               { path: 'a', value: 1 },
+               {
+                  path: 'a',
+                  value: 1,
+               },
+               {
+                  path: 'a',
+                  value: 1,
+               },
             ],
             [],
          ),
          () => groupWrites(
             [
-               { path: 'a', value: 1 },
-               { path: 'a.b', value: 1 },
+               {
+                  path: 'a',
+                  value: 1,
+               },
+               {
+                  path: 'a.b',
+                  value: 1,
+               },
             ],
             [],
          ),
-         () => groupWrites([{ path: 'a', value: JSON.parse('{"__proto__": 1}') }], []),
+         () => groupWrites([{
+            path: 'a',
+            value: JSON.parse('{"__proto__": 1}'),
+         }], []),
       ];
       expect(failing.length).toBeGreaterThan(20);
       for (const attempt of failing) {

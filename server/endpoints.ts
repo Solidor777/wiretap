@@ -11,6 +11,7 @@ import {
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
 } from '../shared/protocol.js';
+import { truncateUtf8 } from './utf8.ts';
 
 /** The kind of a bridge endpoint: a person's browser tab or an agent-runner browser. */
 export type EndpointKind = 'human' | 'agent';
@@ -142,9 +143,6 @@ const MAX_NO_ENDPOINT_BYTES: number = 256;
 // Maximum number of failures carried by a BridgeError.
 const MAX_FAILURES: number = 10;
 
-// Marker appended to a truncated message.
-const ELLIPSIS: string = '…';
-
 // Accepted shape of a client-supplied error code; bounds the code's size and charset.
 const CLIENT_CODE_PATTERN: RegExp = /^[A-Z][A-Z0-9_]{0,63}$/;
 
@@ -206,31 +204,6 @@ export class EndpointTimeoutError extends Error {
       super(cause);
       this.name = 'EndpointTimeoutError';
    }
-}
-
-/**
- * Truncate text to a UTF-8 byte limit, appending an ellipsis marker that counts toward the limit. Never splits a
- * multi-byte character.
- * @param {string} text - The text to bound.
- * @param {number} maxBytes - The maximum UTF-8 byte length of the result.
- * @returns {string} The text unchanged when it fits; an empty string when it does not fit and the limit cannot hold the
- *          marker; otherwise a truncated copy ending in the marker.
- */
-export function truncateUtf8(text: string, maxBytes: number): string {
-   const bytes: Buffer = Buffer.from(text, 'utf8');
-   if (bytes.length <= maxBytes) {
-      return text;
-   }
-   const markerBytes: number = Buffer.byteLength(ELLIPSIS, 'utf8');
-   if (maxBytes < markerBytes) {
-      return '';
-   }
-   let end: number = maxBytes - markerBytes;
-   // A continuation byte (10xxxxxx) at the cut means the cut is inside a character; back up to its start.
-   while (end > 0 && (bytes[end] & 0xc0) === 0x80) {
-      end--;
-   }
-   return bytes.subarray(0, end).toString('utf8') + ELLIPSIS;
 }
 
 /**

@@ -80,14 +80,22 @@ import { getBudget } from './budgets.js';
  * `parsePath` refuses these plus every member of `Object.prototype` as segments (`prototype` itself is not a member).
  * @type {readonly string[]}
  */
-export const UNSAFE_SEGMENTS = Object.freeze(['__proto__', 'constructor', 'prototype']);
+export const UNSAFE_SEGMENTS = Object.freeze([
+   '__proto__',
+   'constructor',
+   'prototype',
+]);
 
 /**
  * The write operations a patch may carry. The client builds Foundry's `_replace` and `_del` update operators from
  * them, because operators cannot cross the JSON wire.
  * @type {readonly WriteOp[]}
  */
-export const WRITE_OPS = Object.freeze(['set', 'replace', 'delete']);
+export const WRITE_OPS = Object.freeze([
+   'set',
+   'replace',
+   'delete',
+]);
 
 /**
  * The wildcard segment text.
@@ -239,7 +247,13 @@ function stepKey(node, name) {
             value: node[idIndex],
          };
       }
-      return indexInRange ? { found: true, value: node[index] } : { found: false };
+      if (indexInRange) {
+         return {
+            found: true,
+            value: node[index],
+         };
+      }
+      return { found: false };
    }
    if (isObject(node) && Object.hasOwn(node, name) && node[name] !== undefined) {
       return {
@@ -407,7 +421,10 @@ function findUnsafeValue(value) {
       return null;
    }
    /** @type {Array<{node: object, depth: number}>} Objects still to scan. */
-   const pending = [{ node: value, depth: 1 }];
+   const pending = [{
+      node: value,
+      depth: 1,
+   }];
    /** @type {Set<object>} Objects already scanned. */
    const seen = new Set();
    while (pending.length > 0) {

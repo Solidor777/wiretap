@@ -3,14 +3,55 @@ import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z, type ZodRawShape } from 'zod';
+import { getBudget } from '../shared/budgets.js';
 import { OP_CREATE_ACTOR, OP_FAILED } from '../shared/protocol.js';
-import { BridgeError, formatBridgeError, truncateUtf8, type InvokeOptions } from './endpoints.ts';
+import { BridgeError, formatBridgeError, type InvokeOptions } from './endpoints.ts';
+import { createHandleStore, type HandleStore, type SliceResult } from './handles.ts';
 import { isMcpHostAllowed, isOriginAllowed } from './origins.ts';
+import { withResultBudget, type ToolHandler } from './resultBudget.ts';
+import { truncateUtf8 } from './utf8.ts';
 
 /** The slice of the Foundry bridge the MCP tools need. */
 interface FoundryBridge {
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
+}
+
+/** A tool the server registers behind the result enforcer. */
+export interface ToolRegistration {
+   /** The MCP tool name. */
+   name: string;
+   /** The one-line description the client lists. */
+   description: string;
+   /**
+    * The zod shape of the arguments. The SDK strips arguments the shape does not declare, so a tool opts in to the
+    * per-call `maxBytes` result limit by declaring `maxBytes` here (which adds to the tool's definition size).
+    */
+   inputSchema: ZodRawShape;
+   /** The callback that runs the tool; it receives the validated arguments. */
+   handler: ToolHandler<never>;
+   /** The tool's own result budget in bytes; the hard cap applies when it is larger or absent. */
+   budgetBytes?: number;
+}
+
+/** Settings of the MCP server. */
+export interface McpServerOptions {
+   /** Tools registered after the built-in ones; each is wrapped by the result enforcer. */
+   tools?: ToolRegistration[];
+}
+
+/** The arguments of `read_handle`. */
+interface ReadHandleArgs {
+   /** The handle from an earlier large result. */
+   handle: string;
+   /** Document paths to resolve over the stored JSON. */
+   paths?: string[];
+   /** First UTF-16 unit of the viewed text to return. */
+   offset?: number;
+   /** Most UTF-16 units to return. */
+   length?: number;
+   /** Size limit in bytes for this call's whole result (window and footer), 1 to 16,000; default 8,000. */
+   maxBytes?: number;
 }
 
 /** The validated, bounded description of a created actor. */
@@ -19,6 +60,20 @@ interface CreateActorResult {
    name: string;
    type: string;
 }
+
+// The owner key under which every result handle is stored. MCP sessions are stateless, so every caller shares one
+// owner. TODO: key handles by the MCP session id once sessions are stateful, so one session cannot read another's.
+const PROCESS_OWNER_KEY: string = 'mcp';
+
+// Largest `maxBytes` a `read_handle` call may declare, in bytes.
+const READ_HANDLE_MAX_BYTES: number = getBudget('RESULT_HARD_CAP_MAX_BYTES').value;
+
+// Smallest `maxBytes` a `read_handle` call may declare: the footer reserve plus a window that holds any character, so
+// the result is always a window and a footer and never itself over the limit.
+const READ_HANDLE_MIN_BYTES: number = 128;
+
+// Bytes reserved in a `read_handle` result for the footer item that follows the window text.
+const READ_HANDLE_FOOTER_BYTES: number = 64;
 
 // Maximum UTF-8 byte length of each string of a `create_actor` result returned to the caller.
 const MAX_RESULT_STRING_BYTES: number = 256;
@@ -72,11 +127,26 @@ export function makeCreateActorHandler(
       try {
          const result: CreateActorResult = parseCreateActorResult(await bridge.invoke(OP_CREATE_ACTOR, { name, type }));
          return {
-            content: [{ type: 'text', text: `Created actor "${result.name}" (${result.type}) — ${result.uuid}` }],
+            content: [
+               {
+                  type: 'text',
+                  text: `Created actor "${result.name}" (${result.type}) — ${result.uuid}`,
+               },
+            ],
          };
       } catch (err) {
+         if (!(err instanceof BridgeError)) {
+            // Only a BridgeError carries text meant for the caller; the result enforcer answers anything else with a
+            // fixed message and logs the cause.
+            throw err;
+         }
          return {
-            content: [{ type: 'text', text: describeError(err) }],
+            content: [
+               {
+                  type: 'text',
+                  text: describeError(err),
+               },
+            ],
             isError: true,
          };
       }
@@ -84,19 +154,88 @@ export function makeCreateActorHandler(
 }
 
 /**
- * Construct a fresh MCP server with the create_actor tool registered. A new instance is created per
- * request in stateless mode.
+ * Build the `read_handle` tool handler: a window of a stored result, optionally after resolving document paths over it.
+ * The window text is the first content item and a footer `{offset, length, total}` (plus `truncated: true` when a
+ * paths result was cut at the window size) the second; together they stay within the call's `maxBytes` (default: the
+ * result hard cap).
+ * @param {HandleStore} store - The store holding the results.
+ * @param {string} ownerKey - The owner key whose handles may be read.
+ * @returns {ToolHandler<ReadHandleArgs>} An async handler mapping tool args to an MCP tool result.
+ */
+export function makeReadHandleHandler(store: HandleStore, ownerKey: string): ToolHandler<ReadHandleArgs> {
+   // The result size limit when the call gives no `maxBytes`.
+   const defaultBytes: number = getBudget('RESULT_HARD_CAP_DEFAULT_BYTES').value;
+   return async ({ handle, paths, offset, length, maxBytes }) => {
+      if (maxBytes !== undefined && maxBytes < READ_HANDLE_MIN_BYTES) {
+         return {
+            content: [
+               {
+                  type: 'text',
+                  text: `HANDLE_WINDOW_TOO_SMALL: maxBytes must be at least ${READ_HANDLE_MIN_BYTES}.`,
+               },
+            ],
+            isError: true,
+         };
+      }
+      // The outcome of reading the window, bounded to the call's size limit less the footer.
+      const slice: SliceResult = store.slice(ownerKey, handle, {
+         paths,
+         offset,
+         length,
+         maxBytes: (maxBytes ?? defaultBytes) - READ_HANDLE_FOOTER_BYTES,
+      });
+      if (!slice.ok) {
+         return {
+            content: [
+               {
+                  type: 'text',
+                  text: `${slice.error.code}: ${slice.error.message}`,
+               },
+            ],
+            isError: true,
+         };
+      }
+      return {
+         content: [
+            {
+               type: 'text',
+               text: slice.text,
+            },
+            {
+               type: 'text',
+               text: JSON.stringify({
+                  offset: slice.offset,
+                  length: slice.length,
+                  total: slice.total,
+                  ...(slice.truncated ? { truncated: true } : {}),
+               }),
+            },
+         ],
+      };
+   };
+}
+
+/**
+ * Construct a fresh MCP server with the built-in tools and the given extra tools registered, each behind the result
+ * enforcer. A new instance is created per request in stateless mode.
  * @param {FoundryBridge} bridge - The Foundry bridge passed to the tool handler.
+ * @param {HandleStore} store - The store receiving results over the limit.
+ * @param {ToolRegistration[]} extraTools - Tools registered after the built-in ones.
  * @returns {McpServer} A configured McpServer.
  */
-function buildServer(bridge: FoundryBridge): McpServer {
+function buildServer(bridge: FoundryBridge, store: HandleStore, extraTools: ToolRegistration[]): McpServer {
    // The per-request MCP server.
-   const server: McpServer = new McpServer({ name: 'wiretap', version: '0.0.1' });
-   // The create_actor tool handler.
-   const handler: ReturnType<typeof makeCreateActorHandler> = makeCreateActorHandler(bridge);
-   server.registerTool(
-      'create_actor',
+   const server: McpServer = new McpServer({
+      name: 'wiretap',
+      version: '0.0.1',
+   });
+   // The owner key shared by the `read_handle` reader and every tool's enforcer, so a handle stored by one is readable
+   // by the other.
+   const ownerKey: string = PROCESS_OWNER_KEY;
+   // The tools to register: the built-in ones, then the caller's.
+   const tools: ToolRegistration[] = [
       {
+         name: 'create_actor',
          description:
             'Create an Actor in the live Foundry world. Returns the created actor uuid. ' +
             "If 'type' is omitted it defaults to the world's first concrete actor subtype.",
@@ -109,9 +248,47 @@ function buildServer(bridge: FoundryBridge): McpServer {
                   "The actor subtype, e.g. 'character' or 'npc'. Defaults to the world's first concrete subtype.",
                ),
          },
+         handler: makeCreateActorHandler(bridge),
       },
-      handler,
-   );
+      {
+         name: 'read_handle',
+         description: 'Read a slice of a stored large result: optional document paths, then offset and length.',
+         inputSchema: {
+            handle: z.string().max(64).describe('Handle from an earlier large result.'),
+            paths: z
+               .array(z.string())
+               .max(getBudget('PATHS_PER_CALL_MAX').value)
+               .optional()
+               .describe('Document paths to read.'),
+            offset: z.number().int().min(0).optional().describe('First UTF-16 unit to return.'),
+            length: z.number().int().min(1).optional().describe('Most UTF-16 units to return.'),
+            maxBytes: z
+               .number()
+               .int()
+               .min(READ_HANDLE_MIN_BYTES)
+               .max(READ_HANDLE_MAX_BYTES)
+               .optional()
+               .describe('Result size limit.'),
+         },
+         handler: makeReadHandleHandler(store, ownerKey),
+      },
+      ...extraTools,
+   ];
+   for (const tool of tools) {
+      server.registerTool(
+         tool.name,
+         {
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+         },
+         // The registry erases each handler's argument type; the zod shape above has validated the arguments.
+         withResultBudget(tool.handler as ToolHandler<Record<string, unknown>>, {
+            store,
+            ownerKey,
+            budgetBytes: tool.budgetBytes,
+         }),
+      );
+   }
    return server;
 }
 
@@ -119,6 +296,7 @@ function buildServer(bridge: FoundryBridge): McpServer {
  * Start the MCP HTTP server (Streamable HTTP, stateless) bound to localhost only.
  * @param {FoundryBridge} bridge - The Foundry bridge the tools execute against.
  * @param {number} port - The TCP port to listen on.
+ * @param {McpServerOptions} [options] - Extra tools.
  * @returns {{ close: () => void; ready: Promise<void>; port: () => number }} A handle with a `close` method to stop the
  *          HTTP server, a promise that resolves once the port is bound or rejects (for example EADDRINUSE) when
  *          binding fails, and `port()`, the port actually bound (the requested port until `ready` resolves).
@@ -126,7 +304,10 @@ function buildServer(bridge: FoundryBridge): McpServer {
 export function startMcpServer(
    bridge: FoundryBridge,
    port: number,
+   options: McpServerOptions = {},
 ): { close: () => void; ready: Promise<void>; port: () => number } {
+   // The store behind every request's `read_handle`; it outlives the per-request servers.
+   const store: HandleStore = createHandleStore();
    // The port the server is bound to; differs from `port` when 0 requested an ephemeral port. The Host check reads it.
    let boundPort: number = port;
    // The loopback HTTP server that receives MCP requests.
@@ -154,7 +335,7 @@ export function startMcpServer(
             return;
          }
          // The per-request MCP server and its stateless transport.
-         const server: McpServer = buildServer(bridge);
+         const server: McpServer = buildServer(bridge, store, options.tools ?? []);
          const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
          });
@@ -169,7 +350,14 @@ export function startMcpServer(
             // Surface an unexpected dispatch failure as a JSON-RPC internal error rather than hanging the client.
             if (!res.headersSent) {
                res.writeHead(500, { 'Content-Type': 'application/json' }).end(
-                  JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null }),
+                  JSON.stringify({
+                     jsonrpc: '2.0',
+                     error: {
+                        code: -32603,
+                        message: 'Internal error',
+                     },
+                     id: null,
+                  }),
                );
             }
          }
@@ -187,5 +375,9 @@ export function startMcpServer(
          resolve();
       });
    });
-   return { close: () => httpServer.close(), ready, port: () => boundPort };
+   return {
+      close: () => httpServer.close(),
+      ready,
+      port: () => boundPort,
+   };
 }

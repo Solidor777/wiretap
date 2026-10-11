@@ -55,7 +55,12 @@ function budget(name, value, unit, severity) {
  * @returns {Readonly<Record<string, Readonly<Budget>>>} The frozen table.
  */
 function table(entries) {
-   return Object.freeze(Object.fromEntries(entries.map((entry) => [entry.name, entry])));
+   /** @type {Array<[string, Readonly<Budget>]>} The name-keyed pairs for `Object.fromEntries`. */
+   const pairs = entries.map((entry) => [
+      entry.name,
+      entry,
+   ]);
+   return Object.freeze(Object.fromEntries(pairs));
 }
 
 /**
@@ -101,12 +106,19 @@ export const BUDGETS = table([
    budget('RESULT_HARD_CAP_MAX_BYTES', 16000, 'bytes', BUDGET_SEVERITY.HARD),
    // Serialized sheet layout tree (4 KB).
    budget('SHEET_LAYOUT_MAX_BYTES', 4000, 'bytes', BUDGET_SEVERITY.HARD),
-   // Default screenshot area, the 800x600 area; aspect ratio is kept.
+   // Default screenshot area, the 800x600 area; aspect ratio is kept. A capture-time default: the result enforcer
+   // checks only the longest side and the data size, never this area.
    budget('IMAGE_DEFAULT_MAX_PIXELS', 480000, 'pixels', BUDGET_SEVERITY.HARD),
    // Longest side of any returned image.
    budget('IMAGE_MAX_SIDE_PIXELS', 1280, 'pixels', BUDGET_SEVERITY.HARD),
    // Images in one result.
    budget('IMAGE_MAX_PER_RESULT', 1, 'count', BUDGET_SEVERITY.HARD),
+   // Base64 characters of one returned image; a larger payload is refused whatever its header claims.
+   budget('IMAGE_DATA_MAX_BYTES', 1000000, 'chars', BUDGET_SEVERITY.HARD),
+   // One stored result, in UTF-8 bytes; a larger value is refused instead of stored.
+   budget('HANDLE_ENTRY_MAX_BYTES', 8000000, 'bytes', BUDGET_SEVERITY.HARD),
+   // Stored results held at once; the least recently used is evicted beyond it.
+   budget('HANDLE_MAX_COUNT', 1024, 'count', BUDGET_SEVERITY.HARD),
    // Live calibration runs of the manual measurement script; the script reports, it never fails a build.
    budget('LIVE_RECALIBRATION_MAX_RUNS', 6, 'count', BUDGET_SEVERITY.WARN),
    // Paths in one path-scoped read or write call.
