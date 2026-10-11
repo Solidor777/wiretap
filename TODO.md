@@ -23,6 +23,9 @@
       Wiretap settings UI (enable toggle + port); shared-secret handshake on the sidecar socket.
 
 - [ ] MCP stdio transport (not built; only Streamable HTTP exists)
+- [ ] Raw-socket executor (plan.md M11, dropped by D27): reads of stored source data only, for when no client
+      endpoint is live. M0 showed raw creates skip the system's pre-create logic and the server accepts invalid data;
+      revisit only if a raw path is ever wanted
 - [ ] Script dispatcher mode for MCP clients that do not defer tool schemas: `list_scripts` / `describe_script` /
       `run_script` (plan.md D19; per-script deferred tools are the primary mode, build this only if such a client is
       targeted)

@@ -271,7 +271,7 @@ the † changes are DECIDED (accepted 2026-10-11).
 | Error | ≤ 512 B, first 10 failures + count | CI hard | — |
 | Text result hard cap | **8 KB default** †, per-call `maxBytes` up to 16 KB; over cap → `{handle, bytes, summary}` | Runtime enforcer; CI hard on the behaviour | 18 KB was +8,954 tokens; 8 KB ≈ 4k tokens fits hero `system` (5.8 KB) and the median item (2.1 KB); 16 KB stays below the measured Claude Code inline lower bound (21.7 KB). Titan full actor exports are 5,738–12,492 B (E9): 3 of the 4 measured exceed 8 KB, so a full actor read returns a handle unless `maxBytes` is raised; titan items (634–1,697 B) fit |
 | `sheet_layout` | ≤ 4 KB | CI hard (fixture) and e2e hard | E9 prototype at depth 2: 401–441 B, but too shallow to be useful; the default depth is set in M15b by measurement |
-| Image | `screenshot` only; default ≤ 480,000 px (the 800×600 area), aspect kept ‡ (D28, PENDING-USER); max 1280 px longest side; one per result | CI hard (capture unit) | +972 measured at 800×600; larger sizes not measured. Titan sheets are 850×926 (actor) and 700×650 (item) (E9): the actor sheet does not fit an 800×600 box without distortion-free downscaling to 551×600, so the default is expressed as area |
+| Image | `screenshot` only; default ≤ 480,000 px (the 800×600 area), aspect kept ‡ (D28, DECIDED); max 1280 px longest side; one per result | CI hard (capture unit) | +972 measured at 800×600; larger sizes not measured. Titan sheets are 850×926 (actor) and 700×650 (item) (E9): the actor sheet does not fit an 800×600 box without distortion-free downscaling to 551×600, so the default is expressed as area |
 | Live recalibration | `tests/measure/measureContext.mjs`, manual, ≤ 6 `claude -p` runs | Report only | Tokenizers and Claude Code behaviour change between versions |
 
 ### 2.7 Skills as the discovery layer (part of D18, DECIDED)
@@ -404,8 +404,8 @@ entries of the same registry with the budgets of §2.6.
 | D24 | Default read view = compact; the canonical D14 export with `mode:"full"` or by `paths`, all under the hard cap | DECIDED (in principle) | User 2026-10-11 ("I think this can work") |
 | D25 | DOM scripts route to the agent endpoint by default; a human GM tab only by explicit `endpoint` override | DECIDED | User 2026-10-11 |
 | D26 | Path-scoped reads and writes (§2.8): `paths` parameter on `get_document`, same grammar in `update_documents`, `read_handle`, `describe_schema`; no new tools; `edit` merged into `update_documents` | DECIDED (accepted 2026-10-11; recommendation) | User request 2026-10-11; READ `helpers.mjs:821-868`, `global.d.mts:6-7` |
-| D27 | Build M11 (raw-socket executor) at all? Recommendation: **no; drop it and log it in `TODO.md`.** After E2 it could only serve source reads and valid system-field updates when no client is live, and the sidecar cannot tell valid from invalid values without the system's DataModels, which exist only in a client (READ §4.3); the agent runner (M9) already provides a client for about 440 MB and 1.8 s | PENDING-USER | MEASURED (coord.) M0 E2, E3 |
-| D28 | Screenshot default expressed as pixel area (≤ 480,000 px, the 800×600 area, aspect kept) instead of an 800×600 box (‡ in §2.6) | PENDING-USER (recommend adopt) | MEASURED (coord.) M0 E9: titan actor sheet 850×926 |
+| D27 | Build M11 (raw-socket executor) at all? Recommendation: **no; drop it and log it in `TODO.md`.** After E2 it could only serve source reads and valid system-field updates when no client is live, and the sidecar cannot tell valid from invalid values without the system's DataModels, which exist only in a client (READ §4.3); the agent runner (M9) already provides a client for about 440 MB and 1.8 s | DECIDED: drop (user accepted, 2026-10-11) | MEASURED (coord.) M0 E2, E3 |
+| D28 | Screenshot default expressed as pixel area (≤ 480,000 px, the 800×600 area, aspect kept) instead of an 800×600 box (‡ in §2.6) | DECIDED (user accepted, 2026-10-11) | MEASURED (coord.) M0 E9: titan actor sheet 850×926 |
 
 ## 4. Architecture
 
@@ -624,8 +624,8 @@ Test tiers:
 - **Live e2e:** Playwright against Foundry on `:30000`, only where real Foundry behaviour is the subject; documents
   recorded and torn down per §4.8.
 
-**Order:** M0 ‖ M1 → M13 → M2 → M3 → M14 → M4 → M5 → M6 → M15a → M7 → M16 (if D21) → M8 → M9 → M15b → M10 → M11 →
-M12.
+**Order:** M0 ‖ M1 → M13 → M2 → M3 → M14 → M4 → M5 → M6 → M15a → M7 → M16 (if D21) → M8 → M9 → M15b → M10 →
+M12 (M11 dropped, D27).
 
 ### M0 — Experiments against Foundry
 
@@ -1074,14 +1074,14 @@ external mode exposes the sidecar, not Foundry; Foundry's exposure is the GM's o
 
 ### M11 — Raw-socket executor (option B)
 
-**Status after M0: recommended for dropping (D27, PENDING-USER).** E2 certifies reads of stored source data only
+**Status: DROPPED (D27 DECIDED 2026-10-11, user accepted the recommendation); not built, logged in `TODO.md`.** E2 certifies reads of stored source data only
 (§4.3). What a read-only B would add: answers when no client endpoint is live, limited to source data (no derived
 values, no compact view key fields that depend on prepared data, sparse `system` for raw-created documents). What it
 costs: a second login path and executor, a second shaping path, and an always-present risk that a later change routes
 a write over it; the server stores invalid `system` values (E2), which the sidecar cannot detect without the
 system's DataModels. The M9 runner provides a full client for ≈ 440 MB and 1.8 s (E3), and recovers from a restart in
-≈ 8 s warm (E7). If D27 = drop, this milestone is logged in `TODO.md` and removed from the order; if D27 = build, its
-scope is the read-only form below. **Depends on:** M5, M8, M2 (gate snapshot). **In (read-only form):**
+≈ 8 s warm (E7). D27 = drop: this milestone is logged in `TODO.md` and removed from the order; the read-only form below is kept
+only as the scope to revisit if a raw-socket path is ever wanted. **Depends on:** M5, M8, M2 (gate snapshot). **In (read-only form):**
 
 - `server/rawSocket.ts` (login with an agent credential, `modifyDocument` with action `get` only; any other action is
   refused in code, not by configuration).
@@ -1264,3 +1264,6 @@ remain except those that wait on M0 results.
   M15b `sheet_layout` depth measurement.
 - §7: risks for server-accepted invalid data, the server `TypeError` noise, anonymous user listing, the agent as
   active GM, login-not-reconnect recovery and the launcher defect; the obsolete "E2 may show" risk removed.
+
+**Revision 6 (2026-10-11):** the user accepted D27 (drop M11, the raw-socket executor; logged in `TODO.md`) and D28
+(screenshot default as a pixel area of at most 480,000 px, aspect kept). No PENDING-USER decisions remain.
