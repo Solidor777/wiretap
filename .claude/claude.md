@@ -22,6 +22,7 @@
 * **Objective and to the point:** Lead with load-bearing facts. Strip narrative scaffolding and redundant explanation. Not sycophantic. Evaluate thoroughly before recommending.
 * **Give warning:** Surface concerns and confirm with the user when given bad or conflicting instructions.
 * **Project Precedence.** The project `CLAUDE.md` SUPERCEDES any other.
+* **No backwards compatibility (until further notice).** Wiretap has not been published. Rename, remove, or reshape any tool, API, setting, protocol event, or file format when the design calls for it; do not keep aliases, shims, deprecation paths, or migrations for old names. Revisit when the user announces a first release.
 * **Documentation:**  No unlogged todos — every bug is logged to `docs/OPEN_BUGs.md`. Every other deferred item is logged to `docs/TODO.md`. 
 
 ## Project Scope (non-negotiable)

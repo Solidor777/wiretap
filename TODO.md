@@ -23,6 +23,9 @@
       Wiretap settings UI (enable toggle + port); shared-secret handshake on the sidecar socket.
 
 - [ ] MCP stdio transport (not built; only Streamable HTTP exists)
+- [ ] Script dispatcher mode for MCP clients that do not defer tool schemas: `list_scripts` / `describe_script` /
+      `run_script` (plan.md D19; per-script deferred tools are the primary mode, build this only if such a client is
+      targeted)
 - [ ] Surface a notice in the terminal stream when the MCP config write fails (today the failure is only logged by the
       sidecar and `claude` launches without the Wiretap tools; deferred by decision)
 - [ ] Live-Foundry e2e for in-session MCP auto-wiring (launch the terminal `claude` and assert the Wiretap tools
