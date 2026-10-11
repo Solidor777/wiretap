@@ -7,7 +7,10 @@ Svelte 5 (runes), SCSS, and Vite.
 
 - `npm run dev` — Vite dev server (proxies to Foundry on :30000)
 - `npm run build` — production build (emits `index.js` + `style.css`)
-- `npm test` — unit tests (Vitest)
+- `npm test` — unit and integration tests (Vitest), including the context-budget test that holds every MCP tool
+  definition and representative result to the budgets in `shared/budgets.js`
+- `npx tsx tests/measure/measureContext.mjs` — manual report of the real tool list and fixture result sizes against
+  those budgets (not part of CI; needs no Foundry)
 - `npm run test:e2e` — end-to-end tests (Playwright)
 - `npm run foundry:start` — starts Foundry on the configured world if nothing answers on the port, and stops it when the
   process that ran the command ends

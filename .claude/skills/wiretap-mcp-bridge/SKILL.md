@@ -113,9 +113,10 @@ way as the tool result.
 3. Add a pure `make<Tool>Handler(bridge)` (calling `bridge.invoke`) and add it to the tool list in `buildServer` in
    `server/mcp.ts`; registration wraps it in the result enforcer, so a result over 8,000 bytes becomes a handle; a tool that wants the per-call
    `maxBytes` limit declares an optional integer `maxBytes` in its `inputSchema`.
-4. Unit-test both sides (`tests/unit/mcp.test.js`, `foundryBridge.client.test.js`, `foundryBridge.server.test.js`,
+4. Add a representative-result fixture for the tool to `FIXTURES` in `tests/unit/contextBudgetHarness.js`; `tests/unit/contextBudget.test.js` fails for a listed tool without one and for a definition or fixture result over its budget.
+5. Unit-test both sides (`tests/unit/mcp.test.js`, `foundryBridge.client.test.js`, `foundryBridge.server.test.js`,
    `endpoints.test.js`); routing over real sockets is in `tests/integration/endpointRouting.test.js` (fake v2 clients).
-5. Update this skill and the deferred-work file (`TODO.md` at the repo root).
+6. Update this skill and the deferred-work file (`TODO.md` at the repo root).
 
 ## Result enforcer, handles and `read_handle`
 
@@ -129,7 +130,7 @@ count raw UTF-8 text bytes, not JSON-escaped wire bytes.
   handler only for a tool that declares an optional integer `maxBytes` (that adds to its definition size); `read_handle`
   declares it (128..16000). The measured size is the UTF-8 bytes of the text content items (other non-image items as their
   JSON, then `structuredContent` as JSON); at or below the limit the result is returned unchanged, one byte over becomes
-  a handle. `create_actor` has no `budgetBytes`.
+  a handle. `create_actor` registers `budgetBytes` = `ACK_MAX_BYTES` (256), so a worst-case ack (every field at its 256-byte bound, about 790 bytes) becomes a handle.
 - **Over the limit.** The parts are joined with `\n` and stored (`HandleStore.put`); the result is a single text item
   `{"handle","bytes","summary"}` (any image items are kept; `structuredContent` is dropped), at most 256 bytes
   (`ACK_MAX_BYTES`). `bytes` is the stored size (`put().bytes`, parts plus the joining newlines). `summarizeResult(text)`
@@ -179,8 +180,9 @@ count raw UTF-8 text bytes, not JSON-escaped wire bytes.
   handles all give `HANDLE_NOT_FOUND: Handle not found or expired.` A bad `offset`/`length` gives `HANDLE_BAD_RANGE`.
 - **Owner key.** `mcp.ts` uses one process-wide `PROCESS_OWNER_KEY` (bound once in `buildServer` as `ownerKey` and passed
   to both `makeReadHandleHandler` and `withResultBudget`) because sessions are stateless, so any MCP caller reads any
-  handle (`TODO.md`). `startMcpServer(bridge, port, { tools? })` creates the store once per server; the per-request
-  `McpServer` shares it. `tools` are `ToolRegistration` entries (`name`, `description`, `inputSchema` zod shape,
+  handle (`TODO.md`). `startMcpServer(bridge, port, { tools?, instructions? })` creates the store once per server; the
+  per-request `McpServer` shares it. `instructions` goes to the `McpServer` constructor (none in production yet; the
+  context-budget test holds it to `INSTRUCTIONS_MAX_CHARS`). `tools` are `ToolRegistration` entries (`name`, `description`, `inputSchema` zod shape,
   `handler`, `budgetBytes?`); tests use it for test-local tools (no production test tool exists).
 - **`read_handle`** (`makeReadHandleHandler(store, ownerKey)`): args `handle` (string <= 64), `paths` (<= 20 strings),
   `offset`, `length`, `maxBytes` (128..16000, the whole result's limit, default 8,000; the handler also answers a smaller value with
@@ -188,7 +190,7 @@ count raw UTF-8 text bytes, not JSON-escaped wire bytes.
   then a footer item `{"offset","length","total"}` (plus `"truncated":true` for a cut `paths` result); the window is
   limited to `maxBytes - 64` bytes so both items stay within the limit. A store failure is an `isError` result
   `<code>: <message>`. Its definition is inside the budgets (name 11 chars, description <= 160, definition <= 800 B;
-  asserted in `tests/integration/resultHandles.test.js`).
+  asserted in `tests/integration/resultHandles.test.js` and, with the other budgets, in `tests/unit/contextBudget.test.js`).
 - **`server/utf8.ts`** holds `truncateUtf8`, shared by `endpoints.ts`, `resultBudget.ts`, `mcp.ts` and `server.ts`.
 
 ## Security boundary

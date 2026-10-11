@@ -53,8 +53,12 @@
       worst case for 7.7 MB of small objects, of which parsing is 26 to 55 ms and path resolution 153 to 170 ms, so a
       parsed-document cache would not bring it under 150 ms; make `resolvePaths` cheaper for wildcard reads over large
       arrays if it matters
-- [ ] `create_actor` has no per-tool acknowledgement budget yet (`budgetBytes` is unset, so only the 8,000-byte hard cap
-      applies): set it to the 256-byte `ACK_MAX_BYTES` and assert the ack size for write tools in the context-budget test
+- [ ] Run the live token calibration once: connect Claude Code to the Wiretap MCP server, compare `/context` before and
+      after calls against the byte sizes printed by `npx tsx tests/measure/measureContext.mjs`, and replace the inferred
+      bytes / 2 token column in `plan.md` with the measured one
+- [ ] Write the production server `instructions` pointer (at most 600 characters, `INSTRUCTIONS_MAX_CHARS`) naming the
+      skill and the tool families as `mcp__wiretap__<tool>`; `startMcpServer` takes the text through its `instructions`
+      option and the context-budget test checks its length and tool names, but no production text is set yet
 - [ ] Screenshot capture must enforce the 480,000 px default area (`IMAGE_DEFAULT_MAX_PIXELS`) when the capture tool
       exists; the result enforcer checks only the longest side (1280 px), the 1,000,000-character data size and the
       PNG type, never the area

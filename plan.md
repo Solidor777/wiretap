@@ -92,6 +92,23 @@ tokens ≈ bytes / 2, INFERRED from the ratio below):
 | `prototypeToken` | 1,149 | 1,135 |
 | One embedded item, median of the actor's items | 2,113 (31 items, max 17,615) | 1,756 (7 items) |
 
+**Shipped surface against the §2.6 budgets (MEASURED 2026-10-11, `npx tsx tests/measure/measureContext.mjs`, in-process
+real MCP server with a fake GM client, synthetic `MOCK_` fixtures; sizes are UTF-8 bytes counted as §2.6 counts them;
+the token column is bytes / 2, INFERRED from the ratio above, not a live Claude Code count; the live `/context`
+comparison of the script's header has not been run):**
+
+| Item | Bytes | Budget | Est. tokens |
+|---|---|---|---|
+| `create_actor` definition (name 12 chars, description 152 chars) | 503 | 800 | 252 |
+| `read_handle` definition (name 11 chars, description 87 chars) | 766 | 800 | 383 |
+| All shipped definitions (2 tools) | 1,269 | 16,000 (30 tools) | 635 |
+| `create_actor` ack, typical | 61 | 256 | 31 |
+| `create_actor` ack, every field at its 256-byte bound (becomes a handle) | 81 | 256 | 41 |
+| `create_actor` failure, 2,600-character message | 512 | 512 | 256 |
+| `read_handle` default window | 7,977 | 8,000 | 3,989 |
+| `read_handle` `paths` window cut at the cap | 7,992 | 8,000 | 3,996 |
+| Result of 100 KB, handle response | 197 | 256 | 99 |
+
 **Derived (INFERRED, arithmetic on the rows above):**
 
 - **Per-call floor ≈ 170 tokens.** A call with a near-empty result still costs its `tool_use` block plus wrapper.
