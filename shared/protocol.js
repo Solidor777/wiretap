@@ -65,7 +65,12 @@ export const TERMINAL_EXIT = 'terminal:exit';
 
 // --- Foundry bridge events (MCP tool execution) ---
 
-// Client → server, once per (re)connect: register this socket as a live Foundry-GM bridge endpoint.
+// Bridge protocol version carried by every identify; the sidecar refuses any other value (no translation of older
+// payloads).
+export const PROTOCOL_VERSION = 2;
+
+// Client → server, once per (re)connect, with an ack callback: register this socket as a live Foundry-GM bridge
+// endpoint. The sidecar acks after registration (or refusal).
 export const BRIDGE_IDENTIFY = 'bridge:identify';
 
 // Server → client, with an ack callback: run a Foundry operation and return its result.
@@ -74,22 +79,76 @@ export const BRIDGE_INVOKE = 'bridge:invoke';
 // Operation names dispatched over BRIDGE_INVOKE (shared so both sides agree).
 export const OP_CREATE_ACTOR = 'createActor';
 
+// Endpoint kinds a client may identify as: a person's browser tab ('human') or an agent-runner browser ('agent').
+export const ENDPOINT_KINDS = ['human', 'agent'];
+
+// Error code: no registered endpoint is eligible for the invocation.
+export const NO_ENDPOINT = 'NO_ENDPOINT';
+
+// Error code: the chosen endpoint did not ack the invocation in time.
+export const ENDPOINT_TIMEOUT = 'ENDPOINT_TIMEOUT';
+
+// Error code: the endpoint acked the invocation with a failure that carried no code of its own.
+export const OP_FAILED = 'OP_FAILED';
+
+// Error code: the chosen endpoint disconnected, or could not be written to, before it acked the invocation.
+export const ENDPOINT_GONE = 'ENDPOINT_GONE';
+
+// Error code: an identify was refused because the registry already holds the maximum number of endpoints.
+export const ENDPOINT_LIMIT = 'ENDPOINT_LIMIT';
+
+// Error code: an identify payload is not protocol version 2 (or is malformed).
+export const PROTOCOL_MISMATCH = 'PROTOCOL_MISMATCH';
+
+// Error code: an identify came from a user that is not a GM.
+export const NOT_GM = 'NOT_GM';
+
+/**
+ * @typedef {'human' | 'agent'} EndpointKind
+ */
+
 /**
  * @typedef {object} BridgeIdentify
- * @property {string} userId - The Foundry user id.
- * @property {string} userName - The Foundry user display name.
+ * @property {number} protocolVersion - Must equal PROTOCOL_VERSION.
+ * @property {string} userId - The Foundry user id, at most 64 bytes of UTF-8.
+ * @property {string} userName - The Foundry user display name, at most 128 bytes of UTF-8.
  * @property {boolean} isGM - Whether the identifying user is a GM.
+ * @property {EndpointKind} kind - Whether this client is a person's tab or an agent runner.
+ * @property {boolean} dom - Whether this endpoint is a browser client able to run DOM operations.
+ */
+
+/**
+ * @typedef {object} BridgeError
+ * @property {string} code - A protocol error constant, or an unreserved client code (/^[A-Z][A-Z0-9_]{0,63}$/).
+ * @property {string} message - Human-readable text, at most 512 bytes of UTF-8.
+ * @property {{ path: string, message: string }[]} [failures] - Up to 10 validation failures.
+ * @property {number} [failureCount] - The true number of failures when `failures` is present.
+ */
+
+/**
+ * @typedef {object} BridgeIdentifyAck
+ * @property {boolean} ok - True when the endpoint was registered.
+ * @property {{ code: string, message: string }} [error] - The refusal (PROTOCOL_MISMATCH, NOT_GM, ENDPOINT_LIMIT).
  */
 
 /**
  * @typedef {object} BridgeInvoke
  * @property {string} op - The operation name (one of the OP_* constants).
  * @property {object} params - Operation parameters.
+ * @property {string} requestId - A sidecar-generated UUID identifying this invocation in sidecar logs.
  */
 
 /**
  * @typedef {object} BridgeAck
  * @property {boolean} ok - Whether the operation succeeded.
  * @property {*} [result] - The operation result when ok is true.
- * @property {string} [error] - A human-readable error when ok is false.
+ * @property {BridgeAckError} [error] - The failure when ok is false; the sidecar normalizes it into a BridgeError.
+ */
+
+/**
+ * @typedef {object} BridgeAckError
+ * @property {string} [code] - The client's error code; OP_FAILED when absent.
+ * @property {string} message - The failure text.
+ * @property {{ path: string, message: string }[]} [failures] - Validation failures reported by the client.
+ * @property {number} [failureCount] - The client's true failure total when `failures` was truncated.
  */

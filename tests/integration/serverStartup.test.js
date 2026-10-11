@@ -72,14 +72,14 @@ afterEach(async () => {
 describe('startMcpServer ready', () => {
    it('resolves once the port is bound', async () => {
       /** @type {{ close: () => void, ready: Promise<void> }} The started MCP server. */
-      const mcp = startMcpServer({ invokeOnGM: async () => ({}) }, await freePort());
+      const mcp = startMcpServer({ invoke: async () => ({}) }, await freePort());
       servers.push({ dispose: mcp.close });
       await expect(mcp.ready).resolves.toBeUndefined();
    });
 
    it('rejects with EADDRINUSE when the MCP port is occupied', async () => {
       /** @type {{ close: () => void, ready: Promise<void> }} The MCP server that cannot bind. */
-      const mcp = startMcpServer({ invokeOnGM: async () => ({}) }, await occupyPort());
+      const mcp = startMcpServer({ invoke: async () => ({}) }, await occupyPort());
       servers.push({ dispose: mcp.close });
       await expect(mcp.ready).rejects.toMatchObject({ code: 'EADDRINUSE' });
    });

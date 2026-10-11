@@ -11,6 +11,7 @@ import {
    TERMINAL_EXIT,
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
+   PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
 
 /**
@@ -101,6 +102,14 @@ function isListening(port) {
       });
       probe.once('error', () => resolve(false));
    });
+}
+
+/**
+ * Build a valid v2 identify payload for a human GM endpoint in the fake clients below.
+ * @returns {object} A v2 identify payload with kind human and isGM true.
+ */
+function identifyPayload() {
+   return { protocolVersion: PROTOCOL_VERSION, userId: 'u1', userName: 'GM', isGM: true, kind: 'human', dom: true };
 }
 
 /**
@@ -244,7 +253,7 @@ describe('createWiretapServer modes', () => {
       });
       client.emit(TERMINAL_LAUNCH, { command: 'node --version', cols: 80, rows: 24 });
       // Socket events are handled in order, so once the later identify has taken effect the launch was handled too.
-      client.emit(BRIDGE_IDENTIFY, { userId: 'u1', userName: 'GM', isGM: true });
+      client.emit(BRIDGE_IDENTIFY, identifyPayload(), () => undefined);
       await createActorWhenGmKnown(mcpPort);
       expect(seen).toEqual([]);
    });
@@ -258,7 +267,7 @@ describe('createWiretapServer modes', () => {
       client.on(BRIDGE_INVOKE, (request, ack) => {
          ack({ ok: true, result: { uuid: 'Actor.abc', id: 'abc', name: request.params.name, type: 'npc' } });
       });
-      client.emit(BRIDGE_IDENTIFY, { userId: 'u1', userName: 'GM', isGM: true });
+      expect(await client.emitWithAck(BRIDGE_IDENTIFY, identifyPayload())).toEqual({ ok: true });
       /** @type {object} The successful create_actor response. */
       const response = await createActorWhenGmKnown(mcpPort);
       expect(response.result.isError).toBeFalsy();

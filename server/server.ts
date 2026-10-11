@@ -3,7 +3,19 @@ import { Server } from 'socket.io';
 import { createTerminalManager } from './terminal.ts';
 import { createFoundryBridge } from './foundryBridge.ts';
 import { startMcpServer } from './mcp.ts';
+import { truncateUtf8 } from './endpoints.ts';
+import { createLogThrottle } from './logThrottle.ts';
+import { ALLOWED_ORIGINS, isOriginAllowed } from './origins.ts';
 import type { ServerMode } from './serverMode.ts';
+
+// Length in milliseconds of the window that bounds refused-origin log lines.
+const ORIGIN_REFUSAL_LOG_WINDOW_MS: number = 60_000;
+
+// Maximum refused-origin log lines inside one window.
+const ORIGIN_REFUSAL_LOG_LIMIT: number = 10;
+
+// Maximum UTF-8 bytes of a refused Origin header value written to the log.
+const MAX_LOGGED_ORIGIN_BYTES: number = 64;
 
 /**
  * Create and start a Wiretap sidecar Socket.IO server with the MCP bridge attached and, in `full` mode, the terminal
@@ -12,15 +24,21 @@ import type { ServerMode } from './serverMode.ts';
  *        used by tests).
  * @param {number} mcpPort - The TCP port the MCP HTTP server listens on.
  * @param {ServerMode} [mode] - `'full'` (terminal + MCP, default) or `'mcp-only'` (MCP and the Foundry bridge only).
- * @returns {{ io: Server; ready: Promise<void>; dispose: () => void }} The started server, a promise that resolves once
- *          both ports are bound (or rejects when either bind fails), and a dispose function that kills any PTY and
- *          closes both servers.
+ * @returns {{ io: Server; bridge: ReturnType<typeof createFoundryBridge>; ready: Promise<void>; dispose: () => void }}
+ *          The started server; the Foundry bridge (its `invoke` accepts the per-call `endpoint` option); a promise
+ *          that resolves once both ports are bound (or rejects when either bind fails); and a dispose function that
+ *          kills any PTY and closes both servers.
  */
 export function createWiretapServer(
    port: number,
    mcpPort: number,
    mode: ServerMode = 'full',
-): { io: Server; ready: Promise<void>; dispose: () => void } {
+): {
+   io: Server;
+   bridge: ReturnType<typeof createFoundryBridge>;
+   ready: Promise<void>;
+   dispose: () => void;
+} {
    // The HTTP server Socket.IO attaches to; bound to loopback only, because the terminal launch and GM-bridge
    // identify events are unauthenticated and the `cors` option constrains browsers, not other network hosts.
    const httpServer: http.Server = http.createServer();
@@ -32,10 +50,34 @@ export function createWiretapServer(
          resolve();
       });
    });
+   // Writes a refused-handshake log line subject to the per-window limit, with one summary line per window.
+   const logOriginRefusal: (line: string) => void = createLogThrottle({
+      log: (line) => console.log(line),
+      now: Date.now,
+      limit: ORIGIN_REFUSAL_LOG_LIMIT,
+      windowMs: ORIGIN_REFUSAL_LOG_WINDOW_MS,
+      noun: 'origin refusals',
+   });
    // The Socket.IO server carrying terminal and bridge events; `io.close()` also closes `httpServer`.
    const io: Server = new Server(httpServer, {
       cors: {
-         origin: 'http://localhost:30000',
+         origin: [...ALLOWED_ORIGINS],
+      },
+      // `cors` only shapes browser responses; this refuses a WebSocket or polling handshake from a page of any other
+      // origin (cross-site WebSocket hijack). A handshake with no Origin (a local non-browser process) is allowed.
+      // A refusal is logged through a throttle with the origin bounded to 64 bytes: an unauthenticated page could
+      // otherwise write unbounded log output.
+      allowRequest: (req, callback) => {
+         if (isOriginAllowed(req.headers.origin)) {
+            callback(null, true);
+         } else {
+            logOriginRefusal(
+               `Wiretap sidecar | refused origin ${JSON.stringify(
+                  truncateUtf8(String(req.headers.origin), MAX_LOGGED_ORIGIN_BYTES),
+               )}`,
+            );
+            callback('Origin not allowed', false);
+         }
       },
    });
 
@@ -75,5 +117,5 @@ export function createWiretapServer(
       }
    }
 
-   return { io, ready, dispose };
+   return { io, bridge, ready, dispose };
 }
