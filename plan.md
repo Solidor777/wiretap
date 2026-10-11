@@ -501,8 +501,7 @@ nothing when a client must build the payload anyway.
 Protocol v2 replaces v1; a mismatched `protocolVersion` is refused, not translated (no-backwards-compatibility rule).
 
 - `bridge:identify` gains: `kind`, `dom` (can render and measure), `protocolVersion`, `token?` (external mode only),
-  `gateState`, `fingerprint` (per-document-class flags: `preCreate`/`preUpdate`/`preDelete` hook present, `_pre*`
-  overridden).
+  `gateState` (from M2). The per-class `fingerprint` was only for raw-socket eligibility and is dropped with M11 (D27).
 - `bridge:registry` carries `{apiVersion, skills: [{name, moduleId, source: shipped|plugin|agent, description,
   inputSchema, mutates, requires, budgetBytes}]}`.
 - `bridge:credentials` (GM human tab → sidecar only) carries the agent list. It is never broadcast and never sent
@@ -689,7 +688,8 @@ with TITAN e2e (§4.8); E7 needs control of the Foundry process (the launcher).
 start before M0 finishes). **In:**
 
 - `server/endpoints.ts`.
-- `bridge:identify` v2 (`kind`, `dom`, `protocolVersion`, `gateState`, `fingerprint`); v1 identify removed. The
+- `bridge:identify` v2 (`kind`, `dom`, `protocolVersion`; `gateState` arrives with M2, and `fingerprint` is dropped
+  with M11/D27); v1 identify removed. Detailed design: `docs/superpowers/specs/2026-10-11-wiretap-m1-endpoint-registry-design.md`. The
   sidecar acknowledges identify after the endpoint is registered (Socket.IO ack); the client exposes an "identified"
   state that the M9 runner waits on (M0 E3/E7: calls between identify-sent and registration failed).
 - Routing per D5 (DECIDED) with per-call `endpoint` override. The default order lives in one constant and is
