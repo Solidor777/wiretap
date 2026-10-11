@@ -34,7 +34,7 @@ globalThis.game = {
       format: (key) => key,
    },
    settings: {
-      get: () => 'http://localhost:31416',
+      get: () => 'http://127.0.0.1:31416',
       set: () => {},
    },
 };

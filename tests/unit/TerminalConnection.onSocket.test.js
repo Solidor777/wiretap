@@ -22,14 +22,14 @@ describe('TerminalConnection.onSocket', () => {
       const conn = new TerminalConnection();
       let received = null;
       conn.onSocket((s) => { received = s; });
-      conn.connect('http://localhost:31416', () => socket);
+      conn.connect('http://127.0.0.1:31416', () => socket);
       expect(received).toBe(socket);
    });
 
    it('invokes a listener registered after connect with the existing socket', () => {
       const { socket } = makeFakeSocket();
       const conn = new TerminalConnection();
-      conn.connect('http://localhost:31416', () => socket);
+      conn.connect('http://127.0.0.1:31416', () => socket);
       let received = null;
       conn.onSocket((s) => { received = s; });
       expect(received).toBe(socket);

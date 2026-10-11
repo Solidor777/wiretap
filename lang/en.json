@@ -23,7 +23,7 @@
       "Settings": {
          "ServerUrl": {
             "Name": "Sidecar Server URL",
-            "Hint": "URL of the Wiretap agent sidecar (default http://localhost:31416)."
+            "Hint": "URL of the Wiretap agent sidecar (default http://127.0.0.1:31416)."
          },
          "TerminalCommand": {
             "Name": "Terminal Command",

@@ -40,4 +40,5 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 - Terminal wire constants come from `$shared/protocol.js` (`TERMINAL_*`), never string literals.
 - Settings, localization strings (`lang/en.json`) and keys must stay in sync when adding UI.
 - Unit tests live in `tests/unit/` (`Wiretap`, `TerminalToolbar`, `TerminalConnection*`, `terminalController`,
-  `terminalFontSize`, `terminalThemes`); e2e in `tests/e2e/` (see `wiretap-build-test`).
+  `terminalFontSize`, `terminalThemes`, `OnceInit` which asserts the `serverUrl` default `http://127.0.0.1:31416`
+  matching the sidecar's IPv4 loopback bind); e2e in `tests/e2e/` (see `wiretap-build-test`).

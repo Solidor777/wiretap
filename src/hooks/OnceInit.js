@@ -37,7 +37,7 @@ export default function onceInit() {
       scope: 'client',
       config: true,
       type: String,
-      default: 'http://localhost:31416',
+      default: 'http://127.0.0.1:31416',
    });
 
    // The command launched in the PTY when the user clicks Launch (per-client; default `claude`).

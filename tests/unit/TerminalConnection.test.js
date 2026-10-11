@@ -31,7 +31,7 @@ describe('TerminalConnection', () => {
    it('tracks running state from TERMINAL_STATE and TERMINAL_EXIT', () => {
       const { socket, fire } = makeFakeSocket();
       const conn = new TerminalConnection();
-      conn.connect('http://localhost:31416', () => socket);
+      conn.connect('http://127.0.0.1:31416', () => socket);
       fire('connect');
       expect(conn.status).toBe('connected');
       expect(conn.running).toBe(false);
@@ -44,7 +44,7 @@ describe('TerminalConnection', () => {
    it('buffers output and replays it to a newly attached sink', () => {
       const { socket, fire } = makeFakeSocket();
       const conn = new TerminalConnection();
-      conn.connect('http://localhost:31416', () => socket);
+      conn.connect('http://127.0.0.1:31416', () => socket);
       fire('connect');
       fire('terminal:data', { chunk: 'abc' });
       const writes = [];
@@ -57,7 +57,7 @@ describe('TerminalConnection', () => {
    it('emits launch / input / close events', () => {
       const { socket, fire, sent } = makeFakeSocket();
       const conn = new TerminalConnection();
-      conn.connect('http://localhost:31416', () => socket);
+      conn.connect('http://127.0.0.1:31416', () => socket);
       fire('connect');
       conn.launch('claude');
       conn.sendInput('x');
@@ -71,7 +71,7 @@ describe('TerminalConnection', () => {
    it('fans out output to multiple attached sinks (docked + popout)', () => {
       const { socket, fire } = makeFakeSocket();
       const conn = new TerminalConnection();
-      conn.connect('http://localhost:31416', () => socket);
+      conn.connect('http://127.0.0.1:31416', () => socket);
       fire('connect');
       const a = [];
       const b = [];
@@ -85,7 +85,7 @@ describe('TerminalConnection', () => {
    it('restart while running closes, then relaunches on exit', () => {
       const { socket, fire, sent } = makeFakeSocket();
       const conn = new TerminalConnection();
-      conn.connect('http://localhost:31416', () => socket);
+      conn.connect('http://127.0.0.1:31416', () => socket);
       fire('connect');
       fire('terminal:state', { running: true, cols: 80, rows: 24 });
       conn.restart('claude');
@@ -100,7 +100,7 @@ describe('TerminalConnection', () => {
    it('restart while idle launches immediately', () => {
       const { socket, fire, sent } = makeFakeSocket();
       const conn = new TerminalConnection();
-      conn.connect('http://localhost:31416', () => socket);
+      conn.connect('http://127.0.0.1:31416', () => socket);
       fire('connect');
       conn.restart('claude');
       const events = sent.map((s) => s.event);
