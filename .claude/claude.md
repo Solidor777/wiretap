@@ -23,6 +23,7 @@
 * **Give warning:** Surface concerns and confirm with the user when given bad or conflicting instructions.
 * **Project Precedence.** The project `CLAUDE.md` SUPERCEDES any other.
 * **No backwards compatibility (until further notice).** Wiretap has not been published. Rename, remove, or reshape any tool, API, setting, protocol event, or file format when the design calls for it; do not keep aliases, shims, deprecation paths, or migrations for old names. Revisit when the user announces a first release.
+* **Headless browsers only.** E2E tests and agent browser work run headless, as in the titan system: Playwright scripts with `headless: true` (`playwright.config.mjs`). Do not use the Playwright MCP `browser_*` tools for Foundry work; they open a visible Chrome window. `npm run test:e2e:headed` exists only for a human debugging a run.
 * **Documentation:**  No unlogged todos — every bug is logged to `docs/OPEN_BUGs.md`. Every other deferred item is logged to `docs/TODO.md`. 
 
 ## Project Scope (non-negotiable)
