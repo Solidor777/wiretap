@@ -19,9 +19,13 @@ Current-state reference; verify against code before relying on a detail. Core co
   print only after both ports are bound. Disposes on SIGINT/SIGTERM.
 - `server/serverMode.ts` — `ServerMode = 'full' | 'mcp-only'`; `resolveMode(argv, env)`: `--mcp-only` wins over
   `WIRETAP_MODE=mcp-only|full`; unset means `full`; any other value throws.
-- `server/server.ts` — `createWiretapServer(port, mcpPort, mode = 'full')` returns `{ io, ready, dispose }`. Creates an
+- `server/server.ts` — `createWiretapServer(port, mcpPort, mode = 'full')` returns `{ io, bridge, ready, dispose }` (`bridge` is the Foundry bridge; its `invoke` takes the per-call `endpoint` option). Creates an
   `http.Server`, listens on `127.0.0.1` only (not configurable; port 0 selects an ephemeral port), and attaches a
-  Socket.IO `Server` to it (CORS origin `http://localhost:30000`; `io.httpServer` is that server). `ready` resolves
+  Socket.IO `Server` to it (CORS origin list and `allowRequest` both read `ALLOWED_ORIGINS`; a handshake whose `Origin`
+  header is present and not listed is refused, one with no `Origin` is accepted, and a refusal is logged as
+  `Wiretap sidecar | refused origin "<origin cut to 64 bytes>"` through `createLogThrottle` (10 per minute, one
+  `N further origin refusals suppressed` line after the window);
+  `io.httpServer` is that server). `ready` resolves
   once both the Socket.IO port and the MCP port are bound (`address()` is null before then) and rejects with the first
   bind failure (for example `EADDRINUSE`); tests `await server.ready`
   before reading `io.httpServer.address().port`, `createFoundryBridge()`, `startMcpServer`. In `full` mode
@@ -29,6 +33,15 @@ Current-state reference; verify against code before relying on a detail. Core co
   in `mcp-only` mode there is no terminal manager and terminal events are not handled. Every connection gets
   `bridge.handleConnection(socket)`. `dispose()` kills any PTY (full mode), then closes MCP, then Socket.IO, in nested try/finally so each step runs even if
   an earlier one throws (the first error propagates).
+- `server/logThrottle.ts` — `createLogThrottle({ log, now, limit, windowMs, noun })`: fixed-window throttle for log
+  lines an unauthenticated caller can trigger; writes `limit` lines per window, counts the rest and writes one
+  `Wiretap sidecar | N further <noun> suppressed` line from the first call after the window (no timer). Used by
+  `server.ts` (origin refusals) and `foundryBridge.ts` (identify refusals).
+- `server/origins.ts` — `ALLOWED_ORIGINS` (`http://localhost:30000`, `http://127.0.0.1:30000` and the Vite dev-server
+  page origins `http://localhost:30001`, `http://127.0.0.1:30001`; the one definition),
+  `isOriginAllowed(origin)` (absent or listed; a repeated or comma-joined header never matches) and
+  `isMcpHostAllowed(host, port)` (`127.0.0.1:<port>` or `localhost:<port>`, case-insensitive). Used by `server.ts`
+  (Socket.IO handshake and CORS) and `mcp.ts` (the `/mcp` endpoint).
 - `server/shutdown.ts` — `shutdown(dispose, exit)`: runs `dispose`, logs (does not rethrow) an error, and always calls
   `exit(0)`; the SIGINT/SIGTERM handlers in `index.ts` use it. `awaitStartup(server, onReady, exit)`: awaits
   `server.ready` then runs `onReady`; on rejection logs `Wiretap sidecar | failed to start: <cause>`, runs `dispose`
@@ -49,15 +62,20 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 ## Shared protocol
 
-`shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `BRIDGE_IDENTIFY`, `BRIDGE_INVOKE`,
-`OP_CREATE_ACTOR`. Both sides import these constants; adding an event means editing this file and both consumers.
+`shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (2), `BRIDGE_IDENTIFY`,
+`BRIDGE_INVOKE`, `OP_CREATE_ACTOR`, `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`, `ENDPOINT_TIMEOUT`,
+`ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, and typedefs for the identify, identify ack, invoke, op ack and error payloads. Routing,
+the endpoint registry and the error contract are in `server/endpoints.ts` (see `wiretap-mcp-bridge`). Both sides import these constants; adding an event means editing this file and both consumers.
 
 ## Rules specific to this subsystem
 
 - TypeScript run by `tsx`; typecheck with `npm run typecheck` (`server/tsconfig.json`).
-- The MCP endpoint and the Socket.IO server both bind `127.0.0.1`. The Socket.IO CORS origin only constrains
-  browsers; there is still no authentication on socket events (shared-secret handshake is a `TODO.md` item).
+- The MCP endpoint and the Socket.IO server both bind `127.0.0.1`. Both refuse a browser request whose `Origin` is not
+  in `ALLOWED_ORIGINS` (`tests/integration/originValidation.test.js`); a request with no `Origin` (a local non-browser
+  process) is accepted by design, so there is still no authentication on socket events (shared-secret handshake is a
+  `TODO.md` item).
 - Windows console-window-close (CTRL_CLOSE) cannot be trapped by Node; PTY teardown covers Ctrl-C, SIGTERM, e2e
   teardown.
 - Tests: `tests/unit/sidecarPty.test.js` (incl. auto-wiring), `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`; `tests/integration/terminal.test.js`, `serverModes.test.js`,
-  `serverStartup.test.js` (occupied Socket.IO/MCP port rejects `ready`; `awaitStartup` exits 1 and frees the other port), `serverDispose.test.js` (terminal.dispose / mcp.close throwing still release both ports).
+  `endpointRouting.test.js` (fake v2 clients), `originValidation.test.js` (hostile, allowed and absent Origin on the
+  socket handshake; Origin and Host on `/mcp`), unit `origins`, `logThrottle`, `serverStartup.test.js` (occupied Socket.IO/MCP port rejects `ready`; `awaitStartup` exits 1 and frees the other port), `serverDispose.test.js` (terminal.dispose / mcp.close throwing still release both ports).

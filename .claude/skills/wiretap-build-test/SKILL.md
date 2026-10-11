@@ -26,8 +26,8 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 | Dir | Kind |
 |---|---|
-| `tests/unit/` | vitest, happy-dom; client components/stores, `mcp`, `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`, `SuperviseServer`, `foundryBridge.{client,server}`, `sidecarPty` |
-| `tests/integration/terminal.test.js`, `serverModes.test.js`, `serverStartup.test.js`, `serverDispose.test.js` | vitest, terminal relay; full vs mcp-only composition; startup failure on occupied ports; dispose ordering (mocked terminal/mcp failures) |
+| `tests/unit/` | vitest, happy-dom; client components/stores, `mcp` (incl. `startMcpServer` on port 0), `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`, `SuperviseServer`, `foundryBridge.{client,identify,server}`, `endpoints`, `origins`, `logThrottle`, `sidecarPty` |
+| `tests/integration/terminal.test.js`, `serverModes.test.js`, `endpointRouting.test.js` (two fake v2 GM clients: route choice, fallback, override, v1 and non-GM refusal, byte limits), `originValidation.test.js` (hostile, allowed and absent `Origin` on the socket handshake and `/mcp`; the 403 `Origin not allowed` polling body, since the client only reports `websocket error`/`xhr poll error`; throttled refusal log lines; `Host` check), `serverStartup.test.js`, `serverDispose.test.js` | vitest, terminal relay; full vs mcp-only composition; startup failure on occupied ports; dispose ordering (mocked terminal/mcp failures) |
 | `tests/e2e/` | Playwright against a live Foundry: `fixtures.js`, `global-setup.js`, `marker.js`, `sidecar.js` (starts a fresh sidecar per spec file), `users.js`, specs `smoke`, `spawn`, `terminal`, `toolbar` |
 | `tests/setup.js` | vitest setup with Foundry mocks (e.g. `HooksMock`) |
 
@@ -47,7 +47,7 @@ Current-state reference; verify against code before relying on a detail. Core co
   injectable parts, unit-tested in `tests/unit/SuperviseServer.test.js` with ephemeral ports and idle node processes
   (no Foundry, never `:30000`).
 - Tests that write files inject a root under the gitignored `test/tmp/` (`mcpConfigFile` uses a unique
-  `<pid>-<counter>` root per test and asserts it does not exist yet, so a stale scratch fails loudly) or mock `node:fs`; no test and no product code calls a deletion API (`rm`, `unlink`, `rmdir`). Product code never reads
+  `<timestamp>-<pid>-<counter>` root per test and asserts it does not exist yet, so a stale scratch fails loudly) or mock `node:fs`; no test and no product code calls a deletion API (`rm`, `unlink`, `rmdir`). Product code never reads
   a test-only env var. Stale files in `test/tmp/` stay until removed by hand.
 - e2e/test code never ships; e2e build output goes to `test/build/`, stale files removed after each build.
 - Lint/format rules live in `eslint.config.js`, `.stylelintrc.json`; `:global` is forbidden.

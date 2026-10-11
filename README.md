@@ -56,4 +56,75 @@ port with `WIRETAP_MCP_PORT`) whose tools run against the live world through a G
 
   `--mcp-only` on the command line or `WIRETAP_MODE=mcp-only` selects this mode (the argument wins; `full` is the
   default and any other `WIRETAP_MODE` value exits with an error). The Socket.IO server and the Foundry bridge stay
-  up (the Socket.IO server, like the MCP endpoint, binds `127.0.0.1` only and is not reachable from other machines) so the Foundry client can still identify as a GM.
+  up (the Socket.IO server, like the MCP endpoint, binds `127.0.0.1` only and is not reachable from other machines) so
+  the Foundry client can still identify as a GM.
+
+## Origin validation
+
+Both listeners refuse a request from a browser page of another origin. The allowed origins are the single constant
+`ALLOWED_ORIGINS` in `server/origins.ts` (`http://localhost:30000` and `http://127.0.0.1:30000`, the Foundry page
+origins, plus `http://localhost:30001` and `http://127.0.0.1:30001`, the Vite dev-server page origins of `npm run dev`):
+
+- **Socket.IO:** the handshake (`allowRequest`) is refused when it carries an `Origin` header that is not listed
+  (cross-site WebSocket hijack). A handshake with no `Origin` header, which is what a local non-browser process sends,
+  is accepted: the trust model is that same-machine processes are trusted, and there is still no authentication on
+  socket events. Each refused handshake is logged as `Wiretap sidecar | refused origin "<origin>"` (the origin cut to
+  64 bytes), at most 10 lines per minute, followed by one `N further origin refusals suppressed` line when the window
+  ends (written by the next refusal after the window).
+- **MCP (`/mcp`):** a request with a listed-or-absent `Origin` and a `Host` of `127.0.0.1:<mcpPort>` or
+  `localhost:<mcpPort>` is served; anything else gets `403` (DNS-rebinding defence). MCP clients send no `Origin`. The `Host` is compared with the port the server actually bound,
+  so a server started on an ephemeral port (0) accepts its own Host.
+
+The list is not configurable yet; a Foundry served from another port or host needs the constant edited.
+
+## Bridge routing and identify (protocol v2)
+
+Foundry GM clients register with the sidecar as **endpoints** over Socket.IO. Each endpoint has a `kind`: `human` (a
+person's tab) or `agent` (an agent-runner browser).
+
+**Routing.** The default order is the single constant `ROUTE_ORDER` in `server/endpoints.ts` (`['agent', 'human']`): an
+invocation goes to the earliest-registered endpoint of the first kind that has one, so a connected agent endpoint is
+preferred and a human tab is the fallback. A call may pass `endpoint: 'agent' | 'human'` to the router's
+`invoke(op, params, { endpoint })` to restrict the choice to that kind with no fallback. With no eligible endpoint the
+call fails with `NO_ENDPOINT`.
+
+**Identify contract (for runner authors).** Emit `bridge:identify` on every (re)connect, with an ack callback:
+
+```js
+socket.emit('bridge:identify', {
+   protocolVersion: 2,
+   userId,
+   userName,
+   isGM: true,
+   kind: 'human', // or 'agent'
+   dom: true,
+}, (ack) => { /* { ok: true } or { ok: false, error: { code, message } } */ });
+```
+
+The sidecar registers the endpoint and then acks `{ ok: true }`; calls routed after that ack succeed. A refused
+identify acks `{ ok: false, error: { code, message } }` and registers nothing: `PROTOCOL_MISMATCH` (any other
+`protocolVersion`, including a v1 payload without one, or a malformed field; reload Foundry) or `NOT_GM`. A refused
+identify also removes any earlier registration of the same socket. A repeated identify on the same socket updates its
+entry; a disconnect removes it. Limits: `userId` is at most 64 bytes and `userName` at most 128 bytes (longer is
+`PROTOCOL_MISMATCH`), and at most 64 endpoints are registered (an identify from a new socket beyond that acks
+`ENDPOINT_LIMIT`). Refused-identify log lines are throttled to 10 per minute in total; the ack is never throttled.
+
+**Wiretap client.** The module's Foundry client sends this identify (protocol 2, `dom: true`) on every (re)connect, with
+`kind` taken from the client-scope setting `wiretap.endpointKind` (`human` by default; an agent runner sets `agent`). The
+client counts as identified only after an `{ ok: true }` ack: `game.modules.get('wiretap').api.bridge.identified` is
+`true` from that ack until a disconnect or a refusal, so a runner waits on it before invoking tools. A refused ack is
+logged to the browser console with the sidecar's message; for `PROTOCOL_MISMATCH` reload Foundry. The client has no
+protocol 1 fallback.
+
+**Invocation and errors.** The sidecar emits `bridge:invoke` `{ op, params, requestId }` (`requestId` is a UUID per
+call and appears in sidecar log lines). The client acks `{ ok: true, result }` or
+`{ ok: false, error: { code?, message, failures? } }`. Failures reach the caller as
+`{ code, message, failures?, failureCount? }` with codes `NO_ENDPOINT`, `ENDPOINT_TIMEOUT` (10 s with no ack),
+`ENDPOINT_GONE` (the endpoint disconnected, or could not be written to, before it acked; reported at once, not after
+10 s), `OP_FAILED` (the default when the client gives no code), `PROTOCOL_MISMATCH`, `NOT_GM`, `ENDPOINT_LIMIT`. The
+last six are reserved: a code of that name in a client's failure ack is reported as `OP_FAILED`. Messages are at most
+512 bytes (256 for `NO_ENDPOINT`), truncated with `…`; `failures` is capped at 10 entries with `failureCount` holding
+the true total. MCP error results are at most 512 bytes in total: `<code>: <message>`, then as many `path: message`
+failure lines as fit, then ` (+N more)` for the failures not shown. The `create_actor` result must be an object with
+string `uuid`, `name` and `type` (each bounded to 256 bytes in the tool text); any other ack result is reported as
+`OP_FAILED`.

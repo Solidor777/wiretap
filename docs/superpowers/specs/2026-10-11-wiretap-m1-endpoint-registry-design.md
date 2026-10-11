@@ -76,7 +76,8 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
 
 - R7.1 Origin validation on the Socket.IO server via `allowRequest`: a request carrying an `Origin` header that is
   not in the allowed origin list is refused (cross-site WebSocket hijack). The allowed list is the Foundry page origins
-  (`http://localhost:30000` and `http://127.0.0.1:30000`) in ONE exported constant (M10 makes it configurable); a request
+  (`http://localhost:30000` and `http://127.0.0.1:30000`) and the Vite dev-server page origins
+  (`http://localhost:30001` and `http://127.0.0.1:30001`; `server.port` in `vite.config.mjs`) in ONE exported constant (M10 makes it configurable); a request
   with NO `Origin` (a local non-browser process) is allowed, because the accepted trust model is "same-machine
   processes are trusted". Test first with a client sending a hostile `Origin`: it is accepted before the fix (record this
   as the red measurement) and refused after; absent and allowed origins connect.
@@ -95,8 +96,8 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
   `ENDPOINT_GONE` (not after 10 s). A synchronous send failure or a missing socket is also `ENDPOINT_GONE`, not
   `ENDPOINT_TIMEOUT`; the cause is kept in the log line.
 - R2.6 Identify limits: `userId` at most 64 bytes, `userName` at most 128 bytes (longer is `PROTOCOL_MISMATCH`), at most
-  64 registered endpoints (the next identify is refused with `PROTOCOL_MISMATCH`-style code `NOT_GM` is wrong, so use
-  `ENDPOINT_LIMIT`, a new reserved code), and refused-identify log lines throttled to at most 10 per minute in total.
+  64 registered endpoints (an identify beyond that is refused with the new reserved code `ENDPOINT_LIMIT`), and
+  refused-identify log lines are throttled to at most 10 per minute in total.
 - R1.6 New code `ENDPOINT_LIMIT` (reserved per R3.8).
 - R3.9 `truncateUtf8` is safe for any `maxBytes` (returns an empty string below the ellipsis size) and is tested on
   2-, 3- and 4-byte characters.
@@ -109,5 +110,16 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
 - R8 Cleanups: lines over 120 columns in touched files; typed + commented declarations flagged by the review; the double
   blank line in `src/bridge/foundryBridge.js`; the `plan.md` §4 component-table registry row matches M1; the
   `mcpConfigFile.test.js` scratch root includes a timestamp (open bug in `docs/OPEN_BUGS.md` moves to CLOSED when fixed).
+- R7.3 Refused Socket.IO origin handshakes are logged (`Wiretap sidecar | refused origin "<origin>"`, the origin cut to
+  64 bytes) through the same throttle as refused identifies: at most 10 lines per minute, then ONE
+  `N further origin refusals suppressed` line from the first call after the window. R2.6's identify throttle writes
+  `N further identify refusals suppressed` the same way. One helper (`createLogThrottle`) serves both.
+- R7.4 The `/mcp` Host check compares with the port the server actually bound (`startMcpServer` returns `port()`), so a
+  server started on port 0 does not refuse its own Host. Test: `startMcpServer(bridge, 0)`.
+- R2.7 Only the transport's ack timeout (`EndpointTimeoutError`) maps to `ENDPOINT_TIMEOUT`; any other error thrown by
+  the send maps to `ENDPOINT_GONE` (R2.5), with the cause in the log line. Test: a plain `Error` from the transport.
+- R5.7 The "does nothing before the bridge is wired" client test imports a fresh module instance (`vi.resetModules`) and
+  asserts `reidentifyBridge` reads no setting; the origin test asserts the refusal body `Origin not allowed` (HTTP 403 on
+  a polling handshake; the client library reports only `websocket error` / `xhr poll error`).
 - Deferred (needs a decision, logged in `TODO.md`): endpoint health and fallback after a timeout (a hung preferred
   endpoint blocks later calls; automatic retry of a mutation on another endpoint risks a double apply).

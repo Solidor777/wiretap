@@ -18,8 +18,8 @@ sidecar composition: `wiretap-sidecar`.
 ## Request flow (`create_actor`)
 
 MCP client → `POST http://127.0.0.1:<WIRETAP_MCP_PORT>/mcp` → `server/mcp.ts` tool handler →
-`bridge.invokeOnGM(OP_CREATE_ACTOR, params)` (`server/foundryBridge.ts`) → Socket.IO `BRIDGE_INVOKE` to the identified
-GM client → `OP_HANDLERS` in `src/bridge/foundryBridge.js` → `createActor({ name, type })` → result returns the same
+`bridge.invoke(OP_CREATE_ACTOR, params)` (`server/foundryBridge.ts`, the router of `server/endpoints.ts`) → Socket.IO
+`BRIDGE_INVOKE` `{ op, params, requestId }` to the chosen endpoint → `OP_HANDLERS` in `src/bridge/foundryBridge.js` → `createActor({ name, type })` → result returns the same
 way as the tool result.
 
 ## Reaching the endpoint
@@ -35,26 +35,64 @@ way as the tool result.
 ## Pieces
 
 - `server/mcp.ts`
-  - `makeCreateActorHandler(bridge)`: pure handler; errors become `{ isError: true }` tool results.
+  - `makeCreateActorHandler(bridge)`: pure handler; errors become `{ isError: true }` tool results whose text is
+    `formatBridgeError` (`<code>: <message>` plus ` (+N more)` when failures were truncated) for a `BridgeError`, the
+    message otherwise. The bridge interface it needs is `invoke(op, params, { endpoint? })`. The ack result is
+    validated by `parseCreateActorResult`: an object with string `uuid`, `name`, `type` (each bounded to 256 bytes with
+    `truncateUtf8`); any other shape becomes `OP_FAILED: Foundry returned an invalid actor result.`
   - `buildServer(bridge)`: a fresh `McpServer` (`name: 'wiretap'`) per request; registers `create_actor`
     (`name: string`, optional `type: string`; omitted `type` defaults to the world's first concrete actor subtype).
   - `startMcpServer(bridge, port)`: Streamable HTTP, stateless (`sessionIdGenerator: undefined`), `POST /mcp` only
-    (other methods → 405), body-read failure → 400, dispatch failure → JSON-RPC `-32603`; listens on `127.0.0.1`. Returns `{ close, ready }`; `ready` resolves once bound and rejects on a bind failure
+    (other methods → 405), a request whose `Origin` is present and not in `ALLOWED_ORIGINS`, or whose `Host` is not
+    `127.0.0.1:<boundPort>` / `localhost:<boundPort>` (the port actually bound, so port 0 works), → 403 (checked before method and path; `server/origins.ts`), body-read failure → 400, dispatch failure → JSON-RPC `-32603`; listens on `127.0.0.1`. Returns `{ close, ready, port }` (`port()` is the bound port); `ready` resolves once bound and rejects on a bind failure
     (for example `EADDRINUSE`), so `createWiretapServer` folds it into its own `ready`.
-- `server/foundryBridge.ts` — `createFoundryBridge()` exposes `invokeOnGM` and `handleConnection(socket)`; a GM client
-  announces itself with `BRIDGE_IDENTIFY`.
+- `server/endpoints.ts` — protocol v2 core, no sockets: `createEndpointRegistry(now?)` (`register` returns false when a
+  new socket would exceed `MAX_ENDPOINTS` (64) / `remove` / `list` / `firstOfKind`; an endpoint is `{ socketId, userId, userName, kind, dom, registeredAt }`, insertion order is
+  the tiebreak, a repeated identify keeps position and `registeredAt`); `validateIdentify(payload)`
+  (`PROTOCOL_MISMATCH` for a non-object, a `protocolVersion` other than `PROTOCOL_VERSION` (2), any malformed field, a
+  `userId` over 64 bytes or a `userName` over 128 bytes; `NOT_GM` for `isGM:false`); `ROUTE_ORDER = ['agent', 'human']` (the one place the default order is defined);
+  `createRouter(registry, { send, log, newRequestId? })` whose `invoke(op, params, { endpoint? })` picks the first
+  endpoint of the first kind in `ROUTE_ORDER` (an `endpoint` option restricts to that kind, no fallback), generates a
+  UUID `requestId`, logs it, and resolves the ack `result` or throws a `BridgeError`;
+  `BridgeError { code, message, failures?, failureCount? }`; `EndpointGoneError` (thrown by a transport); `normalizeAckError`
+  (code kept only if `/^[A-Z][A-Z0-9_]{0,63}$/` and not reserved (`NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_GONE`,
+  `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH`, `NOT_GM`), else `OP_FAILED`; message and each failure path/message bounded to 512 bytes by
+  `truncateUtf8`; 10 failures max; `failureCount` is the larger of the sent count and the client's reported count);
+  `formatBridgeError` (whole text at most 512 bytes: `<code>: <message>`, then `path: message` failure lines, one per line,
+  as many as fit, then ` (+N more)` for the failures not shown). `truncateUtf8` returns `''` when the limit is below the
+  3-byte ellipsis. `NO_ENDPOINT` is at most 256 bytes and names the fix. A transport rejection with an
+  `EndpointTimeoutError` (no ack within 10 s) becomes `ENDPOINT_TIMEOUT`; every other transport rejection (an
+  `EndpointGoneError` or any error from the send) becomes `ENDPOINT_GONE` (the cause is logged, not returned). `requestId` is in the payload and sidecar log lines, not in error text or tool results.
+- `server/foundryBridge.ts` — `createFoundryBridge({ log? })` returns `{ handleConnection(socket), invoke }`. It keeps
+  a socket map, the registry and the router (the transport is `socket.timeout(10 s).emit(BRIDGE_INVOKE, ...)`, whose ack-callback error becomes an `EndpointTimeoutError`; a missing socket, a synchronous emit failure or a
+  disconnect while an invocation awaits its ack rejects with `EndpointGoneError`, the disconnect immediately).
+  `handleConnection` handles `BRIDGE_IDENTIFY` `(payload, ack?)`: validate, register (a new socket beyond 64 endpoints is
+  refused with `ENDPOINT_LIMIT`) or, when refused, remove any earlier entry of the socket and log
+  `Wiretap sidecar | refused identify from <id>: <code>` (at most 10 such lines per minute in total via `createLogThrottle`, followed by one
+  `N further identify refusals suppressed` line after the window; clock injectable as `options.now`; the ack is never
+  throttled), then call `ack` with
+  `{ ok: true }` or `{ ok: false, error: { code, message } }` (an absent ack callback is tolerated); `disconnect`
+  removes the endpoint. `createWiretapServer` returns the bridge as `bridge` so tests can pass the `endpoint` option
+  (no MCP tool takes it yet).
 - `src/bridge/foundryBridge.js` — `initFoundryBridge(connection)` (called from `OnceReady`) attaches to the shared
   socket via `TerminalConnection.onSocket`; `createActor` executes the world mutation on a GM client.
+  On each (re)connect it emits the v2 identify (`kind` from the `wiretap.endpointKind` client setting, `dom: true`)
+  with an ack callback and sets `bridgeState.identified` (exposed as `api.bridge.identified`) true only on an ok ack
+  while the socket is connected; a disconnect or refused ack sets it false and a refusal is logged with the sidecar's
+  message. Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`.
 
 ## Adding a tool or op
 
-1. Add the `OP_*` constant in `shared/protocol.js`.
+1. Add the `OP_*` constant in `shared/protocol.js` (the wire contract — `PROTOCOL_VERSION`, error codes, identify /
+   invoke / ack typedefs — lives there too).
 2. Add the handler to `OP_HANDLERS` in `src/bridge/foundryBridge.js`.
-3. Add a pure `make<Tool>Handler(bridge)` and register it in `buildServer` in `server/mcp.ts`.
-4. Unit-test both sides (`tests/unit/mcp.test.js`, `foundryBridge.client.test.js`, `foundryBridge.server.test.js`).
+3. Add a pure `make<Tool>Handler(bridge)` (calling `bridge.invoke`) and register it in `buildServer` in `server/mcp.ts`.
+4. Unit-test both sides (`tests/unit/mcp.test.js`, `foundryBridge.client.test.js`, `foundryBridge.server.test.js`,
+   `endpoints.test.js`); routing over real sockets is in `tests/integration/endpointRouting.test.js` (fake v2 clients).
 5. Update this skill and the deferred-work file (`TODO.md` at the repo root).
 
 ## Security boundary
 
-Loopback-only HTTP; GM-only execution (identify handshake). A shared-secret handshake on the sidecar socket is a
+Loopback-only HTTP; browser requests with a foreign `Origin` are refused on both the socket handshake and `/mcp` (and a
+foreign `Host` on `/mcp`), while requests without `Origin` are trusted as same-machine processes; GM-only execution (a v2 identify with `isGM: true` is the only way to register an endpoint). A shared-secret handshake on the sidecar socket is a
 tracked, unimplemented follow-up.

@@ -16,10 +16,21 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 - `src/index.js` imports `~/styles/Global.scss`, `hooks/OnceInit.js`, `hooks/OnceReady.js` (`~` aliases `src/`).
 - `OnceInit.js` sets `CONFIG.ui.wiretap = WiretapSidebarTab` (guarded on `foundry.applications.sidebar`
   availability) and registers the world-agnostic settings `serverUrl`, `terminalCommand`, `terminalTheme`,
-  `terminalFontSize` under module id `wiretap`. The e2e probe (`test-probe/registerProbe.js`) is loaded from there
+  `terminalFontSize` under module id `wiretap`, plus the hidden client-scope `endpointKind` (`human` default, `agent`;
+  `config: false`, no lang keys) that supplies `kind` in the bridge identify. It sets
+  `game.modules.get('wiretap').api = { bridge: { get identified() } }`, a getter over `bridgeState.identified` exported
+  by `bridge/foundryBridge.js` (true only after an ok identify ack; false on disconnect, refusal or a new identify) so
+  a Playwright page can wait on it. The e2e probe (`test-probe/registerProbe.js`) is loaded from there
   by a guarded dynamic import that is only valid in the e2e build.
 - `OnceReady.js` connects the shared `connection` (TerminalConnection) and calls `initFoundryBridge(connection)`
-  (see `wiretap-mcp-bridge`).
+  (see `wiretap-mcp-bridge`). `initFoundryBridge` emits the protocol v2 identify
+  `{ protocolVersion, userId, userName, isGM, kind, dom: true }` with an ack callback on every (re)connect; a refused
+  ack is logged with `console.error` (`Wiretap | bridge identify refused (<code>): <message>`, plus a reload-Foundry
+  hint for `PROTOCOL_MISMATCH`). Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`.
+  Each identify gets a per-attempt token (also bumped on disconnect); an ack for any earlier token is ignored, so a
+  stale ok or refusal never changes `identified`. `endpointKind` has an `onChange` calling `reidentifyBridge()`, which
+  emits a fresh identify only when the socket is connected and the setting differs from the kind last sent. Op lookup
+  uses `Object.hasOwn(OP_HANDLERS, op)`, so inherited names (`constructor`, `__proto__`) ack `OP_FAILED` unknown op.
 
 ## Pieces
 
@@ -41,4 +52,5 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 - Settings, localization strings (`lang/en.json`) and keys must stay in sync when adding UI.
 - Unit tests live in `tests/unit/` (`Wiretap`, `TerminalToolbar`, `TerminalConnection*`, `terminalController`,
   `terminalFontSize`, `terminalThemes`, `OnceInit` which asserts the `serverUrl` default `http://127.0.0.1:31416`
-  matching the sidecar's IPv4 loopback bind); e2e in `tests/e2e/` (see `wiretap-build-test`).
+  matching the sidecar's IPv4 loopback bind, the `endpointKind` setting and `api.bridge.identified`; identify/ack
+  behavior is in `foundryBridge.identify.test.js`); e2e in `tests/e2e/` (see `wiretap-build-test`).

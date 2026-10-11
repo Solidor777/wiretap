@@ -12,7 +12,9 @@ aliases, shims, deprecation paths or migrations appear anywhere in this plan.
 
 ## 1. Context and goals
 
-Wiretap today: one MCP tool, `create_actor`. The request path is MCP HTTP (`127.0.0.1:31417/mcp`, stateless; a new
+Wiretap at the plan baseline (HEAD `048df55`, before M1; the line citations below describe that snapshot, and M1
+replaced `invokeOnGM` and the first-socket routing with the endpoint registry and router): one MCP tool,
+`create_actor`. The request path was MCP HTTP (`127.0.0.1:31417/mcp`, stateless; a new
 `McpServer` is built per request, READ `server/mcp.ts:95-100`) → `bridge.invokeOnGM` (first identified GM socket, READ
 `server/foundryBridge.ts:57-76`) → Socket.IO `bridge:invoke` → `OP_HANDLERS` on a GM browser client (READ
 `src/bridge/foundryBridge.js:25-27`). Socket.IO is bound to `127.0.0.1` (READ `server/server.ts:30`). Identify trusts
@@ -418,7 +420,7 @@ entries of the same registry with the budgets of §2.6.
 | Handle store (`server/handles.ts`) | Sidecar, memory only | Per-session LRU of large results (D23); slices for `read_handle`, input for `import_from_handle` |
 | Budget constants (`shared/budgets.js`) | Both | The §2.6 numbers; one source for enforcer, registration checks and tests |
 | Path resolver (`shared/docPath.js`) | Both | §2.8 grammar: parse, refuse unsafe segments, resolve over an export, group embedded writes |
-| Endpoint registry + router (`server/endpoints.ts`, replaces `gmSockets`) | Sidecar | Tracks identified endpoints `{socketId, userId, isGM, kind: agent\|human, dom: bool, skills[], gateState, fingerprint}`; routes per D5, DOM scripts per D25 |
+| Endpoint registry + router (`server/endpoints.ts`, replaces `gmSockets`) | Sidecar | Tracks identified GM endpoints `{socketId, userId, userName, kind: agent\|human, dom: bool, registeredAt}` (`skills[]` arrives with M7 and `gateState` with M2); routes per D5, DOM scripts per D25 |
 | Script registry (`src/bridge/scripts/registry.js`) | Foundry client | Shipped and plugin scripts (core tools included), and agent-saved scripts if D21; validates args; emits `bridge:registry` |
 | Shipped scripts (`src/bridge/scripts/*.js`) | Foundry client | §2.9 catalogue; static imports only |
 | Op dispatcher (`src/bridge/ops/*`) | Foundry client (human GM tab or agent tab) | Core ops on `documentClass` APIs; gate checks; `actAs` pre-check; `ctx.core.*` for scripts |

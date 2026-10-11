@@ -19,7 +19,11 @@ hosting an AI-agent terminal and a bridge that lets agents act on the live world
 | Sidecar (Node) | `server/` run by `tsx` (`npm run server:start`, `start-wiretap.sh`) | Socket.IO server (default `:31416`, `WIRETAP_PORT`), node-pty terminal relay, MCP HTTP server (default `127.0.0.1:31417/mcp`, `WIRETAP_MCP_PORT`) |
 
 `shared/protocol.js` holds the wire constants used by both sides (imported as `$shared/protocol.js` in the client and
-`../shared/protocol.js` in the sidecar).
+`../shared/protocol.js` in the sidecar). The Foundry bridge speaks protocol v2: GM clients identify as `human` or
+`agent` endpoints (acked after registration) and the sidecar routes each invocation through an endpoint registry and
+router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_GONE`,
+`ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH` and `NOT_GM`; a client ack cannot produce them (they become `OP_FAILED`). Limits:
+`userId` 64 bytes, `userName` 128 bytes, 64 endpoints, 512 bytes of MCP error text.
 
 ## Subsystem map (one skill per subsystem)
 
@@ -27,7 +31,7 @@ hosting an AI-agent terminal and a bridge that lets agents act on the live world
 |---|---|---|
 | Client UI + terminal client | `wiretap-client` | `src/**`, `lang/**` |
 | Sidecar terminal relay | `wiretap-sidecar` | `server/**` (except MCP/bridge files), `shared/**` |
-| MCP + Foundry bridge | `wiretap-mcp-bridge` | `server/mcp.ts`, `server/foundryBridge.ts`, `src/bridge/foundryBridge.js`, `shared/protocol.js` |
+| MCP + Foundry bridge | `wiretap-mcp-bridge` | `server/mcp.ts`, `server/endpoints.ts`, `server/foundryBridge.ts`, `src/bridge/foundryBridge.js`, `shared/protocol.js` |
 | Build, lint, tests | `wiretap-build-test` | `tests/**`, `vite.config.mjs`, `vitest.config.mjs`, `playwright.config.mjs`, `eslint.config.js`, `package.json` |
 
 Subsystem skills activate by `paths:`; this core skill activates by description. Invoke the matching subsystem skill
@@ -42,7 +46,9 @@ before touching its files.
 - No e2e wait over 1000 ms inside a loaded page.
 - The MCP HTTP endpoint and the sidecar Socket.IO server both bind `127.0.0.1` only (the Socket.IO server is attached
   to an `http.Server` listening on `127.0.0.1`; the bind address is not configurable). Both execute world mutations or
-  spawn a PTY.
+  spawn a PTY. Both also refuse a request whose `Origin` header is present and not in `ALLOWED_ORIGINS`
+  (`server/origins.ts`: the Foundry page origins on :30000 and the Vite dev-server page origins on :30001), and `/mcp` refuses a `Host` other than `127.0.0.1:<boundMcpPort>` or
+  `localhost:<boundMcpPort>`; a request with no `Origin` is accepted (same-machine processes are trusted).
 - No file-deletion API (`fs.rm*`, `fs.unlink*`, `fs.rmdir*`, recursive removal helpers) appears in product code or
   tests. The MCP config is a fixed, overwritten file at `<module root>/.wiretap/mcp-<port>.json` (gitignored); its modes (0o700 directory, 0o600
   file) apply only on creation, `.wiretap` and the file are `lstat`-checked for symbolic links, and the lstat-then-write
