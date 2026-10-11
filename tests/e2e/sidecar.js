@@ -2,12 +2,11 @@ import { spawn, execSync } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { E2E_MCP_PORT, GATE_OBSERVER_PORT, SIDECAR_PORT } from './ports.js';
 
 // The repo root, derived from this file's location (tests/e2e/sidecar.js).
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-// The sidecar port (must match the default `serverUrl` setting).
-const SIDECAR_PORT = 31416;
 
 /**
  * Poll a TCP port until it accepts a connection or the timeout elapses. Each attempt is itself capped so a
@@ -93,25 +92,52 @@ function waitForPortFree(port, timeoutMs) {
 }
 
 /**
- * Start a fresh Wiretap sidecar for one spec file and wait until it is listening. Waits for the port to be
- * free first so a crashed prior run cannot block the spawn; kills a child that never binds so it cannot orphan.
+ * Spawn a sidecar process and wait until its ports listen. Waits for every port to be free first so a crashed prior
+ * run cannot block the spawn; kills a child that never binds so it cannot orphan.
+ * @param {string} command - The shell command that starts the sidecar.
+ * @param {number[]} ports - The ports that must accept connections before the sidecar counts as started.
  * @returns {Promise<import('node:child_process').ChildProcess>} The spawned sidecar process.
  */
-export async function startSidecar() {
-   await waitForPortFree(SIDECAR_PORT, 10_000);
-   const child = spawn('npm', ['run', 'server:start'], {
+async function launch(command, ports) {
+   for (const port of ports) {
+      await waitForPortFree(port, 10_000);
+   }
+   const child = spawn(command, [], {
       cwd: repoRoot,
       stdio: 'ignore',
       shell: true,
       detached: process.platform !== 'win32',
    });
    try {
-      await probePort(SIDECAR_PORT, 30_000);
+      for (const port of ports) {
+         await probePort(port, 30_000);
+      }
    } catch (error) {
       await stopSidecar(child);
       throw error;
    }
    return child;
+}
+
+/**
+ * Start a fresh Wiretap sidecar for one spec file and wait until it is listening.
+ * @returns {Promise<import('node:child_process').ChildProcess>} The spawned sidecar process.
+ */
+export async function startSidecar() {
+   return launch('npm run server:start', [SIDECAR_PORT]);
+}
+
+/**
+ * Start the e2e gate sidecar: the real sidecar composition without the terminal relay, plus the loopback observer
+ * on `GATE_OBSERVER_PORT` that reports the sidecar's risk-gate snapshot.
+ * @returns {Promise<import('node:child_process').ChildProcess>} The spawned sidecar process.
+ */
+export async function startGateSidecar() {
+   return launch('npx tsx tests/e2e/gateSidecar.mjs', [
+      SIDECAR_PORT,
+      E2E_MCP_PORT,
+      GATE_OBSERVER_PORT,
+   ]);
 }
 
 /**

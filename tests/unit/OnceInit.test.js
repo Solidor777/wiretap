@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import onceInit from '~/hooks/OnceInit.js';
 import { bridgeState, reidentifyBridge } from '~/bridge/foundryBridge.js';
+import { GATES } from '$shared/gates.js';
 
 // The real tab class extends a Foundry global at import time, which the unit environment does not provide.
 vi.mock('~/apps/WiretapSidebarTab.js', () => ({ default: class {} }));
@@ -52,6 +53,14 @@ describe('onceInit settings registration', () => {
       expect(config.type).toBe(String);
       expect(Object.keys(config.choices)).toEqual(['human', 'agent']);
       expect(config.default).toBe('human');
+   });
+
+   it('registers every gate of the shared registry as a world-scope restricted setting', () => {
+      onceInit();
+      for (const name of Object.keys(GATES)) {
+         expect(registered.get(name)?.scope, name).toBe('world');
+         expect(registered.get(name)?.restricted, name).toBe(true);
+      }
    });
 
    it('re-identifies the bridge when endpointKind changes', () => {

@@ -36,6 +36,44 @@
          "FontSize": {
             "Name": "Terminal Font Size",
             "Hint": "Font size (px) of the embedded terminal."
+         },
+         "Gates": {
+            "AllowMacroExecution": {
+               "Name": "Risk gate: run macros",
+               "Hint": "Lets agents run macros. A macro is arbitrary code with GM authority and can call game.settings.set, so enabling this lets an agent change any gate; only enable it for agents you trust."
+            },
+            "AllowUserWrites": {
+               "Name": "Risk gate: write users",
+               "Hint": "Lets agents create, update and delete User documents, roles included."
+            },
+            "AllowSettingWrites": {
+               "Name": "Risk gate: write settings",
+               "Hint": "Lets agents write Setting documents and world or user settings. Wiretap settings stay unwritable."
+            },
+            "AllowFileUpload": {
+               "Name": "Risk gate: file upload",
+               "Hint": "Lets agents send base64 data in file-path fields and use the file upload tool."
+            },
+            "AllowOwnershipWrites": {
+               "Name": "Risk gate: write ownership",
+               "Hint": "Lets agents change the ownership of documents."
+            },
+            "AllowCompendiumWrites": {
+               "Name": "Risk gate: write compendiums",
+               "Hint": "Lets agents write compendium packs and the documents inside them."
+            },
+            "AllowModuleConfigWrites": {
+               "Name": "Risk gate: write module configuration",
+               "Hint": "Lets agents write the module configuration, which enables and disables modules."
+            },
+            "AllowAgentScripts": {
+               "Name": "Risk gate: agent scripts",
+               "Hint": "Lets agents save, disable and run scripts. A script is arbitrary code with GM authority and can call game.settings.set, so enabling this lets an agent change any gate; only enable it for agents you trust."
+            },
+            "AllowedPluginModules": {
+               "Name": "Risk gate: plugin modules",
+               "Hint": "Comma-separated ids of the modules whose plugin skills and scripts agents may use. A plugin script is arbitrary code with GM authority and can call game.settings.set, so listing a module lets an agent change any gate; list only modules you trust. Empty by default."
+            }
          }
       }
    }

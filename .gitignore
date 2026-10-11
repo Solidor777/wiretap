@@ -29,3 +29,6 @@ graphify-out/
 
 # Debug sink (e2e Foundry server log lives here).
 debug/
+
+# E2E running list of prior gate setting values.
+test/state/

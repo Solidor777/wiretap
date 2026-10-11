@@ -9,6 +9,7 @@ import {
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
 } from '$shared/protocol.js';
+import { closedGateState } from '$shared/gates.js';
 
 /**
  * Build a controllable fake Socket.IO socket that records emits and their ack callbacks.
@@ -72,6 +73,7 @@ describe('bridge identify', () => {
          isGM: true,
          kind: 'human',
          dom: true,
+         gateState: closedGateState(),
       });
       expect(typeof socket.emitted[0].ack).toBe('function');
    });

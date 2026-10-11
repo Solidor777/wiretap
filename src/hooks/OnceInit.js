@@ -1,5 +1,6 @@
 import { bridgeState, reidentifyBridge } from '~/bridge/foundryBridge.js';
 import WiretapSidebarTab from '~/apps/WiretapSidebarTab.js';
+import { registerGateSettings } from '~/settings/gates.js';
 import { TERMINAL_THEME_CHOICES, terminalTheme } from '~/components/terminalThemes.svelte.js';
 import {
    terminalFontSize,
@@ -90,6 +91,9 @@ export default function onceInit() {
 
    // Seed the reactive store from the stored value (covers a non-default saved size on load).
    terminalFontSize.size = game.settings.get('wiretap', 'terminalFontSize');
+
+   // The risk gates: one GM-only world setting per entry of the shared GATES registry, all closed by default.
+   registerGateSettings();
 
    // Whether this client is a person's tab or an agent-runner browser; sent in the bridge identify. Not shown in the
    // settings UI: the agent runner sets it programmatically.

@@ -6,6 +6,7 @@ export default defineConfig({
    fullyParallel: false,
    workers: 1,
    globalSetup: './tests/e2e/global-setup.js',
+   globalTeardown: './tests/e2e/global-teardown.js',
    use: {
       baseURL: 'http://localhost:30000',
       headless: true,

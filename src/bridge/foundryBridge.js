@@ -1,4 +1,5 @@
 import {
+   BRIDGE_GATE_STATE,
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
    BRIDGE_PING,
@@ -7,6 +8,7 @@ import {
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
 } from '$shared/protocol.js';
+import { gateNameFromSettingKey, readGateState } from '~/bridge/gates.js';
 
 /**
  * Live bridge state; `identified` is true only from an ok identify ack until the next disconnect, refusal or
@@ -14,6 +16,36 @@ import {
  * @type {{ identified: boolean }}
  */
 export const bridgeState = { identified: false };
+
+/** @type {string[]} The hooks for a created (first change), updated or deleted (reset to default) Setting document. */
+const SETTING_HOOKS = [
+   'createSetting',
+   'updateSetting',
+   'deleteSetting',
+];
+
+/**
+ * The gate-change listener currently registered on `SETTING_HOOKS`; null until `initFoundryBridge` wires a socket.
+ * @type {((document: unknown, ...args: unknown[]) => void) | null}
+ */
+let gateHookListener = null;
+
+/**
+ * Register the listener on the setting hooks, replacing the one registered by an earlier wiring so a repeated wiring
+ * never pushes twice.
+ * @param {(document: unknown, ...args: unknown[]) => void} listener - Called with the changed Setting document and the
+ * remaining hook arguments, the last of which is the id of the user who made the change.
+ * @returns {void}
+ */
+function installGateHooks(listener) {
+   for (const hook of SETTING_HOOKS) {
+      if (gateHookListener) {
+         Hooks.off(hook, gateHookListener);
+      }
+      Hooks.on(hook, listener);
+   }
+   gateHookListener = listener;
+}
 
 /**
  * Re-sends the identify on the wired socket when connected and the endpointKind setting differs from the kind last
@@ -61,9 +93,10 @@ const OP_HANDLERS = {
 };
 
 /**
- * Wire the Foundry bridge onto the connection's socket: send the identify on each connect (acked by the
- * sidecar), track the identified state, answer BRIDGE_INVOKE requests by dispatching through the op registry, and ack
- * BRIDGE_PING liveness probes with `{ ok: true }`.
+ * Wire the Foundry bridge onto the connection's socket: send the identify (with the gate snapshot) on each connect
+ * (acked by the sidecar), push a fresh gate snapshot when a gate setting changes, track the identified state, answer
+ * BRIDGE_INVOKE requests by dispatching through the op registry, and ack BRIDGE_PING liveness probes with
+ * `{ ok: true }`.
  * Reuses the single socket owned by the TerminalConnection (no second connection is opened).
  * @param {import('~/bridge/TerminalConnection.svelte.js').TerminalConnection} connection - The shared connection.
  * @returns {void}
@@ -119,6 +152,7 @@ export function initFoundryBridge(connection) {
                isGM: game.user.isGM,
                kind: sentKind,
                dom: true,
+               gateState: readGateState(),
             },
             (ack) => {
                // An ack from an earlier attempt or connection must not decide the state of a later one.
@@ -143,6 +177,36 @@ export function initFoundryBridge(connection) {
             identify();
          }
       };
+
+      /**
+       * Push the fresh gate snapshot to the sidecar after a gate setting changed. Only a connected GM client pushes;
+       * the sidecar accepts a snapshot only from an identified endpoint, and a refusal is logged. The identify carries
+       * the snapshot read at (re)connect, so a change while disconnected needs no push. The setting document is already
+       * in the world collection when the hook runs (the collection is updated before the hook is called), so
+       * `readGateState` sees the new value, and the default after a delete. A change made by a user who is not a GM is
+       * ignored: the author is the last hook argument for create, update and delete alike.
+       * @param {{ key?: unknown } | null} document - The created, updated or deleted Setting document.
+       * @param {...unknown} args - The remaining hook arguments; the last is the author's user id.
+       * @returns {void}
+       */
+      const pushGateState = (document, ...args) => {
+         if (!game.user.isGM || !socket.connected || gateNameFromSettingKey(document?.key) === null) {
+            return;
+         }
+         if (game.users.get(args.at(-1))?.isGM !== true) {
+            return;
+         }
+         socket.emit(BRIDGE_GATE_STATE, readGateState(), (ack) => {
+            if (ack?.ok === true) {
+               return;
+            }
+            const code = ack?.error?.code ?? 'UNKNOWN';
+            const message = ack?.error?.message ?? 'No reason given.';
+            console.error(`Wiretap | bridge gate state refused (${code}): ${message}`);
+         });
+      };
+      installGateHooks(pushGateState);
+
       socket.on('connect', identify);
       socket.on('disconnect', () => {
          attempt += 1;
