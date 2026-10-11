@@ -23,3 +23,6 @@ tests/vendor/
 # Per-sidecar MCP config written by the terminal manager, and unit-test scratch files.
 .wiretap/
 test/tmp/
+
+# graphify output (regenerate with `graphify update .`)
+graphify-out/
