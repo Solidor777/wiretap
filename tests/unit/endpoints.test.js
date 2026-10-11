@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
    BridgeError,
    EndpointGoneError,
@@ -17,6 +17,7 @@ import {
    ENDPOINT_GONE,
    ENDPOINT_LIMIT,
    ENDPOINT_TIMEOUT,
+   ENDPOINT_UNAVAILABLE,
    NOT_GM,
    NO_ENDPOINT,
    OP_CREATE_ACTOR,
@@ -58,7 +59,15 @@ describe('createEndpointRegistry', () => {
       const registry = createEndpointRegistry(() => 1234);
       add(registry, 's1', 'agent');
       expect(registry.list()).toEqual([
-         { socketId: 's1', userId: 's1', userName: 'GM', kind: 'agent', dom: true, registeredAt: 1234 },
+         {
+            socketId: 's1',
+            userId: 's1',
+            userName: 'GM',
+            kind: 'agent',
+            dom: true,
+            health: 'healthy',
+            registeredAt: 1234,
+         },
       ]);
    });
 
@@ -85,6 +94,49 @@ describe('createEndpointRegistry', () => {
       add(registry, 'c', 'agent');
       expect(registry.firstOfKind('agent')?.socketId).toBe('b');
       expect(registry.firstOfKind('human')?.socketId).toBe('a');
+   });
+});
+
+describe('createEndpointRegistry health', () => {
+   it('registers a new endpoint as healthy', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 's1', 'agent');
+      expect(registry.get('s1').health).toBe('healthy');
+   });
+
+   it('skips an unresponsive endpoint in firstOfKind and keeps registration order among the rest', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 'a1', 'agent');
+      add(registry, 'a2', 'agent');
+      add(registry, 'a3', 'agent');
+      registry.setHealth('a1', 'unresponsive');
+      expect(registry.firstOfKind('agent')?.socketId).toBe('a2');
+      registry.setHealth('a2', 'unresponsive');
+      expect(registry.firstOfKind('agent')?.socketId).toBe('a3');
+      registry.setHealth('a3', 'unresponsive');
+      expect(registry.firstOfKind('agent')).toBeUndefined();
+      expect(registry.list()).toHaveLength(3);
+   });
+
+   it('keeps the current health and position on a repeated identify of the same socket', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 'a1', 'agent');
+      add(registry, 'a2', 'agent');
+      registry.setHealth('a1', 'unresponsive');
+      add(registry, 'a1', 'agent');
+      expect(registry.get('a1').health).toBe('unresponsive');
+      expect(registry.firstOfKind('agent')?.socketId).toBe('a2');
+      registry.setHealth('a1', 'healthy');
+      add(registry, 'a1', 'agent');
+      expect(registry.get('a1').health).toBe('healthy');
+      expect(registry.firstOfKind('agent')?.socketId).toBe('a1');
+   });
+
+   it('ignores setHealth and get for a socket that is not registered', () => {
+      const registry = createEndpointRegistry();
+      expect(() => registry.setHealth('ghost', 'unresponsive')).not.toThrow();
+      expect(registry.get('ghost')).toBeUndefined();
+      expect(registry.list()).toEqual([]);
    });
 });
 
@@ -223,7 +275,15 @@ describe('normalizeAckError', () => {
       expect(normalizeAckError({ ok: false, error: { code: 'INVALID_TYPE', message: 'm' } }).code).toBe('INVALID_TYPE');
    });
 
-   it.each([NO_ENDPOINT, ENDPOINT_TIMEOUT, ENDPOINT_GONE, ENDPOINT_LIMIT, PROTOCOL_MISMATCH, NOT_GM])(
+   it.each([
+      NO_ENDPOINT,
+      ENDPOINT_TIMEOUT,
+      ENDPOINT_GONE,
+      ENDPOINT_LIMIT,
+      ENDPOINT_UNAVAILABLE,
+      PROTOCOL_MISMATCH,
+      NOT_GM,
+   ])(
       'turns the reserved protocol code %s from a client into OP_FAILED',
       (code) => {
          expect(normalizeAckError({ ok: false, error: { code, message: 'm' } }).code).toBe(OP_FAILED);
@@ -350,6 +410,7 @@ describe('createRouter', () => {
             sent.push({ socketId, payload });
             return respond(socketId, payload);
          },
+         ping: async () => undefined,
          log: () => undefined,
          newRequestId: () => 'req-1',
       });
@@ -522,5 +583,351 @@ describe('createRouter', () => {
       });
       await router.invoke('x', {});
       expect(lines.some((line) => line.includes('req-9'))).toBe(true);
+   });
+});
+
+describe('createRouter endpoint health', () => {
+   /** @type {object[]} The routers created by the current test, disposed afterwards. */
+   let routers = [];
+
+   beforeEach(() => {
+      vi.useFakeTimers();
+   });
+
+   afterEach(() => {
+      routers.forEach((router) => router.dispose());
+      routers = [];
+      vi.useRealTimers();
+   });
+
+   /**
+    * Build a router whose transport times out for the sockets listed in `silent` and whose ping is controllable.
+    * @param {Array<[string, string]>} endpoints - `[socketId, kind]` pairs registered in order.
+    * @param {object} [options] - `silent`: socket ids whose invocations time out; `ping`: the ping implementation.
+    * @returns {{ router: object, registry: object, sent: string[], pings: string[], lines: string[] }} The parts.
+    */
+   function setup(endpoints, options = {}) {
+      const silent = new Set(options.silent ?? []);
+      const registry = createEndpointRegistry();
+      endpoints.forEach(([id, kind]) => add(registry, id, kind));
+      const sent = [];
+      const pings = [];
+      const lines = [];
+      const router = createRouter(registry, {
+         send: async (socketId) => {
+            sent.push(socketId);
+            if (silent.has(socketId)) {
+               throw new EndpointTimeoutError('operation has timed out');
+            }
+            return { ok: true, result: { who: socketId } };
+         },
+         ping: async (socketId) => {
+            pings.push(socketId);
+            return (options.ping ?? (async () => undefined))(socketId);
+         },
+         log: (line) => lines.push(line),
+         newRequestId: () => 'req-h',
+      });
+      routers.push(router);
+      return { router, registry, sent, pings, lines };
+   }
+
+   /**
+    * Make a ping implementation that rejects until `state.up` is true.
+    * @param {{ up: boolean }} state - The switch the ping reads.
+    * @returns {(socketId: string) => Promise<void>} The ping implementation.
+    */
+   function switchablePing(state) {
+      return async () => {
+         if (!state.up) {
+            throw new EndpointTimeoutError('ping timed out');
+         }
+      };
+   }
+
+   it('keeps routing to the same agent when the ping after a timeout is acked', async () => {
+      const { router, registry, sent, pings } = setup([['a', 'agent'], ['h', 'human']], { silent: ['a'] });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      expect(pings).toEqual(['a']);
+      expect(registry.get('a').health).toBe('healthy');
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      expect(sent).toEqual(['a', 'a']);
+      expect(vi.getTimerCount()).toBe(0);
+   });
+
+   it('routes the next call to the human at once when the ping after a timeout fails', async () => {
+      const { router, registry, sent } = setup([['a', 'agent'], ['h', 'human']], {
+         silent: ['a'],
+         ping: switchablePing({ up: false }),
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      expect(registry.get('a').health).toBe('unresponsive');
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ who: 'h' });
+      expect(sent).toEqual(['a', 'h']);
+   });
+
+   it('marks the endpoint unresponsive when the ping transport fails with any error', async () => {
+      const { router, registry } = setup([['a', 'agent']], {
+         silent: ['a'],
+         ping: async () => {
+            throw new EndpointGoneError('socket gone');
+         },
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      expect(registry.get('a').health).toBe('unresponsive');
+   });
+
+   it('does not probe after a non-timeout transport failure', async () => {
+      const registry = createEndpointRegistry();
+      add(registry, 'a', 'agent');
+      const pings = [];
+      const router = createRouter(registry, {
+         send: async () => {
+            throw new EndpointGoneError('socket disconnected');
+         },
+         ping: async (socketId) => {
+            pings.push(socketId);
+         },
+         log: () => undefined,
+      });
+      routers.push(router);
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
+      expect(pings).toEqual([]);
+   });
+
+   it('fails at once with ENDPOINT_UNAVAILABLE within 256 bytes when every endpoint is unresponsive', async () => {
+      const { router, sent } = setup([['a', 'agent']], { silent: ['a'], ping: switchablePing({ up: false }) });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      const err = await router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      expect(err).toBeInstanceOf(BridgeError);
+      expect(err.code).toBe(ENDPOINT_UNAVAILABLE);
+      expect(Buffer.byteLength(err.message, 'utf8')).toBeLessThanOrEqual(256);
+      expect(err.message).toMatch(/reload/i);
+      expect(sent).toEqual(['a']);
+   });
+
+   it('gives ENDPOINT_UNAVAILABLE, not a human fallback, for an unresponsive agent override', async () => {
+      const { router, sent } = setup([['a', 'agent'], ['h', 'human']], {
+         silent: ['a'],
+         ping: switchablePing({ up: false }),
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      const err = await router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' }).catch((e) => e);
+      expect(err.code).toBe(ENDPOINT_UNAVAILABLE);
+      expect(Buffer.byteLength(err.message, 'utf8')).toBeLessThanOrEqual(256);
+      expect(sent).toEqual(['a']);
+   });
+
+   it('keeps NO_ENDPOINT for an override of a kind that is not connected', async () => {
+      const { router } = setup([['a', 'agent']], { silent: ['a'], ping: switchablePing({ up: false }) });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'human' })).rejects.toMatchObject({
+         code: NO_ENDPOINT,
+      });
+   });
+
+   it('picks the second agent for an agent override when the first is unresponsive', async () => {
+      const { router, sent } = setup([['a1', 'agent'], ['a2', 'agent']], {
+         silent: ['a1'],
+         ping: switchablePing({ up: false }),
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).resolves.toEqual({ who: 'a2' });
+      expect(sent).toEqual(['a1', 'a2']);
+   });
+
+   it('probes an unresponsive endpoint every 5 seconds and restores routing on a ping ack', async () => {
+      const state = { up: false };
+      const { router, registry, pings } = setup([['a', 'agent'], ['h', 'human']], {
+         silent: ['a'],
+         ping: switchablePing(state),
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      expect(pings).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(pings).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(pings).toHaveLength(2);
+      expect(registry.get('a').health).toBe('unresponsive');
+      state.up = true;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(pings).toHaveLength(3);
+      expect(registry.get('a').health).toBe('healthy');
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(pings).toHaveLength(3);
+      expect(registry.firstOfKind('agent')?.socketId).toBe('a');
+   });
+
+   it('keeps one probe in flight per endpoint while a ping has not settled', async () => {
+      let first = true;
+      const { router, pings } = setup([['a', 'agent']], {
+         silent: ['a'],
+         ping: async () => {
+            if (first) {
+               first = false;
+               throw new EndpointTimeoutError('ping timed out');
+            }
+            return new Promise(() => undefined);
+         },
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(pings).toEqual(['a', 'a']);
+   });
+
+   it('starts one probe for concurrent timeouts on the same endpoint', async () => {
+      const { router, pings, registry } = setup([['a', 'agent']], {
+         silent: ['a'],
+         ping: switchablePing({ up: false }),
+      });
+      const results = await Promise.all([
+         router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e),
+         router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e),
+         router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e),
+      ]);
+      expect(results.map((e) => e.code)).toEqual([ENDPOINT_TIMEOUT, ENDPOINT_TIMEOUT, ENDPOINT_TIMEOUT]);
+      expect(pings).toEqual(['a']);
+      expect(registry.get('a').health).toBe('unresponsive');
+      expect(vi.getTimerCount()).toBe(1);
+   });
+
+   it('sends a timed-out call exactly once and never retries it on another endpoint', async () => {
+      const { router, sent } = setup([['a', 'agent'], ['h', 'human']], {
+         silent: ['a'],
+         ping: switchablePing({ up: false }),
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sent).toEqual(['a']);
+   });
+
+   it('words ENDPOINT_TIMEOUT as possibly applied, within 512 bytes', async () => {
+      const { router } = setup([['a', 'agent']], { silent: ['a'] });
+      const err = await router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      expect(err.message).toBe(
+         'Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.',
+      );
+      expect(Buffer.byteLength(err.message, 'utf8')).toBeLessThanOrEqual(512);
+   });
+
+   it('keeps an unresponsive endpoint skipped and its single probe when it identifies again', async () => {
+      const state = { up: false };
+      const { router, registry, pings, sent } = setup([['a', 'agent'], ['h', 'human']], {
+         silent: ['a'],
+         ping: switchablePing(state),
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      add(registry, 'a', 'agent');
+      expect(registry.get('a').health).toBe('unresponsive');
+      expect(registry.firstOfKind('agent')).toBeUndefined();
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ who: 'h' });
+      expect(sent).toEqual(['a', 'h']);
+      expect(vi.getTimerCount()).toBe(1);
+      state.up = true;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(pings).toEqual(['a', 'a']);
+      expect(registry.get('a').health).toBe('healthy');
+      expect(vi.getTimerCount()).toBe(0);
+   });
+
+   it('stops the probe of an endpoint that forget() reports gone', async () => {
+      const { router, registry, pings } = setup([['a', 'agent']], {
+         silent: ['a'],
+         ping: switchablePing({ up: false }),
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      expect(vi.getTimerCount()).toBe(1);
+      registry.remove('a');
+      router.forget('a');
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(pings).toEqual(['a']);
+   });
+
+   it('starts no probe when the endpoint is forgotten while its first ping is in flight', async () => {
+      /** @type {(reason: Error) => void} Fails the in-flight first ping. */
+      let failPing;
+      const { router, registry } = setup([['a', 'agent']], {
+         silent: ['a'],
+         ping: () =>
+            new Promise((_resolve, reject) => {
+               failPing = reject;
+            }),
+      });
+      const call = router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      registry.remove('a');
+      router.forget('a');
+      failPing(new EndpointGoneError('gone'));
+      expect((await call).code).toBe(ENDPOINT_TIMEOUT);
+      expect(vi.getTimerCount()).toBe(0);
+   });
+
+   it('leaves no timer and no later state change when disposed while the first ping is in flight', async () => {
+      /** @type {(reason: Error) => void} Fails the in-flight first ping. */
+      let failPing;
+      const { router, registry, pings, lines } = setup([['a', 'agent']], {
+         silent: ['a'],
+         ping: () =>
+            new Promise((_resolve, reject) => {
+               failPing = reject;
+            }),
+      });
+      const call = router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pings).toEqual(['a']);
+      router.dispose();
+      const logged = lines.length;
+      failPing(new EndpointTimeoutError('ping timed out'));
+      expect((await call).code).toBe(ENDPOINT_TIMEOUT);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(registry.get('a').health).toBe('healthy');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(pings).toEqual(['a']);
+      expect(lines.slice(logged).filter((line) => line.includes('unresponsive'))).toEqual([]);
+   });
+
+   it('clears every probe and starts no new one after dispose', async () => {
+      const { router, pings } = setup([['a1', 'agent'], ['a2', 'agent']], {
+         silent: ['a1', 'a2'],
+         ping: switchablePing({ up: false }),
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).rejects.toMatchObject({
+         code: ENDPOINT_TIMEOUT,
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).rejects.toMatchObject({
+         code: ENDPOINT_TIMEOUT,
+      });
+      expect(vi.getTimerCount()).toBe(2);
+      router.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(pings).toEqual(['a1', 'a2']);
+   });
+
+   it('schedules probes through the injected timers at a 5000 ms interval and clears them', async () => {
+      const registry = createEndpointRegistry();
+      add(registry, 'a', 'agent');
+      const calls = [];
+      const router = createRouter(registry, {
+         send: async () => {
+            throw new EndpointTimeoutError('operation has timed out');
+         },
+         ping: async () => {
+            throw new EndpointTimeoutError('ping timed out');
+         },
+         timers: {
+            setInterval: (_callback, ms) => {
+               calls.push(['set', ms]);
+               return 77;
+            },
+            clearInterval: (handle) => calls.push(['clear', handle]),
+         },
+         log: () => undefined,
+      });
+      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      router.dispose();
+      expect(calls).toEqual([['set', 5_000], ['clear', 77]]);
    });
 });

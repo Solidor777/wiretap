@@ -4,6 +4,7 @@ import {
    ENDPOINT_KINDS,
    ENDPOINT_LIMIT,
    ENDPOINT_TIMEOUT,
+   ENDPOINT_UNAVAILABLE,
    NOT_GM,
    NO_ENDPOINT,
    OP_FAILED,
@@ -20,6 +21,9 @@ export interface BridgeFailure {
    message: string;
 }
 
+/** Whether an endpoint answered its latest liveness probe; unresponsive endpoints are skipped by routing. */
+export type EndpointHealth = 'healthy' | 'unresponsive';
+
 /** The identity an endpoint announced in a valid identify. */
 export interface EndpointIdentity {
    userId: string;
@@ -31,6 +35,7 @@ export interface EndpointIdentity {
 /** A registered bridge endpoint. */
 export interface Endpoint extends EndpointIdentity {
    socketId: string;
+   health: EndpointHealth;
    registeredAt: number;
 }
 
@@ -46,16 +51,33 @@ export interface InvokeOptions {
 
 /** The registry of identified GM endpoints. */
 export interface EndpointRegistry {
-   // Adds or updates the socket's endpoint; returns false (registering nothing) when a new socket exceeds the limit.
+   // Adds a new socket's endpoint as healthy, or updates an already-registered socket's identity while keeping its
+   // health; returns false (registering nothing) when a new socket exceeds the limit.
    register: (socketId: string, identity: EndpointIdentity) => boolean;
    remove: (socketId: string) => void;
+   // Lists every endpoint, unresponsive ones included, in registration order.
    list: () => Endpoint[];
+   // Finds a socket's endpoint, or undefined when it is not registered.
+   get: (socketId: string) => Endpoint | undefined;
+   // Sets a registered socket's health; ignored for an unregistered socket.
+   setHealth: (socketId: string, health: EndpointHealth) => void;
+   // Finds the earliest-registered healthy endpoint of a kind.
    firstOfKind: (kind: EndpointKind) => Endpoint | undefined;
 }
 
-/** The router that picks an endpoint for an invocation and runs it. */
+/** The router that picks an endpoint for an invocation and runs it, and probes endpoints that stop answering. */
 export interface Router {
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
+   // Stops probing a socket's endpoint; called when the socket disconnects.
+   forget: (socketId: string) => void;
+   // Stops every probe; the router starts no new one afterwards.
+   dispose: () => void;
+}
+
+/** The interval timer functions the router uses to schedule probes. */
+export interface RouterTimers {
+   setInterval: (callback: () => void, ms: number) => unknown;
+   clearInterval: (handle: unknown) => void;
 }
 
 /** The injectable collaborators of a router. */
@@ -63,8 +85,16 @@ export interface RouterDeps {
    // Emits the invoke payload to a socket and resolves with the raw ack. Rejects with an EndpointTimeoutError when no
    // ack arrives in time; any other rejection (EndpointGoneError included) means the endpoint is gone.
    send: (socketId: string, payload: { op: string; params: object; requestId: string }) => Promise<unknown>;
+   // Sends a liveness probe to a socket and resolves when it acks; rejects when the ack does not arrive in time or the
+   // socket cannot be written to.
+   ping: (socketId: string) => Promise<void>;
+   // Schedules the periodic probes of unresponsive endpoints (default: the global interval timers).
+   timers?: RouterTimers;
    // Receives one sidecar log line.
    log: (line: string) => void;
+   // Receives the endpoint-health log lines (failed pings, unresponsive and recovery transitions), which an endpoint
+   // that never acks produces without bound; callers throttle it (default: `log`).
+   logHealth?: (line: string) => void;
    // Produces the requestId of an invocation (default: a random UUID).
    newRequestId?: () => string;
 }
@@ -73,6 +103,23 @@ export interface RouterDeps {
 // An agent runner's own browser serves agent calls ahead of a person's tab, so an agent session never competes with
 // the person for the tab they are using. This is the only place the order is defined; README.md documents it.
 export const ROUTE_ORDER: readonly EndpointKind[] = ['agent', 'human'];
+
+// Milliseconds between probes of an unresponsive endpoint: restores a recovered tab within seconds while a stuck tab
+// receives at most 12 pings a minute.
+const PROBE_INTERVAL_MS: number = 5_000;
+
+// The ENDPOINT_TIMEOUT message. Hidden coupling: "10 s" is the ack window INVOKE_TIMEOUT_MS in foundryBridge.ts.
+const TIMEOUT_MESSAGE: string =
+   'Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.';
+
+// Maximum UTF-8 byte length of the ENDPOINT_UNAVAILABLE message.
+const MAX_UNAVAILABLE_BYTES: number = 256;
+
+// The global interval timers; looked up at call time so test fake timers installed later are honoured.
+const DEFAULT_TIMERS: RouterTimers = {
+   setInterval: (callback, ms) => setInterval(callback, ms),
+   clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+};
 
 // Maximum number of registered endpoints; an identify from a new socket beyond it is refused with ENDPOINT_LIMIT.
 export const MAX_ENDPOINTS: number = 64;
@@ -108,6 +155,7 @@ const RESERVED_CODES: ReadonlySet<string> = new Set([
    ENDPOINT_TIMEOUT,
    ENDPOINT_GONE,
    ENDPOINT_LIMIT,
+   ENDPOINT_UNAVAILABLE,
    PROTOCOL_MISMATCH,
    NOT_GM,
 ]);
@@ -195,8 +243,10 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
    const endpoints: Map<string, Endpoint> = new Map();
    return {
       /**
-       * Add an endpoint, or update the identity of the socket's existing entry (its registration time and position
-       * are kept). A new socket is refused when the registry already holds `MAX_ENDPOINTS` endpoints.
+       * Add an endpoint, or update the identity of the socket's existing entry (its registration time, position and
+       * health are kept, so a client cannot clear an unresponsive state by identifying again; only a ping ack, through
+       * `setHealth`, restores it). A new socket starts healthy and is refused when the registry already holds
+       * `MAX_ENDPOINTS` endpoints.
        * @param {string} socketId - The socket id.
        * @param {EndpointIdentity} identity - The validated identity.
        * @returns {boolean} True when the endpoint is registered, false when the limit refused it.
@@ -206,7 +256,12 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
          if (!existing && endpoints.size >= MAX_ENDPOINTS) {
             return false;
          }
-         endpoints.set(socketId, { ...identity, socketId, registeredAt: existing?.registeredAt ?? now() });
+         endpoints.set(socketId, {
+            ...identity,
+            socketId,
+            health: existing?.health ?? 'healthy',
+            registeredAt: existing?.registeredAt ?? now(),
+         });
          return true;
       },
 
@@ -228,12 +283,34 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       },
 
       /**
-       * Find the earliest-registered endpoint of a kind.
+       * Find a socket's endpoint.
+       * @param {string} socketId - The socket id.
+       * @returns {Endpoint | undefined} The endpoint, or undefined when the socket is not registered.
+       */
+      get(socketId: string): Endpoint | undefined {
+         return endpoints.get(socketId);
+      },
+
+      /**
+       * Set a registered endpoint's health.
+       * @param {string} socketId - The socket id; an unregistered socket is ignored.
+       * @param {EndpointHealth} health - The new health.
+       * @returns {void}
+       */
+      setHealth(socketId: string, health: EndpointHealth): void {
+         const existing: Endpoint | undefined = endpoints.get(socketId);
+         if (existing) {
+            existing.health = health;
+         }
+      },
+
+      /**
+       * Find the earliest-registered healthy endpoint of a kind.
        * @param {EndpointKind} kind - The endpoint kind.
-       * @returns {Endpoint | undefined} The endpoint, or undefined when none of that kind is registered.
+       * @returns {Endpoint | undefined} The endpoint, or undefined when no healthy endpoint of that kind is registered.
        */
       firstOfKind(kind: EndpointKind): Endpoint | undefined {
-         return [...endpoints.values()].find((endpoint) => endpoint.kind === kind);
+         return [...endpoints.values()].find((endpoint) => endpoint.kind === kind && endpoint.health === 'healthy');
       },
    };
 }
@@ -388,23 +465,149 @@ function noEndpoint(kind?: EndpointKind): BridgeError {
 }
 
 /**
+ * Build the ENDPOINT_UNAVAILABLE error for a request whose eligible endpoints are all unresponsive.
+ * @param {EndpointKind} [kind] - The restricted kind when the call carried an `endpoint` override.
+ * @returns {BridgeError} The error, its message bounded to 256 bytes.
+ */
+function endpointUnavailable(kind?: EndpointKind): BridgeError {
+   const message: string = `Every ${
+      kind === undefined ? 'connected' : `'${kind}'`
+   } Foundry endpoint is unresponsive: reload the stuck Foundry tab or connect another endpoint.`;
+   return new BridgeError(ENDPOINT_UNAVAILABLE, truncateUtf8(message, MAX_UNAVAILABLE_BYTES));
+}
+
+/**
  * Create the router over a registry. It picks the endpoint (default: `ROUTE_ORDER`; an `endpoint` option restricts
  * the choice to that kind with no fallback), sends the invocation through the injected transport and converts the
- * outcome into a result or a BridgeError.
+ * outcome into a result or a BridgeError. An ack timeout makes the router ping that endpoint: an acked ping leaves it
+ * healthy (the operation was slow); a failed ping marks it unresponsive, so routing skips it, and probes it every
+ * `PROBE_INTERVAL_MS` until a ping is acked. A call is sent once and never retried on another endpoint.
  * @param {EndpointRegistry} registry - The endpoint registry.
- * @param {RouterDeps} deps - The transport, logger and request-id source.
+ * @param {RouterDeps} deps - The transport, ping, timers, logger and request-id source.
  * @returns {Router} The router.
  */
 export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Router {
    const newRequestId: () => string = deps.newRequestId ?? randomUUID;
+   // The timers that schedule probes.
+   const timers: RouterTimers = deps.timers ?? DEFAULT_TIMERS;
+   // The sink of endpoint-health log lines.
+   const logHealth: (line: string) => void = deps.logHealth ?? deps.log;
+   // Interval handles of the running probes, keyed by socket id (at most one per endpoint).
+   const probes: Map<string, unknown> = new Map();
+   // Timeout checks in flight, keyed by socket id, so concurrent timeouts on one endpoint share one ping.
+   const checks: Map<string, Promise<void>> = new Map();
+   // Socket ids with a probe ping in flight; a tick skips an endpoint that is in this set.
+   const probing: Set<string> = new Set();
+   // Set by `dispose`; no probe starts afterwards.
+   let disposed: boolean = false;
+
+   /**
+    * Ping an endpoint.
+    * @param {string} socketId - The endpoint's socket id.
+    * @returns {Promise<boolean>} True when the ping was acked, false on any ping failure (logged).
+    */
+   async function ping(socketId: string): Promise<boolean> {
+      try {
+         await deps.ping(socketId);
+         return true;
+      } catch (cause) {
+         logHealth(
+            `Wiretap sidecar | ping to ${socketId} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+         );
+         return false;
+      }
+   }
+
+   /**
+    * Stop an endpoint's probe, if it has one.
+    * @param {string} socketId - The endpoint's socket id.
+    * @returns {void}
+    */
+   function stopProbe(socketId: string): void {
+      if (probes.has(socketId)) {
+         timers.clearInterval(probes.get(socketId));
+         probes.delete(socketId);
+      }
+   }
+
+   /**
+    * Run one probe tick: ping an unresponsive endpoint and restore it when the ping is acked. A tick for an endpoint
+    * that is gone or healthy again stops the probe; a tick while the previous ping is in flight does nothing.
+    * @param {string} socketId - The endpoint's socket id.
+    * @returns {Promise<void>} Resolves when the tick finished.
+    */
+   async function tick(socketId: string): Promise<void> {
+      if (probing.has(socketId)) {
+         return;
+      }
+      if (registry.get(socketId)?.health !== 'unresponsive') {
+         stopProbe(socketId);
+         return;
+      }
+      probing.add(socketId);
+      try {
+         if ((await ping(socketId)) && registry.get(socketId)) {
+            registry.setHealth(socketId, 'healthy');
+            stopProbe(socketId);
+            logHealth(`Wiretap sidecar | endpoint ${socketId} responded to a probe and is healthy again`);
+         }
+      } finally {
+         probing.delete(socketId);
+      }
+   }
+
+   /**
+    * Ping an endpoint whose invocation timed out: mark it unresponsive and start its probe when the ping fails.
+    * @param {string} socketId - The endpoint's socket id.
+    * @returns {Promise<void>} Resolves when the check finished; never rejects.
+    */
+   async function checkAfterTimeout(socketId: string): Promise<void> {
+      if (disposed || registry.get(socketId)?.health !== 'healthy') {
+         return;
+      }
+      if (await ping(socketId)) {
+         logHealth(`Wiretap sidecar | endpoint ${socketId} answered a ping after a timeout: the operation was slow`);
+         return;
+      }
+      if (disposed || !registry.get(socketId)) {
+         return;
+      }
+      registry.setHealth(socketId, 'unresponsive');
+      if (!probes.has(socketId)) {
+         probes.set(
+            socketId,
+            timers.setInterval(() => {
+               void tick(socketId);
+            }, PROBE_INTERVAL_MS),
+         );
+      }
+      logHealth(`Wiretap sidecar | endpoint ${socketId} is unresponsive; probing every ${PROBE_INTERVAL_MS} ms`);
+   }
+
+   /**
+    * Run the timeout check of an endpoint, sharing one in-flight check between concurrent timeouts.
+    * @param {string} socketId - The endpoint's socket id.
+    * @returns {Promise<void>} Resolves when the check finished.
+    */
+   function check(socketId: string): Promise<void> {
+      let running: Promise<void> | undefined = checks.get(socketId);
+      if (!running) {
+         running = checkAfterTimeout(socketId).finally(() => {
+            checks.delete(socketId);
+         });
+         checks.set(socketId, running);
+      }
+      return running;
+   }
+
    return {
       /**
        * Run an operation on a chosen endpoint.
        * @param {string} op - The operation name.
        * @param {object} params - The operation parameters.
        * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback.
-       * @returns {Promise<unknown>} The operation result; rejects with a BridgeError (NO_ENDPOINT, ENDPOINT_GONE,
-       *          ENDPOINT_TIMEOUT, or the normalized client failure).
+       * @returns {Promise<unknown>} The operation result; rejects with a BridgeError (NO_ENDPOINT,
+       *          ENDPOINT_UNAVAILABLE, ENDPOINT_GONE, ENDPOINT_TIMEOUT, or the normalized client failure).
        */
       async invoke(op: string, params: object, options: InvokeOptions = {}): Promise<unknown> {
          const kinds: readonly EndpointKind[] = options.endpoint === undefined ? ROUTE_ORDER : [options.endpoint];
@@ -416,7 +619,9 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
             }
          }
          if (!endpoint) {
-            throw noEndpoint(options.endpoint);
+            // No healthy endpoint of an eligible kind: unresponsive ones that are still connected make it UNAVAILABLE.
+            const stuck: boolean = registry.list().some((candidate) => kinds.includes(candidate.kind));
+            throw stuck ? endpointUnavailable(options.endpoint) : noEndpoint(options.endpoint);
          }
          const requestId: string = newRequestId();
          deps.log(
@@ -428,7 +633,9 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
          } catch (cause) {
             if (cause instanceof EndpointTimeoutError) {
                deps.log(`Wiretap sidecar | invoke ${op} requestId=${requestId} timed out`);
-               throw new BridgeError(ENDPOINT_TIMEOUT, 'Foundry did not respond in time.');
+               // The health check finishes before the error is thrown, so the next call already sees its outcome.
+               await check(endpoint.socketId);
+               throw new BridgeError(ENDPOINT_TIMEOUT, TIMEOUT_MESSAGE);
             }
             // Every non-timeout transport failure (a disconnect, a missing socket, a failed write) is a gone endpoint.
             deps.log(
@@ -444,6 +651,26 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
          const error: BridgeError = normalizeAckError(ack);
          deps.log(`Wiretap sidecar | invoke ${op} requestId=${requestId} failed: ${error.code}`);
          throw error;
+      },
+
+      /**
+       * Stop probing a socket's endpoint (its socket disconnected).
+       * @param {string} socketId - The socket id.
+       * @returns {void}
+       */
+      forget(socketId: string): void {
+         stopProbe(socketId);
+      },
+
+      /**
+       * Stop every probe; no probe starts afterwards.
+       * @returns {void}
+       */
+      dispose(): void {
+         disposed = true;
+         for (const socketId of [...probes.keys()]) {
+            stopProbe(socketId);
+         }
       },
    };
 }

@@ -76,6 +76,10 @@ export const BRIDGE_IDENTIFY = 'bridge:identify';
 // Server → client, with an ack callback: run a Foundry operation and return its result.
 export const BRIDGE_INVOKE = 'bridge:invoke';
 
+// Server → client, with an ack callback: liveness probe. The client acks `{ ok: true }` at once and does nothing
+// else.
+export const BRIDGE_PING = 'bridge:ping';
+
 // Operation names dispatched over BRIDGE_INVOKE (shared so both sides agree).
 export const OP_CREATE_ACTOR = 'createActor';
 
@@ -87,6 +91,10 @@ export const NO_ENDPOINT = 'NO_ENDPOINT';
 
 // Error code: the chosen endpoint did not ack the invocation in time.
 export const ENDPOINT_TIMEOUT = 'ENDPOINT_TIMEOUT';
+
+// Error code: endpoints of the eligible kind are connected but none answered its liveness probe, so the call was
+// refused without being sent.
+export const ENDPOINT_UNAVAILABLE = 'ENDPOINT_UNAVAILABLE';
 
 // Error code: the endpoint acked the invocation with a failure that carried no code of its own.
 export const OP_FAILED = 'OP_FAILED';

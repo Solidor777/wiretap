@@ -27,7 +27,7 @@ const MAX_LOGGED_ORIGIN_BYTES: number = 64;
  * @returns {{ io: Server; bridge: ReturnType<typeof createFoundryBridge>; ready: Promise<void>; dispose: () => void }}
  *          The started server; the Foundry bridge (its `invoke` accepts the per-call `endpoint` option); a promise
  *          that resolves once both ports are bound (or rejects when either bind fails); and a dispose function that
- *          kills any PTY and closes both servers.
+ *          kills any PTY, closes both servers and stops the endpoint health probes.
  */
 export function createWiretapServer(
    port: number,
@@ -101,8 +101,9 @@ export function createWiretapServer(
    });
 
    /**
-    * Tear down the sidecar: kill any running PTY (full mode), stop the MCP server, then close the Socket.IO server.
-    * Each step runs even when an earlier one throws, so both ports are always released; the first error propagates.
+    * Tear down the sidecar: kill any running PTY (full mode), stop the MCP server, stop the endpoint health probes,
+    * then close the Socket.IO server. Each step runs even when an earlier one throws, so both ports are always
+    * released and no probe timer is left; the first error propagates.
     * @returns {void}
     */
    function dispose(): void {
@@ -112,7 +113,11 @@ export function createWiretapServer(
          try {
             mcp.close();
          } finally {
-            io.close();
+            try {
+               bridge.dispose();
+            } finally {
+               io.close();
+            }
          }
       }
    }

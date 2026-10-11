@@ -1,5 +1,5 @@
 import type { Socket } from 'socket.io';
-import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, ENDPOINT_LIMIT } from '../shared/protocol.js';
+import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, BRIDGE_PING, ENDPOINT_LIMIT } from '../shared/protocol.js';
 import {
    EndpointGoneError,
    EndpointTimeoutError,
@@ -16,11 +16,21 @@ import { createLogThrottle } from './logThrottle.ts';
 // Milliseconds to wait for a Foundry client to ack a bridge invocation before failing.
 const INVOKE_TIMEOUT_MS: number = 10_000;
 
+// Milliseconds to wait for a Foundry client to ack a liveness ping before the endpoint counts as unresponsive: a 1 s
+// ping on loopback is far above normal event-loop latency yet keeps a timed-out caller's wait to at most 10 s + 1 s.
+const PING_TIMEOUT_MS: number = 1_000;
+
 // Length in milliseconds of the window that bounds refused-identify log lines.
 const REFUSAL_LOG_WINDOW_MS: number = 60_000;
 
 // Maximum refused-identify log lines inside one window, across all sockets.
 const REFUSAL_LOG_LIMIT: number = 10;
+
+// Length in milliseconds of the window that bounds endpoint-health log lines.
+const HEALTH_LOG_WINDOW_MS: number = 60_000;
+
+// Maximum endpoint-health log lines inside one window, across all endpoints.
+const HEALTH_LOG_LIMIT: number = 10;
 
 /** The injectable collaborators of the bridge. */
 export interface FoundryBridgeOptions {
@@ -35,12 +45,14 @@ export interface FoundryBridgeOptions {
  * operation to the chosen endpoint and awaits its ack. Knows nothing about which operations exist — callers pass an
  * op name and params.
  * @param {FoundryBridgeOptions} [options] - Injectable logger and clock.
- * @returns {{ handleConnection: (socket: Socket) => void, invoke: Function }} The bridge with a per-socket connection
- *          handler and the router's `invoke(op, params, { endpoint? })`.
+ * @returns {{ handleConnection: (socket: Socket) => void, invoke: Function, dispose: () => void }} The bridge with a
+ *          per-socket connection handler, the router's `invoke(op, params, { endpoint? })`, and `dispose`, which stops
+ *          every endpoint health probe.
  */
 export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    handleConnection: (socket: Socket) => void;
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
+   dispose: () => void;
 } {
    // The sidecar log sink.
    const log: (line: string) => void = options.log ?? ((line) => console.log(line));
@@ -58,48 +70,93 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       windowMs: REFUSAL_LOG_WINDOW_MS,
       noun: 'identify refusals',
    });
+   // Writes an endpoint-health log line subject to the per-window limit; a never-acking endpoint is probed every 5 s
+   // and would otherwise log without bound.
+   const logHealth: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: HEALTH_LOG_LIMIT,
+      windowMs: HEALTH_LOG_WINDOW_MS,
+      noun: 'endpoint health lines',
+   });
    // The registry of identified GM endpoints.
    const registry: EndpointRegistry = createEndpointRegistry();
+
+   /**
+    * Emit an event to a registered socket and resolve with its ack. Rejects with an EndpointGoneError when the socket
+    * is missing or the write throws, and with an EndpointTimeoutError when no ack arrives within the window. When
+    * `track` is set, a disconnect of the socket also rejects the call (through `pending`).
+    * @param {string} socketId - The endpoint's socket id.
+    * @param {string} event - The event name.
+    * @param {number} timeoutMs - The ack window in milliseconds.
+    * @param {object | undefined} payload - The event payload, or undefined for an event with none.
+    * @param {boolean} track - Whether a disconnect of the socket fails the call at once.
+    * @returns {Promise<unknown>} The ack value.
+    */
+   function emitWithAck(
+      socketId: string,
+      event: string,
+      timeoutMs: number,
+      payload: object | undefined,
+      track: boolean,
+   ): Promise<unknown> {
+      return new Promise((resolve, reject) => {
+         // The endpoint's socket, absent when it already disconnected.
+         const socket: Socket | undefined = sockets.get(socketId);
+         if (!socket) {
+            reject(new EndpointGoneError('Endpoint socket is gone.'));
+            return;
+         }
+         // This socket's pending-invocation rejectors; tracked calls register theirs so a disconnect can fail them.
+         const waiting: Set<(reason: Error) => void> = pending.get(socketId) ?? new Set();
+         if (track) {
+            pending.set(socketId, waiting);
+            waiting.add(reject);
+         }
+         // The emit arguments: the optional payload followed by the ack callback.
+         const args: unknown[] = payload === undefined ? [] : [payload];
+         try {
+            socket.timeout(timeoutMs).emit(event, ...args, (err: unknown, ack: unknown) => {
+               waiting.delete(reject);
+               if (err) {
+                  // Socket.IO's timeout wrapper passes its timeout error as the first ack argument.
+                  reject(new EndpointTimeoutError(err instanceof Error ? err.message : String(err)));
+               } else {
+                  resolve(ack);
+               }
+            });
+         } catch (cause) {
+            waiting.delete(reject);
+            reject(new EndpointGoneError(cause instanceof Error ? cause.message : String(cause)));
+         }
+      });
+   }
+
    // The router that picks an endpoint and runs an invocation through the socket transport.
    const router: Router = createRouter(registry, {
       log,
-      send: (socketId, payload) =>
-         new Promise((resolve, reject) => {
-            // The endpoint's socket, absent when it already disconnected.
-            const socket: Socket | undefined = sockets.get(socketId);
-            if (!socket) {
-               reject(new EndpointGoneError('Endpoint socket is gone.'));
-               return;
-            }
-            // This socket's pending-invocation rejectors.
-            const waiting: Set<(reason: Error) => void> = pending.get(socketId) ?? new Set();
-            pending.set(socketId, waiting);
-            // Stops tracking this invocation once it settles.
-            const settle = (): void => {
-               waiting.delete(reject);
-            };
-            waiting.add(reject);
-            try {
-               socket.timeout(INVOKE_TIMEOUT_MS).emit(BRIDGE_INVOKE, payload, (err: unknown, ack: unknown) => {
-                  settle();
-                  if (err) {
-                     // Socket.IO's timeout wrapper passes its timeout error as the first ack argument.
-                     reject(new EndpointTimeoutError(err instanceof Error ? err.message : String(err)));
-                  } else {
-                     resolve(ack);
-                  }
-               });
-            } catch (cause) {
-               settle();
-               reject(new EndpointGoneError(cause instanceof Error ? cause.message : String(cause)));
-            }
-         }),
+      logHealth,
+      ping: async (socketId) => {
+         await emitWithAck(socketId, BRIDGE_PING, PING_TIMEOUT_MS, undefined, false);
+      },
+      send: (socketId, payload) => emitWithAck(socketId, BRIDGE_INVOKE, INVOKE_TIMEOUT_MS, payload, true),
    });
+
+   /**
+    * Drop a socket's endpoint and stop its health probe.
+    * @param {string} socketId - The socket id.
+    * @returns {void}
+    */
+   function dropEndpoint(socketId: string): void {
+      registry.remove(socketId);
+      router.forget(socketId);
+   }
 
    return {
       /**
        * Register per-socket bridge handlers: validate and register an endpoint on identify (acking the result after
-       * registration), and on disconnect drop the endpoint and fail its pending invocations with ENDPOINT_GONE.
+       * registration), and on disconnect drop the endpoint, stop its health probe and fail its pending invocations
+       * with ENDPOINT_GONE.
        * @param {Socket} socket - The connected Socket.IO socket.
        * @returns {void}
        */
@@ -117,7 +174,7 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
             if (!result.ok) {
                // A refused identify also drops any earlier registration of this socket, so a stale GM entry cannot
                // outlive an identify that no longer qualifies.
-               registry.remove(socket.id);
+               dropEndpoint(socket.id);
                logRefusal(`Wiretap sidecar | refused identify from ${socket.id}: ${result.error.code}`);
             }
             if (typeof ack === 'function') {
@@ -125,7 +182,7 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
             }
          });
          socket.on('disconnect', () => {
-            registry.remove(socket.id);
+            dropEndpoint(socket.id);
             sockets.delete(socket.id);
             for (const reject of pending.get(socket.id) ?? []) {
                reject(new EndpointGoneError(`socket ${socket.id} disconnected`));
@@ -135,5 +192,13 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       },
 
       invoke: router.invoke,
+
+      /**
+       * Stop every endpoint health probe so no timer outlives the bridge.
+       * @returns {void}
+       */
+      dispose(): void {
+         router.dispose();
+      },
    };
 }

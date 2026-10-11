@@ -1,13 +1,15 @@
 // @vitest-environment node
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { createFoundryBridge } from '../../server/foundryBridge.ts';
 import { MAX_ENDPOINTS } from '../../server/endpoints.ts';
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
+   BRIDGE_PING,
    ENDPOINT_GONE,
    ENDPOINT_LIMIT,
    ENDPOINT_TIMEOUT,
+   ENDPOINT_UNAVAILABLE,
    NOT_GM,
    NO_ENDPOINT,
    OP_CREATE_ACTOR,
@@ -20,9 +22,10 @@ import {
  * Build a fake Socket.IO server socket whose ack-emit is controllable, recording emitted events.
  * @param {string} id - The id the fake socket reports.
  * @param {(payload: object) => *} ackResponder - Maps the emitted payload to the ack response (or 'timeout').
+ * @param {(payload: object) => *} [pingResponder] - Maps a BRIDGE_PING emit to its ack response (same markers).
  * @returns {object} The fake socket, a `fire` helper to trigger registered handlers, and the `emitted` log.
  */
-function makeSocket(id, ackResponder = () => ({ ok: true, result: {} })) {
+function makeSocket(id, ackResponder = () => ({ ok: true, result: {} }), pingResponder = () => ({ ok: true })) {
    const handlers = {};
    const emitted = [];
    const socket = {
@@ -31,9 +34,11 @@ function makeSocket(id, ackResponder = () => ({ ok: true, result: {} })) {
          handlers[event] = fn;
       },
       timeout: (ms) => ({
-         emit: (event, payload, ack) => {
+         emit: (event, ...args) => {
+            const ack = args[args.length - 1];
+            const payload = args.length > 1 ? args[0] : undefined;
             emitted.push({ event, payload, timeoutMs: ms });
-            const response = ackResponder(payload);
+            const response = (event === BRIDGE_PING ? pingResponder : ackResponder)(payload);
             if (response === 'timeout') {
                ack(new Error('timed out'));
             } else if (response === 'timer') {
@@ -361,5 +366,235 @@ describe('createFoundryBridge invoke', () => {
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
       await expect(bridge.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ who: 'agent' });
       await expect(bridge.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'human' })).resolves.toEqual({ who: 'human' });
+   });
+});
+
+describe('createFoundryBridge endpoint health', () => {
+   /** @type {object[]} The bridges created by the current test, disposed afterwards. */
+   let bridges = [];
+
+   beforeEach(() => {
+      vi.useFakeTimers();
+   });
+
+   afterEach(() => {
+      bridges.forEach((bridge) => bridge.dispose());
+      bridges = [];
+      vi.useRealTimers();
+   });
+
+   /**
+    * Create a bridge that is disposed after the test.
+    * @returns {ReturnType<typeof createFoundryBridge>} A bridge that the test teardown disposes.
+    */
+   function trackedBridge() {
+      const { bridge } = makeBridge();
+      bridges.push(bridge);
+      return bridge;
+   }
+
+   /**
+    * Count the emitted events of a type.
+    * @param {object[]} emitted - A fake socket's emit log.
+    * @param {string} event - The event name.
+    * @returns {number} How many times the event was emitted.
+    */
+   function count(emitted, event) {
+      return emitted.filter((entry) => entry.event === event).length;
+   }
+
+   it('pings with a 1 second window after an invoke times out and keeps routing when the ping is acked', async () => {
+      const bridge = trackedBridge();
+      const agent = makeSocket('a', () => 'timer');
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await first).toMatchObject({ code: ENDPOINT_TIMEOUT });
+      const pings = agent.emitted.filter((entry) => entry.event === BRIDGE_PING);
+      expect(pings).toHaveLength(1);
+      expect(pings[0].timeoutMs).toBe(1_000);
+      const second = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await second).toMatchObject({ code: ENDPOINT_TIMEOUT });
+      expect(count(agent.emitted, BRIDGE_INVOKE)).toBe(2);
+   });
+
+   it('routes to the human once the agent misses its ping window, with no 10 second wait', async () => {
+      const bridge = trackedBridge();
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => 'timer',
+      );
+      const human = makeSocket('h', () => ({ ok: true, result: { who: 'human' } }));
+      bridge.handleConnection(agent.socket);
+      bridge.handleConnection(human.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent', userId: 'ua' }), () => undefined);
+      human.fire(BRIDGE_IDENTIFY, identify({ kind: 'human', userId: 'uh' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await first).toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ who: 'human' });
+      expect(count(agent.emitted, BRIDGE_INVOKE)).toBe(1);
+   });
+
+   it('fails with ENDPOINT_UNAVAILABLE when the only endpoint missed its ping window', async () => {
+      const bridge = trackedBridge();
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => 'timer',
+      );
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(11_000);
+      await first;
+      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
+   });
+
+   it('restores an unresponsive endpoint when a later 5 second probe is acked', async () => {
+      const bridge = trackedBridge();
+      /** @type {{ answer: boolean }} Whether the fake agent currently acks pings. */
+      const state = { answer: false };
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => (state.answer ? { ok: true } : 'timer'),
+      );
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(11_000);
+      await first;
+      expect(vi.getTimerCount()).toBe(1);
+      state.answer = true;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(vi.getTimerCount()).toBe(0);
+      const second = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await second).toMatchObject({ code: ENDPOINT_TIMEOUT });
+      expect(count(agent.emitted, BRIDGE_INVOKE)).toBe(2);
+   });
+
+   it('clears the probe interval when the endpoint disconnects', async () => {
+      const bridge = trackedBridge();
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => 'timer',
+      );
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(11_000);
+      await first;
+      expect(vi.getTimerCount()).toBe(1);
+      agent.fire('disconnect');
+      expect(vi.getTimerCount()).toBe(0);
+   });
+
+   it('clears the probe interval on dispose and sends no further pings', async () => {
+      const bridge = trackedBridge();
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => 'timer',
+      );
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(11_000);
+      await first;
+      bridge.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+      const before = count(agent.emitted, BRIDGE_PING);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(count(agent.emitted, BRIDGE_PING)).toBe(before);
+   });
+
+   it('treats a ping that cannot be written as a failed ping', async () => {
+      const bridge = trackedBridge();
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => 'throw',
+      );
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await first;
+      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
+   });
+
+   it('keeps an unresponsive endpoint skipped, with one probe, when its socket identifies again', async () => {
+      const bridge = trackedBridge();
+      /** @type {{ answer: boolean }} Whether the fake agent currently acks pings. */
+      const state = { answer: false };
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => (state.answer ? { ok: true } : 'timer'),
+      );
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(11_000);
+      await first;
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
+      expect(vi.getTimerCount()).toBe(1);
+      state.answer = true;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(vi.getTimerCount()).toBe(0);
+      const second = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await second).toMatchObject({ code: ENDPOINT_TIMEOUT });
+   });
+
+   it('stops the probe of an unresponsive endpoint whose later identify is refused', async () => {
+      const bridge = trackedBridge();
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => 'timer',
+      );
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(11_000);
+      await first;
+      expect(vi.getTimerCount()).toBe(1);
+      agent.fire(BRIDGE_IDENTIFY, identify({ isGM: false }), () => undefined);
+      expect(vi.getTimerCount()).toBe(0);
+      const before = count(agent.emitted, BRIDGE_PING);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(count(agent.emitted, BRIDGE_PING)).toBe(before);
+   });
+
+   it('writes at most the throttle limit of health log lines per window for a never-acking endpoint', async () => {
+      const lines = [];
+      const bridge = createFoundryBridge({ log: (line) => lines.push(line), now: () => Date.now() });
+      bridges.push(bridge);
+      const agent = makeSocket(
+         'a',
+         () => 'timer',
+         () => 'timer',
+      );
+      bridge.handleConnection(agent.socket);
+      agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
+      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(11_000);
+      await first;
+      // 11 probes fire at 5 s intervals inside the same 60 s window as the first failed ping.
+      await vi.advanceTimersByTimeAsync(55_000);
+      expect(count(agent.emitted, BRIDGE_PING)).toBeGreaterThan(10);
+      const healthLines = lines.filter((line) => /ping to|unresponsive|healthy again|answered a ping/.test(line));
+      expect(healthLines).toHaveLength(10);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(lines.filter((line) => line.includes('endpoint health lines suppressed'))).toHaveLength(1);
    });
 });
