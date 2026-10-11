@@ -1,3 +1,4 @@
+import { bridgeState, reidentifyBridge } from '~/bridge/foundryBridge.js';
 import WiretapSidebarTab from '~/apps/WiretapSidebarTab.js';
 import { TERMINAL_THEME_CHOICES, terminalTheme } from '~/components/terminalThemes.svelte.js';
 import {
@@ -90,9 +91,32 @@ export default function onceInit() {
    // Seed the reactive store from the stored value (covers a non-default saved size on load).
    terminalFontSize.size = game.settings.get('wiretap', 'terminalFontSize');
 
+   // Whether this client is a person's tab or an agent-runner browser; sent in the bridge identify. Not shown in the
+   // settings UI: the agent runner sets it programmatically.
+   game.settings.register('wiretap', 'endpointKind', {
+      scope: 'client',
+      config: false,
+      type: String,
+      choices: {
+         human: 'human',
+         agent: 'agent',
+      },
+      default: 'human',
+      onChange: () => {
+         reidentifyBridge();
+      },
+   });
+
    // The module entry, used to expose a public API object for downstream features and the e2e probe.
    const module = game.modules.get('wiretap');
-   module.api = {};
+   module.api = {
+      bridge: {
+         // True once the sidecar has acked this client's bridge identify; false after a disconnect or a refusal.
+         get identified() {
+            return bridgeState.identified;
+         },
+      },
+   };
 
    // Install the test-only probe harness when built for e2e. `__WIRETAP_PROBE__` is a Vite compile-time
    // constant (true only under `--mode e2e`); the production build sets it false so terser
