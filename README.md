@@ -18,6 +18,32 @@ a single action:
 - **Windows:** double-click `start-wiretap.cmd` in the module folder.
 - **macOS/Linux:** run `./start-wiretap.sh` from the module folder.
 
-A console window opens and stays up while the sidecar runs — its log shows `listening on http://localhost:31416`.
+A console window opens and stays up while the sidecar runs — its log shows `listening on http://127.0.0.1:31416`.
 **Close that window (or press Ctrl-C) to stop the sidecar.** The Wiretap tab (GM-only) connects automatically
 once the sidecar is up; until then it shows a "Sidecar not running" panel.
+
+## MCP modes
+
+The sidecar hosts a Streamable-HTTP MCP endpoint (default `http://127.0.0.1:31417/mcp`, loopback only; override the
+port with `WIRETAP_MCP_PORT`) whose tools run against the live world through a GM-identified Foundry client.
+
+- **In-session (default, `full` mode):** when the Wiretap terminal launches `claude` followed only by plain
+  arguments (the default command is bare `claude`), the sidecar writes `.wiretap/mcp-<mcpPort>.json` in the module
+  directory (the parent of `server/`, resolved from the server's own location; the directory is mode 0o700, the file
+  0o600, gitignored) and appends `--mcp-config "<path>"`, so that `claude` sees the Wiretap tools with no setup. Wiring follows an allowlist: every argument must consist solely of
+  `A-Z a-z 0-9 . _ : = / @ + , -`. Any other command line is launched unchanged and the skip is logged: a command
+  that is not exactly `claude`, one that already passes `--mcp-config`, one with a standalone `--`, and one with any
+  other character, which includes **every quoted argument** (for example `claude --append-system-prompt "..."` is
+  not wired). The same applies if the config file cannot be written. The config file is rewritten on every wired
+  launch (a symbolic link at the file path is refused) and is never deleted by the sidecar; a failed write is logged and
+  the command is launched unchanged.
+- **Standalone (`mcp-only` mode):** run the sidecar without the terminal relay and attach any MCP client:
+
+  ```
+  npm run server:mcp
+  claude mcp add --transport http wiretap http://127.0.0.1:31417/mcp
+  ```
+
+  `--mcp-only` on the command line or `WIRETAP_MODE=mcp-only` selects this mode (the argument wins; `full` is the
+  default and any other `WIRETAP_MODE` value exits with an error). The Socket.IO server and the Foundry bridge stay
+  up (the Socket.IO server, like the MCP endpoint, binds `127.0.0.1` only and is not reachable from other machines) so the Foundry client can still identify as a GM.

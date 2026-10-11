@@ -32,7 +32,7 @@ function waitForData(client, predicate, ms = 8000) {
 }
 
 describe('Wiretap sidecar terminal manager', () => {
-   /** @type {{ io: import('socket.io').Server, dispose: () => void } | undefined} */
+   /** @type {{ io: import('socket.io').Server, ready: Promise<void>, dispose: () => void } | undefined} */
    let server;
 
    afterEach(async () => {
@@ -44,8 +44,9 @@ describe('Wiretap sidecar terminal manager', () => {
 
    it('launches a command and streams output, then exits', async () => {
       server = createWiretapServer(0, 0);
+      await server.ready;
       const port = server.io.httpServer.address().port;
-      const client = ioClient(`http://localhost:${port}`);
+      const client = ioClient(`http://127.0.0.1:${port}`);
       await new Promise((r) => client.on('connect', r));
 
       const exited = new Promise((resolve) => client.on(TERMINAL_EXIT, resolve));
@@ -61,8 +62,9 @@ describe('Wiretap sidecar terminal manager', () => {
 
    it('forwards input to the PTY and closes on demand', async () => {
       server = createWiretapServer(0, 0);
+      await server.ready;
       const port = server.io.httpServer.address().port;
-      const client = ioClient(`http://localhost:${port}`);
+      const client = ioClient(`http://127.0.0.1:${port}`);
       await new Promise((r) => client.on('connect', r));
 
       client.emit(TERMINAL_LAUNCH, { command: 'node', cols: 80, rows: 24 });

@@ -55,6 +55,7 @@
       "eslint-fix": "eslint . --fix",
       "server": "tsx watch server/index.ts",
       "server:start": "tsx server/index.ts",
+      "server:mcp": "tsx server/index.ts --mcp-only",
       "typecheck": "tsc -p server/tsconfig.json",
       "stylelint": "stylelint \"src/**/*.{css,svelte}\"",
       "stylelint-fix": "stylelint \"src/**/*.{css,svelte}\" --fix"

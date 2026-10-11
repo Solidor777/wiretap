@@ -22,6 +22,19 @@
       the bridge (drive an MCP HTTP client against the sidecar, assert an Actor appears); optional
       Wiretap settings UI (enable toggle + port); shared-secret handshake on the sidecar socket.
 
+- [ ] MCP stdio transport (not built; only Streamable HTTP exists)
+- [ ] Surface a notice in the terminal stream when the MCP config write fails (today the failure is only logged by the
+      sidecar and `claude` launches without the Wiretap tools; deferred by decision)
+- [ ] Live-Foundry e2e for in-session MCP auto-wiring (launch the terminal `claude` and assert the Wiretap tools
+      are registered; currently covered by unit tests only)
+- [ ] MCP auto-wiring when the module directory is read-only or the sidecar runs relocated (the config root is derived
+      from `import.meta.url`, so `<module root>/.wiretap/` cannot be written): choose a fallback location, and show an
+      in-terminal hint when wiring is skipped (unsafe command or path) or the config write fails
+- [ ] POSIX mode assertions (`.wiretap` 0o700, config file 0o600 in `tests/unit/mcpConfigFile.test.js`) are skipped on
+      Windows and have never run here; needs a Linux CI job to execute them
+- [ ] `server/index.ts` invalid-`WIRETAP_MODE` branch (`process.exit(1)` before listening) is untested; the entry file
+      runs on import, so covering it needs the mode check extracted into a testable function
+
 ## Carried-over cleanups
 
 - [x] Sidecar: kill a running PTY on server shutdown — `dispose()` on the manager + SIGINT/SIGTERM teardown in `index.ts` (Windows console-window-close / CTRL_CLOSE still uncatchable by Node)

@@ -19,3 +19,7 @@ packs/**/LOG
 packs/**/LOCK
 *.old
 tests/vendor/
+
+# Per-sidecar MCP config written by the terminal manager, and unit-test scratch files.
+.wiretap/
+test/tmp/

@@ -11,14 +11,26 @@ import {
 } from '../shared/protocol.js';
 import { resolvePtyOptions } from './ptyOptions.ts';
 import { resolveSpawn } from './spawnCommand.ts';
+import { isSafeConfigPath, planMcpWiring, wireMcpConfig, type McpWiringPlan } from './mcpWiring.ts';
+import { writeMcpConfig } from './mcpConfigFile.ts';
 
 // Maximum bytes of recent PTY output retained for reattach replay.
-const SCROLLBACK_LIMIT = 64 * 1024;
+const SCROLLBACK_LIMIT: number = 64 * 1024;
 
 interface LaunchPayload {
    command?: string;
    cols: number;
    rows: number;
+}
+
+/** Options for the terminal manager. */
+export interface TerminalManagerOptions {
+   /** The MCP port to auto-wire into a launched `claude`; when unset, commands are spawned unchanged. */
+   mcpPort?: number;
+   /** Writes the MCP config file for a port under a root and returns its path; defaults to `writeMcpConfig`. */
+   writeConfig?: (mcpPort: number, root?: string) => string;
+   /** The directory containing `.wiretap/`; defaults to the module root. */
+   configRoot?: string;
 }
 
 interface ResizePayload {
@@ -34,21 +46,66 @@ interface InputPayload {
  * Create the single-PTY terminal manager bound to a Socket.IO server. Spawns at most one PTY, broadcasts
  * its output to all connected sockets, retains a scrollback buffer for reattach, and accepts input/resize/
  * close from any socket.
- * @param io - The Socket.IO server used to broadcast terminal events.
- * @param spawn - The PTY spawner, injectable for testing; defaults to `pty.spawn`.
- * @returns The manager with a per-socket connection handler and a dispose method.
+ * @param {Server} io - The Socket.IO server used to broadcast terminal events.
+ * @param {typeof pty.spawn} [spawn] - The PTY spawner, injectable for testing; defaults to `pty.spawn`.
+ * @param {TerminalManagerOptions} [options] - Optional MCP auto-wiring settings; a plain `claude` launch gets
+ *        `--mcp-config` appended.
+ * @returns {{ handleConnection: (socket: Socket) => void; dispose: () => void }} The manager with a per-socket
+ *          connection handler and a dispose method.
  */
 export function createTerminalManager(
    io: Server,
    spawn: typeof pty.spawn = pty.spawn,
+   options: TerminalManagerOptions = {},
 ): { handleConnection: (socket: Socket) => void; dispose: () => void } {
+   // The running PTY, or null when none is running.
    let term: pty.IPty | null = null;
-   let scrollback = '';
-   let size = { cols: 80, rows: 24 };
+   // Recent PTY output replayed to a reattaching client.
+   let scrollback: string = '';
+   // The last known terminal dimensions.
+   let size: ResizePayload = { cols: 80, rows: 24 };
+   /**
+    * Auto-wire the MCP endpoint into an allowlisted `claude` command. The config file is (re)written on every
+    * wired launch. Returns the command unchanged (and logs why when the cause is a skipped command line, an
+    * unquotable config path or a failed config write) when no MCP port is configured, the command is not `claude`, or
+    * the config file cannot be written.
+    * @param {string} command - The command line requested for launch.
+    * @returns {string} The command line to spawn.
+    */
+   function withMcpWiring(command: string): string {
+      // The configured MCP port, if any.
+      const mcpPort: number | undefined = options.mcpPort;
+      if (mcpPort === undefined || mcpPort <= 0) {
+         return command;
+      }
+      // The wiring decision for this command line.
+      const plan: McpWiringPlan = planMcpWiring(command);
+      if (plan.kind === 'not-claude') {
+         return command;
+      }
+      if (plan.kind === 'skip') {
+         console.warn(`Wiretap sidecar | MCP auto-wiring skipped: ${plan.reason}`);
+         return command;
+      }
+      try {
+         // The config writer; defaults to the module-local owner-only writer.
+         const writeConfig: (port: number, root?: string) => string = options.writeConfig ?? writeMcpConfig;
+         // The config file path, rewritten on every wired launch.
+         const file: string = writeConfig(mcpPort, options.configRoot);
+         if (!isSafeConfigPath(file)) {
+            console.warn('Wiretap sidecar | MCP auto-wiring skipped: the config path cannot be safely quoted');
+            return command;
+         }
+         return wireMcpConfig(command, file);
+      } catch (error) {
+         console.error('Wiretap sidecar | could not write the MCP config file; launching claude without it:', error);
+         return command;
+      }
+   }
 
    /**
     * Append a chunk to the scrollback buffer, trimming to the byte cap.
-    * @param chunk - The output chunk to retain.
+    * @param {string} chunk - The output chunk to retain.
     */
    function appendScrollback(chunk: string): void {
       scrollback += chunk;
@@ -58,18 +115,34 @@ export function createTerminalManager(
    }
 
    /**
-    * Spawn the PTY if none is running.
-    * @param payload - The launch parameters.
+    * Spawn the PTY if none is running. A payload that is not an object, or whose `command` is neither absent nor a
+    * string, launches nothing: the payload comes from an untrusted socket event.
+    * @param {LaunchPayload} payload - The launch parameters.
     */
    function launch(payload: LaunchPayload): void {
       if (term) {
          return;
       }
-      const command = payload.command ?? 'claude';
+      if (
+         typeof payload !== 'object' ||
+         payload === null ||
+         (payload.command !== undefined && typeof payload.command !== 'string')
+      ) {
+         console.warn('Wiretap sidecar | terminal launch ignored: the payload command is not a string');
+         return;
+      }
+      // The command line to spawn, with the MCP config wired in when applicable.
+      const command: string = withMcpWiring(payload.command ?? 'claude');
       size = { cols: payload.cols, rows: payload.rows };
       scrollback = '';
-      const { file, args } = resolveSpawn(command, process.platform, process.env.ComSpec);
-      const child = spawn(file, args, {
+      // The spawn executable and arguments for the host platform.
+      const { file, args }: { file: string; args: string[] | string } = resolveSpawn(
+         command,
+         process.platform,
+         process.env.ComSpec,
+      );
+      // The spawned PTY.
+      const child: pty.IPty = spawn(file, args, {
          name: 'xterm-color',
          cols: size.cols,
          rows: size.rows,
@@ -108,14 +181,18 @@ export function createTerminalManager(
       },
 
       /**
-       * Tear down the manager: kill any running PTY and clear retained state so the PTY does not orphan.
-       * Safe to call multiple times; a second call is a no-op once the term has been cleared.
-       * @returns Nothing.
+       * Tear down the manager: kill any running PTY and clear retained state. State is cleared even if the kill
+       * throws (the kill error then propagates). Safe to call multiple times; a second call is a no-op. The MCP
+       * config file is left in place.
+       * @returns {void}
        */
       dispose(): void {
-         term?.kill();
-         term = null;
-         scrollback = '';
+         try {
+            term?.kill();
+         } finally {
+            term = null;
+            scrollback = '';
+         }
       },
    };
 }

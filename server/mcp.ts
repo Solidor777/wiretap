@@ -72,9 +72,13 @@ function buildServer(bridge: FoundryBridge): McpServer {
  * Start the MCP HTTP server (Streamable HTTP, stateless) bound to localhost only.
  * @param {FoundryBridge} bridge - The Foundry bridge the tools execute against.
  * @param {number} port - The TCP port to listen on.
- * @returns {{ close: () => void }} A handle with a `close` method to stop the HTTP server.
+ * @returns {{ close: () => void; ready: Promise<void> }} A handle with a `close` method to stop the HTTP server and a
+ *          promise that resolves once the port is bound or rejects (for example EADDRINUSE) when binding fails.
  */
-export function startMcpServer(bridge: FoundryBridge, port: number): { close: () => void } {
+export function startMcpServer(
+   bridge: FoundryBridge,
+   port: number,
+): { close: () => void; ready: Promise<void> } {
    const httpServer = http.createServer(async (req, res) => {
       if (req.method === 'POST' && req.url === '/mcp') {
          let body: unknown;
@@ -114,6 +118,13 @@ export function startMcpServer(bridge: FoundryBridge, port: number): { close: ()
       }
    });
    // Bind to loopback only: this endpoint executes game mutations and must not be reachable off-host.
-   httpServer.listen(port, '127.0.0.1');
-   return { close: () => httpServer.close() };
+   // Resolves once the port is bound; rejects on a bind failure so it is not an uncaught 'error' event.
+   const ready: Promise<void> = new Promise((resolve, reject) => {
+      httpServer.once('error', reject);
+      httpServer.listen(port, '127.0.0.1', () => {
+         httpServer.off('error', reject);
+         resolve();
+      });
+   });
+   return { close: () => httpServer.close(), ready };
 }
