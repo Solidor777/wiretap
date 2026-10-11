@@ -253,6 +253,27 @@ export function pickWatchPid(ancestors) {
 }
 
 /**
+ * Picks the process whose death should take a standalone-launched server down: the process that launched the
+ * run, not the `npm` wrapper in between. `npm run` keeps its own node process alive while the script runs, so
+ * that wrapper outlives a killed invoker and must not be watched. Through npm the chain is
+ * `[leading shells…, npm wrapper, invoker…]`: skip the leading shells, skip exactly one non-shell (the wrapper),
+ * then take the next ancestor whatever it is, because an invoking shell owns the run. Without npm the nearest
+ * ancestor, shell or not, is the invoker.
+ * @param {{ pid: number, name: string }[]} ancestors - The ancestor chain, nearest first.
+ * @param {boolean} viaNpm - Whether the run came through npm (the `npm_execpath` environment variable is set).
+ * @returns {number | undefined} The pid to watch, or undefined when the chain is exhausted.
+ */
+export function pickStandaloneWatchPid(ancestors, viaNpm) {
+   if (!viaNpm) {
+      return ancestors[0]?.pid;
+   }
+
+   /** @type {number} Index of the npm wrapper: the first non-shell ancestor, or -1 when every entry is a shell. */
+   const wrapperIndex = ancestors.findIndex((entry) => !SHELL_NAME.test(entry.name));
+   return wrapperIndex === -1 ? undefined : ancestors[wrapperIndex + 1]?.pid;
+}
+
+/**
  * Starts the server unless one already listens on the port, and guarantees the started server dies with
  * the run: on the watched process disappearing, on `stop()`, or on the server exiting by itself.
  * @param {SuperviseOptions} options - What to run and what to watch.

@@ -9,8 +9,8 @@ Svelte 5 (runes), SCSS, and Vite.
 - `npm run build` — production build (emits `index.js` + `style.css`)
 - `npm test` — unit tests (Vitest)
 - `npm run test:e2e` — end-to-end tests (Playwright)
-- `npm run foundry:start` — starts Foundry on the configured world if nothing answers on the port, and stays up until
-  the process ends
+- `npm run foundry:start` — starts Foundry on the configured world if nothing answers on the port, and stops it when the
+  process that ran the command ends
 
 ## Running e2e / starting Foundry
 

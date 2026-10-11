@@ -1,5 +1,25 @@
 # Closed bugs
 
+## `npm run foundry:start` did not stop Foundry when the invoking process was stopped
+
+- **Was:** the supervisor (`scripts/e2e-foundry-server.mjs`) watched the nearest non-shell ancestor (`pickWatchPid`).
+  Under `npm run foundry:start` that is npm's own `node.exe`, which waits for the supervisor and survives a killed
+  invoker, so the watch never fired.
+- **Measured (2026-10-11):** the chain is supervisor <- `cmd.exe /d /s /c node ...` <- npm `node.exe npm-cli.js` <- outer
+  `cmd.exe` (or harness shell) <- invoker. After killing only the outer `cmd`, npm node, the supervisor and Foundry were
+  all still alive and :30000 still listened.
+- **Fix:** `package.json` `foundry:start` passes `--standalone`. In that mode the launcher watches
+  `pickStandaloneWatchPid(ancestors, viaNpm)` (`scripts/lib/superviseServer.mjs`): skip leading shells, skip the npm
+  wrapper when `npm_execpath` is set, take the next ancestor (shells included); without npm the nearest ancestor;
+  `process.ppid` when the chain is exhausted. Playwright's `webServer` command is unchanged and still uses
+  `pickWatchPid`.
+- **Measured after the fix:** `tests/unit/SuperviseServer.test.js` `pickStandaloneWatchPid` tests (5) failed before the
+  implementation (4 failed, 8 passed in the file; the `pickWatchPid` regression test passed already) and pass after
+  (12 of 12); changing the wrapper skip (`wrapperIndex + 1` to `wrapperIndex`) fails 3 of them.
+- **Measured (2026-10-11):** launched `cmd /c npm run foundry:start`, waited for :30000, then killed only the outer
+  `cmd`. All five processes in the chain (outer cmd, npm node, shim cmd, supervisor, Foundry) exited within 5 s and
+  :30000 stopped listening. Before the fix the same test left npm node, supervisor and Foundry running.
+
 ## Terminal socket handlers did not validate payloads
 
 - **Was:** `server/terminal.ts` read `payload.data`, `payload.cols` and `payload.rows` from untrusted `TERMINAL_INPUT`,

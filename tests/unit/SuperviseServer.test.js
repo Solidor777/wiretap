@@ -5,6 +5,7 @@ import {
    getAncestors,
    isAlive,
    isPortInUse,
+   pickStandaloneWatchPid,
    pickWatchPid,
    superviseServer,
 } from '../../scripts/lib/superviseServer.mjs';
@@ -196,5 +197,59 @@ describe('process helpers', () => {
          pid: 10,
          name: 'sh',
       }])).toBeUndefined();
+   });
+});
+
+describe('pickStandaloneWatchPid', () => {
+   /** @type {{ pid: number, name: string }[]} The measured `npm run foundry:start` chain, nearest first. */
+   const npmChain = [
+      {
+         pid: 10,
+         name: 'cmd.exe',
+      },
+      {
+         pid: 20,
+         name: 'node.exe',
+      },
+      {
+         pid: 30,
+         name: 'cmd.exe',
+      },
+      {
+         pid: 40,
+         name: 'claude.exe',
+      },
+   ];
+
+   it('through npm, watches the shell that launched the npm wrapper', () => {
+      expect(pickStandaloneWatchPid(npmChain, true)).toBe(30);
+   });
+
+   it('through npm, watches a non-shell invoker when no shell sits between', () => {
+      expect(pickStandaloneWatchPid([
+         npmChain[0],
+         npmChain[1],
+         npmChain[3],
+      ], true)).toBe(40);
+   });
+
+   it('without npm, watches the nearest ancestor even when it is a shell', () => {
+      expect(pickStandaloneWatchPid([
+         {
+            pid: 10,
+            name: 'bash',
+         },
+         npmChain[3],
+      ], false)).toBe(10);
+   });
+
+   it('returns undefined when the chain is exhausted', () => {
+      expect(pickStandaloneWatchPid([], false), 'empty, direct').toBeUndefined();
+      expect(pickStandaloneWatchPid(npmChain.slice(0, 2), true), 'npm wrapper is the last entry').toBeUndefined();
+      expect(pickStandaloneWatchPid([npmChain[0]], true), 'only shells').toBeUndefined();
+   });
+
+   it('leaves pickWatchPid on the npm chain at the npm wrapper', () => {
+      expect(pickWatchPid(npmChain)).toBe(20);
    });
 });
