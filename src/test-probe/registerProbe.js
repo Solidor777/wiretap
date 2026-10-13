@@ -1,4 +1,54 @@
 import { connection } from '~/bridge/TerminalConnection.svelte.js';
+import { registerScript } from '~/bridge/scripts/registry.js';
+
+/**
+ * The e2e-only script definitions. They exist only in the e2e build, which is the only build that loads this module.
+ * @type {ReadonlyArray<{ definition: import('$shared/scripts.js').ScriptDefinition, handler: Function }>}
+ */
+const E2E_SCRIPTS = [
+   {
+      definition: {
+         name: 'e2e_gated',
+         version: '1.0.0',
+         description: 'E2E probe script behind the allowMacroExecution gate.',
+         inputSchema: {
+            type: 'object',
+            properties: {},
+         },
+         result: { budgetBytes: 256 },
+         requires: 'api',
+         mutates: false,
+         gate: 'allowMacroExecution',
+      },
+      handler: async () => ({ ran: true }),
+   },
+   {
+      definition: {
+         name: 'e2e_matrix',
+         version: '1.0.0',
+         description: 'E2E probe script whose arguments the sidecar accepts but the client value bound refuses.',
+         inputSchema: {
+            type: 'object',
+            properties: {
+               rows: {
+                  type: 'array',
+                  maxItems: 1000,
+                  items: {
+                     type: 'array',
+                     maxItems: 1000,
+                     items: { type: 'boolean' },
+                  },
+               },
+            },
+            required: ['rows'],
+         },
+         result: { budgetBytes: 256 },
+         requires: 'api',
+         mutates: false,
+      },
+      handler: async (args) => ({ rows: args.rows.length }),
+   },
+];
 
 /**
  * Install the test-only probe API on the module's public API object. Only imported when the bundle is
@@ -40,6 +90,19 @@ export default function registerProbe(api) {
        */
       closePopout() {
          return ui.wiretap?.popout?.close();
+      },
+
+      /**
+       * Script registry controls for the e2e specs.
+       */
+      scripts: {
+         /**
+          * Register the e2e-only scripts on the client registry, which pushes the new list to the sidecar.
+          * @returns {Array<{ ok: boolean, name?: string, reason?: string }>} The outcome of each registration.
+          */
+         registerE2e() {
+            return E2E_SCRIPTS.map(({ definition, handler }) => registerScript(definition, handler));
+         },
       },
 
       /**

@@ -3,12 +3,19 @@ import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
    BRIDGE_PING,
-   OP_CREATE_ACTOR,
+   BRIDGE_REGISTRY,
+   OP_CALL_TOOL,
    OP_FAILED,
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
 } from '$shared/protocol.js';
+import { cleanForLog, describeCause } from '$shared/logText.js';
+import { SCRIPT_API_VERSION } from '$shared/scripts.js';
+import { truncateUtf8 } from '$shared/utf8.js';
 import { gateNameFromSettingKey, readGateState } from '~/bridge/gates.js';
+import { createCallTool } from '~/bridge/scripts/callTool.js';
+import { ERROR_MESSAGE_MAX_BYTES } from '~/bridge/scripts/core.js';
+import { ScriptError, scriptRegistry } from '~/bridge/scripts/registry.js';
 
 /**
  * Live bridge state; `identified` is true only from an ok identify ack until the next disconnect, refusal or
@@ -64,59 +71,111 @@ export function reidentifyBridge() {
 }
 
 /**
- * Create an Actor in the live world. Resolves the actor subtype client-side so the tool stays
- * system-agnostic: an omitted type defaults to the world's first concrete subtype, and an unknown
- * type is rejected with the list of valid types.
- * @param {{ name: string, type?: string }} params - The actor name and optional subtype.
- * @returns {Promise<{ uuid: string, id: string, name: string, type: string }>} The created actor summary.
+ * The unsubscribe function of the registry listener currently wired; null until `initFoundryBridge` wires a socket.
+ * @type {(() => void) | null}
  */
-export async function createActor({ name, type }) {
-   // Concrete subtypes = all declared Actor types minus the abstract base type.
-   const concreteTypes = game.documentTypes.Actor.filter((t) => t !== CONST.BASE_DOCUMENT_TYPE);
-   if (concreteTypes.length === 0) {
-      throw new Error('No concrete Actor subtypes are registered in this world.');
+let registryUnsubscribe = null;
+
+/**
+ * Build the text of an op failure: the thrown value's message, or its string form, bounded to the ack error budget.
+ * @param {unknown} thrown - The value an op handler threw.
+ * @returns {string} A message of at most `ERROR_MESSAGE_MAX_BYTES` bytes; never throws.
+ */
+function failureMessage(thrown) {
+   /** @type {string} The unbounded text. */
+   let text;
+   try {
+      text = typeof thrown?.message === 'string' ? thrown.message : String(thrown);
+   } catch {
+      text = 'The operation failed.';
    }
-   if (type !== undefined && !concreteTypes.includes(type)) {
-      throw new Error(`Unknown actor type '${type}'. Valid types: ${concreteTypes.join(', ')}`);
-   }
-   const resolvedType = type ?? concreteTypes[0];
-   const actor = await Actor.create({ name, type: resolvedType });
-   return { uuid: actor.uuid, id: actor.id, name: actor.name, type: actor.type };
+   return truncateUtf8(text, ERROR_MESSAGE_MAX_BYTES);
 }
 
 /**
- * Op-name to handler registry; new tools add one entry.
- * @type {Record<string, (params: object) => Promise<unknown>>}
+ * Longest caller-supplied op name echoed in an error, in UTF-8 bytes.
+ * @type {number}
  */
-const OP_HANDLERS = {
-   [OP_CREATE_ACTOR]: createActor,
-};
+const OP_ECHO_MAX_BYTES = 48;
+
+/**
+ * Answer an invoke request when the sidecar supplied an ack callback. A missing ack is ignored and a throwing ack is
+ * logged, so a reply never becomes an unhandled rejection.
+ * @param {unknown} ack - The callback Socket.IO supplied, if any.
+ * @param {object} value - The ack value.
+ * @returns {void}
+ */
+function replyInvoke(ack, value) {
+   if (typeof ack !== 'function') {
+      return;
+   }
+   try {
+      ack(value);
+   } catch (cause) {
+      console.error(`Wiretap | bridge invoke ack failed: ${describeCause(cause)}`);
+   }
+}
 
 /**
  * Wire the Foundry bridge onto the connection's socket: send the identify (with the gate snapshot) on each connect
- * (acked by the sidecar), push a fresh gate snapshot when a gate setting changes, track the identified state, answer
- * BRIDGE_INVOKE requests by dispatching through the op registry, and ack BRIDGE_PING liveness probes with
- * `{ ok: true }`.
+ * (acked by the sidecar), send the script registry after each ok identify ack and, once per task, whenever it changes,
+ * push a fresh gate snapshot when a gate setting changes, track the identified state, answer BRIDGE_INVOKE requests by
+ * dispatching through the op table, and ack BRIDGE_PING liveness probes with `{ ok: true }`.
  * Reuses the single socket owned by the TerminalConnection (no second connection is opened).
  * @param {import('~/bridge/TerminalConnection.svelte.js').TerminalConnection} connection - The shared connection.
+ * @param {object} [options] - Wiring options.
+ * @param {import('~/bridge/scripts/registry.js').ScriptRegistry} [options.scripts] - The script registry to serve;
+ * defaults to the client's own.
  * @returns {void}
  */
-export function initFoundryBridge(connection) {
+export function initFoundryBridge(connection, { scripts = scriptRegistry } = {}) {
+   /**
+    * Op-name to handler table; new core ops add one entry.
+    * @type {Record<string, (params: unknown) => Promise<unknown>>}
+    */
+   const opHandlers = {
+      [OP_CALL_TOOL]: createCallTool({ registry: scripts }),
+   };
+
    connection.onSocket((socket) => {
-      // Answer operation requests (registered once per socket; persists across reconnects).
-      socket.on(BRIDGE_INVOKE, async ({ op, params }, ack) => {
-         // Own-property lookup: inherited names such as `constructor` or `__proto__` must stay unknown ops.
-         /** @type {((params: object) => Promise<unknown>) | undefined} The registered handler, if any. */
-         const handler = Object.hasOwn(OP_HANDLERS, op) ? OP_HANDLERS[op] : undefined;
-         if (!handler) {
-            ack({ ok: false, error: { code: OP_FAILED, message: `Unknown op '${op}'.` } });
-            return;
-         }
+      // Answer operation requests (registered once per socket; persists across reconnects). The whole listener runs in
+      // one try: a malformed request or a missing ack never becomes an unhandled rejection.
+      socket.on(BRIDGE_INVOKE, async (request, ack) => {
          try {
-            const result = await handler(params);
-            ack({ ok: true, result });
-         } catch (err) {
-            ack({ ok: false, error: { code: OP_FAILED, message: err?.message ?? String(err) } });
+            /** @type {unknown} The requested op name; undefined for a request that is not an object. */
+            const op = typeof request === 'object' && request !== null ? request.op : undefined;
+            // Own-property lookup: inherited names such as `constructor` or `__proto__` must stay unknown ops.
+            /** @type {((params: unknown) => Promise<unknown>) | undefined} The registered handler, if any. */
+            const handler = typeof op === 'string' && Object.hasOwn(opHandlers, op) ? opHandlers[op] : undefined;
+            if (!handler) {
+               replyInvoke(ack, {
+                  ok: false,
+                  error: {
+                     code: OP_FAILED,
+                     message: truncateUtf8(
+                        `Unknown op '${cleanForLog(op, OP_ECHO_MAX_BYTES)}'.`,
+                        ERROR_MESSAGE_MAX_BYTES,
+                     ),
+                  },
+               });
+               return;
+            }
+            try {
+               replyInvoke(ack, {
+                  ok: true,
+                  result: await handler(request.params),
+               });
+            } catch (err) {
+               replyInvoke(ack, {
+                  ok: false,
+                  error: {
+                     code: err instanceof ScriptError ? err.code : OP_FAILED,
+                     message: failureMessage(err),
+                  },
+               });
+            }
+         } catch (cause) {
+            console.error(`Wiretap | bridge invoke failed: ${describeCause(cause)}`);
          }
       });
 
@@ -130,6 +189,62 @@ export function initFoundryBridge(connection) {
 
       /** @type {number} Token of the latest identify attempt or disconnect; an ack for any other token is stale. */
       let attempt = 0;
+
+      /**
+       * Send the complete script list to the sidecar, which replaces this endpoint's previous list with it. Only an
+       * identified, connected endpoint sends: the sidecar refuses a registry from a socket it has not registered. The
+       * payload holds definitions only; handlers never leave the client. The sidecar's ack reports how many entries it
+       * accepted and refused (the reasons are in the sidecar log).
+       * @returns {void}
+       */
+      const sendRegistry = () => {
+         if (!bridgeState.identified || !socket.connected) {
+            return;
+         }
+         socket.emit(
+            BRIDGE_REGISTRY,
+            {
+               apiVersion: SCRIPT_API_VERSION,
+               scripts: scripts.definitions(),
+            },
+            (ack) => {
+               if (ack?.ok === true) {
+                  if (ack.refused > 0) {
+                     console.warn(
+                        `Wiretap | bridge registry: the sidecar accepted ${ack.accepted} and refused ${ack.refused} ` +
+                           'scripts; the sidecar log gives the reasons.',
+                     );
+                  }
+                  return;
+               }
+               /** @type {string} The refusal code. */
+               const code = ack?.error?.code ?? 'UNKNOWN';
+               /** @type {string} The refusal reason. */
+               const message = ack?.error?.message ?? 'No reason given.';
+               console.error(`Wiretap | bridge registry refused (${code}): ${message}`);
+            },
+         );
+      };
+      /** @type {boolean} Whether a registry push is queued for the end of the current task. */
+      let registryPushQueued = false;
+
+      /**
+       * Queue one registry push for the end of the current task, so scripts registered in the same task share one push:
+       * the sidecar applies only a few registry pushes per second per socket.
+       * @returns {void}
+       */
+      const queueRegistryPush = () => {
+         if (registryPushQueued) {
+            return;
+         }
+         registryPushQueued = true;
+         queueMicrotask(() => {
+            registryPushQueued = false;
+            sendRegistry();
+         });
+      };
+      registryUnsubscribe?.();
+      registryUnsubscribe = scripts.subscribe(queueRegistryPush);
       /** @type {string | undefined} The kind carried by the latest identify emit. */
       let sentKind;
 
@@ -161,11 +276,15 @@ export function initFoundryBridge(connection) {
                }
                if (ack?.ok === true) {
                   bridgeState.identified = true;
+                  sendRegistry();
                   return;
                }
                bridgeState.identified = false;
+               /** @type {string} The refusal code. */
                const code = ack?.error?.code ?? 'UNKNOWN';
+               /** @type {string} The refusal reason. */
                const message = ack?.error?.message ?? 'No reason given.';
+               /** @type {string} The advice appended to a protocol mismatch. */
                const hint = code === PROTOCOL_MISMATCH ? ' Reload Foundry to load the current Wiretap client.' : '';
                console.error(`Wiretap | bridge identify refused (${code}): ${message}${hint}`);
             },
@@ -200,7 +319,9 @@ export function initFoundryBridge(connection) {
             if (ack?.ok === true) {
                return;
             }
+            /** @type {string} The refusal code. */
             const code = ack?.error?.code ?? 'UNKNOWN';
+            /** @type {string} The refusal reason. */
             const message = ack?.error?.message ?? 'No reason given.';
             console.error(`Wiretap | bridge gate state refused (${code}): ${message}`);
          });
