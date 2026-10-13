@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { login } from './fixtures.js';
+import { createArguments, firstSubtype, idOf } from './writeHelpers.js';
 import { E2E_MCP_PORT } from './ports.js';
 import { startGateSidecar, stopSidecar } from './sidecar.js';
 import { recordGateSettings, restoreGateSettings } from './gates.js';
@@ -70,16 +71,24 @@ async function callJson(name, args, max = Infinity) {
 }
 
 /**
- * Create an Actor through the create_actor tool and record it for teardown.
+ * Create an Actor through the create_documents tool and record it for teardown.
  * @param {import('@playwright/test').Page} page - The Foundry page.
  * @param {string} name - The full name, starting with the e2e prefix.
  * @returns {Promise<string>} The actor uuid.
  */
 async function createRecordedActor(page, name) {
-   const reply = await callJson('create_actor', { name });
+   const [reply] = await callJson(
+      'create_documents',
+      createArguments('Actor', [
+         {
+            name,
+            type: await firstSubtype(page, 'Actor'),
+         },
+      ]),
+   );
    await recordDocument(page, {
       documentName: 'Actor',
-      id: reply.uuid.split('.').pop(),
+      id: idOf(reply.uuid),
       uuid: reply.uuid,
       createdBy: 'searchSchema.spec',
    });
@@ -102,7 +111,7 @@ test.describe('wiretap search_documents and describe_schema', () => {
       await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${E2E_MCP_PORT}/mcp`)));
       await expect.poll(toolNames, { timeout: POLL_MS }).toEqual(
          expect.arrayContaining([
-            'create_actor',
+            'create_documents',
             'describe_schema',
             'search_documents',
          ]),

@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { login } from './fixtures.js';
+import { createArguments, firstSubtype, idOf } from './writeHelpers.js';
 import { E2E_MCP_PORT } from './ports.js';
 import { startGateSidecar, stopSidecar } from './sidecar.js';
 import { recordGateSettings, restoreGateSettings } from './gates.js';
@@ -75,17 +76,25 @@ async function readJson(args) {
 }
 
 /**
- * Create an Actor through the create_actor tool, record it for teardown and return its uuid.
+ * Create an Actor through the create_documents tool, record it for teardown and return its uuid.
  * @param {import('@playwright/test').Page} page - The Foundry page.
  * @returns {Promise<string>} The actor uuid.
  */
 async function createRecordedActor(page) {
-   const call = await callText('create_actor', { name: `${E2E_PREFIX}Read ${Date.now()}` });
+   const call = await callText(
+      'create_documents',
+      createArguments('Actor', [
+         {
+            name: `${E2E_PREFIX}Read ${Date.now()}`,
+            type: await firstSubtype(page, 'Actor'),
+         },
+      ]),
+   );
    expect(call.isError, call.text).toBe(false);
-   const reply = JSON.parse(call.text);
+   const [reply] = JSON.parse(call.text);
    await recordDocument(page, {
       documentName: 'Actor',
-      id: reply.uuid.split('.').pop(),
+      id: idOf(reply.uuid),
       uuid: reply.uuid,
       createdBy: 'readTools.spec',
    });
@@ -109,7 +118,7 @@ test.describe('wiretap core read tools', () => {
       await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${E2E_MCP_PORT}/mcp`)));
       await expect.poll(toolNames, { timeout: POLL_MS }).toEqual(
          expect.arrayContaining([
-            'create_actor',
+            'create_documents',
             'get_document',
             'list_document_types',
          ]),
@@ -168,9 +177,10 @@ test.describe('wiretap core read tools', () => {
       const view = JSON.parse(compact.text);
       expect(view.uuid).toBe(uuid);
       expect(view.embedded.items.total).toBe(10);
+      // The collection order follows the random ids, so the first row is any of the ten items.
       expect(view.embedded.items.rows[0]).toEqual([
          expect.stringMatching(ID_PATTERN),
-         'Wiretap E2E item 0',
+         expect.stringMatching(/^Wiretap E2E item \d$/),
          expect.any(String),
       ]);
       expect(Object.keys(view.fields)).toEqual(

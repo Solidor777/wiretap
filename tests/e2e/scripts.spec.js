@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { login } from './fixtures.js';
+import { createArguments, firstSubtype, idOf } from './writeHelpers.js';
 import { E2E_MCP_PORT } from './ports.js';
 import { startGateSidecar, stopSidecar } from './sidecar.js';
 import { readSidecarGateState, recordGateSettings, restoreGateSettings } from './gates.js';
@@ -74,22 +75,25 @@ test.describe('wiretap registered scripts', () => {
       assertSettled(settled);
    });
 
-   test('lists create_actor beside read_handle and creates an actor in the live world', async ({ page }) => {
+   test('lists create_documents beside read_handle and creates an actor in the live world', async ({ page }) => {
       await expect
          .poll(toolNames, { timeout: POLL_MS })
-         .toEqual(expect.arrayContaining(['create_actor', 'read_handle']));
+         .toEqual(expect.arrayContaining(['create_documents', 'read_handle']));
       const { tools } = await client.listTools();
-      expect(tools.find((tool) => tool.name === 'create_actor').annotations).toMatchObject({ readOnlyHint: false });
+      expect(tools.find((tool) => tool.name === 'create_documents').annotations).toMatchObject({ readOnlyHint: false });
       expect(tools.find((tool) => tool.name === 'read_handle').annotations?.readOnlyHint).not.toBe(false);
 
       const name = `${E2E_PREFIX}Actor ${Date.now()}`;
-      const call = await callText('create_actor', { name });
+      const call = await callText(
+         'create_documents',
+         createArguments('Actor', [{ name, type: await firstSubtype(page, 'Actor') }]),
+      );
       // The id is known only from the reply, so the record is written before anything else can fail.
-      const reply = call.isError ? undefined : JSON.parse(call.text);
+      const [reply] = call.isError ? [] : JSON.parse(call.text);
       if (reply) {
          await recordDocument(page, {
             documentName: 'Actor',
-            id: reply.uuid.split('.').pop(),
+            id: idOf(reply.uuid),
             uuid: reply.uuid,
             createdBy: 'scripts.spec',
          });
@@ -100,7 +104,7 @@ test.describe('wiretap registered scripts', () => {
          name,
          type: expect.any(String),
       });
-      expect(new TextEncoder().encode(call.text).length).toBeLessThanOrEqual(256);
+      expect(new TextEncoder().encode(JSON.stringify(reply)).length).toBeLessThanOrEqual(256);
 
       // The actor exists in the live world with the requested name and the acked type.
       const live = await page.evaluate(async (uuid) => {
@@ -113,12 +117,12 @@ test.describe('wiretap registered scripts', () => {
       });
    });
 
-   test('refuses invalid create_actor arguments without creating anything', async ({ page }) => {
-      await expect.poll(toolNames, { timeout: POLL_MS }).toContain('create_actor');
+   test('refuses invalid create_documents arguments without creating anything', async ({ page }) => {
+      await expect.poll(toolNames, { timeout: POLL_MS }).toContain('create_documents');
       const before = await page.evaluate(() => game.actors.size);
       // A wrong type is refused by the sidecar's own schema check, before the call reaches the client; the client
       // validator is exercised by the 'runs the client argument validator' test below.
-      const call = await callText('create_actor', { name: 5 });
+      const call = await callText('create_documents', { documentName: 5, data: [] });
       expect(call.isError).toBe(true);
       expect(await page.evaluate(() => game.actors.size)).toBe(before);
    });
