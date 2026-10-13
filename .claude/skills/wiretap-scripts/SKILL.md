@@ -1,6 +1,6 @@
 ---
 name: wiretap-scripts
-description: Wiretap client script runtime — the shipped script registry, the callTool dispatcher, ctx (core, shape, signal, dom), argument validation, create_actor, the core read scripts list_document_types, get_document, search_documents and describe_schema (canonical export, exclusions, key-field lists, search paging, schema walker), and the user-facing skill skills/wiretap. Use when reading or editing src/bridge/scripts/, shared/schemaValidate.js, shared/utf8.js, shared/logText.js or skills/.
+description: Wiretap client script runtime — the shipped script registry, the callTool dispatcher, ctx (core, shape, signal, dom), argument validation, the core read scripts list_document_types, get_document, search_documents and describe_schema, the core write scripts create_documents, update_documents and delete_documents (canonical export, exclusions, key-field lists, search paging, schema walker), and the user-facing skill skills/wiretap. Use when reading or editing src/bridge/scripts/, shared/schemaValidate.js, shared/utf8.js, shared/logText.js or skills/.
 paths:
   - "src/bridge/scripts/**"
   - "shared/schemaValidate.js"
@@ -12,7 +12,10 @@ paths:
   - "tests/unit/scriptShape.test.js"
   - "tests/unit/scriptCore.test.js"
   - "tests/unit/callTool.test.js"
-  - "tests/unit/createActor.test.js"
+  - "tests/unit/write*.test.js"
+  - "tests/unit/mockWriteWorld.js"
+  - "tests/e2e/writeTools.spec.js"
+  - "tests/e2e/writeHelpers.js"
   - "tests/unit/canonical.test.js"
   - "tests/unit/getDocument.test.js"
   - "tests/unit/listDocumentTypes.test.js"
@@ -52,17 +55,20 @@ client-only, never on the wire). Every MCP tool except the sidecar's `read_handl
 | `registry.js` | `createScriptRegistry({ log? })` → `{ register, get, definitions, subscribe }`; module singleton `scriptRegistry`; `registerScript(def, handler)`; `ScriptError(code, message)` |
 | `callTool.js` | `createCallTool({ registry, timeoutMs? })` → the `callTool` op handler; `SCRIPT_TIMEOUT_MS` (8000), `RESULT_WIRE_MAX_BYTES` (900,000), `SCRIPT_BUSY` |
 | `ctx.js` | `buildContext(definition, signal, log)` → frozen `{ core, shape, signal, log, dom? }`; `log` is the registry's log sink (`registry.log`) |
-| `core.js` | `scriptCore` (frozen): `createActor({ name, type? })`, `documentTypes()`, `readDocument(reference, { derived? })`, `searchDocuments(params)`, `describeSchema(params)`; `ERROR_MESSAGE_MAX_BYTES` (256) |
+| `core.js` | `scriptCore` (frozen): `createDocuments(params)`, `updateDocuments(params)`, `deleteDocuments(params)`, `documentTypes()`, `readDocument(reference, { derived? })`, `searchDocuments(params)`, `describeSchema(params)`; `ERROR_MESSAGE_MAX_BYTES` (256) |
 | `shape.js` | `shape` (frozen): `compact`, `project`, `paths`, `ack` |
 | `canonical.js` | `exportDocument(document, { derived? })` (the canonical export, the exclusions and the secret redaction), `unreadable(document)`, `resolveDocument(reference)`, `WIRETAP_SETTING_PREFIX`, `USER_EXCLUDED_FIELDS`, `SECRET_CORE_SETTINGS`, `SECRET_KEY`, `SECRET_SETTING_KEY`, `REDACT_MAX_DEPTH`, `REDACT_MAX_NODES` |
 | `keyFields.js`, `keyFields.json` | `keyPathsFor(systemId, documentName, type)` over the reviewed per-subtype key-field lists (the `titan` system only) |
 | `search.js` | `searchDocuments(params, signal)`: candidates, canonical exclusions, filters, ordering, cursor, page bound, work caps; `FILTERS_MAX` |
 | `schemaWalk.js` | The field walker: `createWalkState`, `describeField`, `outlineFields`, `stepInto`; `SCHEMA_DEPTH_MAX` (3), `SCHEMA_NODES_MAX` (150), `OUTLINE_MAX` (80) |
 | `schemaDescribe.js` | `describeSchema(params, log)`: blank example, outlines, path subtree, size bound |
-| `definitions.js` | `listDocumentTypesDefinition`, `getDocumentDefinition`, `searchDocumentsDefinition`, `describeSchemaDefinition`; relative imports only, so the `tsx`-run measurement can load them through `tests/unit/scriptFixtures.js` |
-| `createActor.js` | `createActorDefinition`, `createActorHandler` |
+| `definitions.js` | `listDocumentTypesDefinition`, `getDocumentDefinition`, `searchDocumentsDefinition`, `describeSchemaDefinition`, `createDocumentsDefinition`, `updateDocumentsDefinition`, `deleteDocumentsDefinition`; relative imports only, so the `tsx`-run measurement can load them through `tests/unit/scriptFixtures.js` |
+| `writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments`, `DELETE_PREVIEW_ROWS_MAX`: the write operations behind `ctx.core` |
+| `writeGuard.js` | `guardWrite(intent)`, `scanWriteValues`: the one choke point for the password rule, the `wiretap.*` deny and the category gates |
+| `writeArgs.js`, `writeAck.js` | Argument helpers (`shapeRefusal`, `parseDataObjects`, `parseJson`, `checkDataBytes`, `checkReadbackPaths`) and ack shaping (`ackDocuments`, `ackUpdates`, `attachReadback`, `fitPreview`) |
+| `createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | The handlers of the write scripts (`updateDocuments.js` groups patch entries by uuid) |
 | `listDocumentTypes.js`, `getDocument.js`, `searchDocuments.js`, `describeSchema.js` | The handlers of the read scripts (the last two only call `ctx.core`) |
-| `index.js` | `SHIPPED_SCRIPTS` (static list: `create_actor`, `list_document_types`, `get_document`, `search_documents`, `describe_schema`), `registerShippedScripts(registry?)`; called by `hooks/OnceReady.js` for a GM before `initFoundryBridge` |
+| `index.js` | `SHIPPED_SCRIPTS` (static list: `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`), `registerShippedScripts(registry?)`; called by `hooks/OnceReady.js` for a GM before `initFoundryBridge` |
 
 ## Registration (`registry.js`)
 
@@ -114,12 +120,56 @@ at most `SCHEMA_ARRAY_ITEMS_MAX` (1000) on both sides. The sidecar imports the l
 
 `ctx.dom` is `{ document }` and exists only for `requires: 'dom'`.
 
-## create_actor
+## Core write scripts
 
-`mutates: true`, `requires: 'api'`, no gate, `result.budgetBytes` 256, `name` 1 to 128 characters, `type` 1 to 64,
-`additionalProperties: false`. Returns `ctx.shape.ack({ uuid, name, type })`. `scriptCore.createActor` resolves the
-default type (first non-base Actor subtype), rejects an unknown one with a list of whole valid types within 256 B
-(`(+N more)` for the rest) and rejects a creation a hook cancelled (`Actor.create` resolved `undefined`).
+`create_documents`, `update_documents` and `delete_documents`: `mutates: true`, `requires: 'api'`, no declared gate (one
+gate cannot cover them; the handlers enforce per category, see below), `result.budgetBytes` = `ACK_BATCH_MAX_BYTES`
+(4000). Listed 640 B, 709 B and 381 B (MEASURED by `tests/measure/measureContext.mjs`). Every argument is a flat
+schema: the subset has no free-form object, so a data object or a patch value travels as JSON text (`parseDataObjects`,
+`parseJson` in `writeArgs.js`; the text is bounded by `SCHEMA_BOUND_MAX` per item and `WRITE_DATA_MAX_BYTES` (200,000)
+per call; a parse failure is `ARGS_INVALID` naming the index).
+
+- `create_documents({ documentName, data[1..50], parentUuid?, pack?, keepId?, dryRun?, paths? })`: `data` is one JSON
+  object text per document. `parentUuid` creates embedded documents (`createEmbeddedDocuments`); `pack` creates in a
+  compendium (`documentClass.createDocuments(.., { pack })`); neither creates in the world. Result: one
+  `{ uuid, name, type }` per document (a dry run has `uuid: null` and `dryRun: true`), shaped by `writeAck.js`
+  `ackDocuments`. `paths` adds a read-back of those paths per created document (`attachReadback`;
+  `checkReadbackPaths` bounds them).
+- `update_documents({ updates[1..200], dryRun?, paths? })`: each entry is one patch `{ uuid, path, value?, op? }`;
+  entries with one `uuid` form that document's update. `value` is JSON text; `op` is `set` (default), `replace`
+  (Foundry's `ForcedReplacement`, the `_replace` operator) or `delete` (`ForcedDeletion`, `_del`; takes no `value`).
+  Paths below an embedded collection (`items.<id>.system.x`) are grouped into one `updateEmbeddedDocuments` call per
+  collection (`groupWrites` of `shared/docPath.js`); a wildcard, an unsafe segment or conflicting paths are `PATH_*`
+  errors. Result per document: `{ uuid, changed[] }`; `changed` lists the paths Foundry applied (empty when Foundry
+  changed nothing; a dry run lists the planned paths and adds `dryRun: true`).
+- `delete_documents({ uuids[1..50], dryRun? })`: deletes through `deleteDocuments` / `deleteEmbeddedDocuments`. A dry
+  run returns `{ dryRun: true, rows: [uuid, name, type][], total, cut? }` with the embedded cascade, at most
+  `DELETE_PREVIEW_ROWS_MAX` (500) rows and the default result cap; nothing is deleted. A compendium pack itself, the
+  signed-in user and the last game master are `DELETE_REFUSED`. There is no Wiretap gate for deletion; the description
+  says it is irreversible and the README gives the Claude Code `ask` rule.
+
+Write path (`writes.js`): arguments checked and targets resolved, `guardWrite` (`writeGuard.js`), Foundry validation
+without writing, `dryRun` stops, then the Foundry document API runs. The guard throws `GATE_DENIED` for the first of:
+a password-named field or path of a `User` (always), a `Setting` whose key (from the data, or from the existing
+document for a by-id update, normalized by `normalizeSettingKey`) is in the `wiretap.` namespace or cannot be read
+(always), then a closed gate on THIS client: `allowUserWrites` (User), `allowSettingWrites` (Setting),
+`allowModuleConfigWrites` (`core.moduleConfiguration`), `allowFileUpload` (a base64 data URI anywhere in the values),
+`allowOwnershipWrites` (an `ownership` key in values or paths) and `allowCompendiumWrites` (a `pack` or a document
+inside one). Validation uses `cleanData` and `validate({ changes, strict })` and collects failures with
+`failuresOf`: `getAllFailures()` first, and the failure tree of `getFailure()` when it is empty (on Foundry 14.365
+`getAllFailures()` returns `{}` for a real failure). `ScriptError.details = { failures, failureCount }` is acked by the
+bridge (at most 10 failures, path and message bounded) and `formatBridgeError` prints them in 512 B.
+- Codes: `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED` (one error for the whole call, nothing
+  written), `DELETE_REFUSED`, `WRITE_NOT_APPLIED` (Foundry accepted the call but a hook or the system cancelled it), and
+  the `PATH_*` codes of the read scripts.
+- Details: a Setting is judged by its `key` text alone (`settingKeyOf`; a `namespace` is never read, Foundry prunes it);
+  data keys and path segments are split on `.` and a `-=` / `==` operator prefix is dropped before the `ownership`
+  test (Foundry expands dotted keys); `findUnsafeValue` refuses any dotted segment that is an `UNSAFE_SEGMENTS` entry
+  or an `Object.prototype` name. `resolveWritable` refuses a compendium pack uuid and a non-document (update and
+  delete); an update refuses a document written twice, counted by canonical uuid with embedded documents included.
+  Created names are cleaned (`cleanForLog`, 128 B). A row with read-back stays within `ACK_MAX_BYTES` (`cut: true`).
+- A write across several documents is not atomic once Foundry starts it: an update that fails after earlier ones
+  applied is `WRITE_NOT_APPLIED` and names how many and which uuids were applied.
 
 ## Core read scripts
 
@@ -225,18 +275,18 @@ listing the valid ones within 256 B), `path` (<= 512, dotted).
 ## Tests
 
 `schemaValidate`, `scriptRegistry`, `scriptShape` (MOCK_ fixtures with 120 embedded items; `modified` and `keyPaths`),
-`callTool`, `scriptCore`, `createActor`, `canonical` and `getDocument` (mocked documents from `mockDocuments.js`: exclusions,
+`callTool`, `scriptCore`, `writeGuard`, `writeCreate`, `writeUpdate`, `writeDelete`, `writeScripts` (all over the mock world of `mockWriteWorld.js`, whose `MockValidationError` reproduces the 14.365 behaviour of an empty `getAllFailures()`), `canonical` and `getDocument` (mocked documents from `mockDocuments.js`: exclusions,
 password path in `missing`, compact bound over every list of `keyFields.json`, projection, `items.*.name`, derived,
 `ifModifiedSince`, argument combinations), `listDocumentTypes`, `searchDocuments` (paging, cursor stability, clamps, filters, exclusions, index use), `schemaWalk` (every field class with `mockFields.js`), `describeSchema`, `shippedSkill`, `OnceReady`, `foundryBridge.scripts` (registry push, ack handling, callTool acks) and
-`foundryBridge.client` (create_actor through the bridge); `tests/integration/readTools.test.js` (both read scripts through the
-sidecar with a fake client). e2e: `tests/e2e/readTools.spec.js` (create_actor then compact/paths/derived/`ifModifiedSince`/full
+`foundryBridge.client` (write scripts through the bridge); `tests/integration/readTools.test.js` (both read scripts through the
+sidecar with a fake client). e2e: `tests/e2e/readTools.spec.js` (a created actor, then compact/paths/derived/`ifModifiedSince`/full
 handle and `maxBytes` 16000 on the created actor; every type and subtype present in the titan world read at ≤ 2,000 B;
 `wiretap.*` setting refused, real Settings with secret-named keys redacted, flags redacted, and User password paths in
 `missing` (after asserting the client holds the fields); embedded and compendium reads); `tests/e2e/everyType.spec.js`
 (creates, as recorded `Wiretap E2E ` documents, every class and subtype of the titan world except the classes and folder
 types it lists with a reason, embedded documents under recorded parents; reads each in the compact view ≤ 2,000 B and
 compares `list_document_types` with `CONST.ALL_DOCUMENT_TYPES`); `tests/e2e/searchSchema.spec.js` (search by the created name prefix with a limit of 2 over 5 actors, filters and fields, the wiretap Setting absent, the User password refusals, an index-only compendium search that loads no document, `describe_schema` for every class and subtype of the titan world <= 8000 B, the User/Setting exclusions of `describe_schema`, path examples with constraints), `tests/e2e/scripts.spec.js` (real sidecar, SDK client,
-create_actor creates and deletes an Actor; the e2e-only `e2e_gated` script from `src/test-probe/registerProbe.js` for the
+`create_documents` creates an Actor that the test records and tears down; the e2e-only `e2e_gated` script from `src/test-probe/registerProbe.js` for the
 gate path, and `e2e_matrix` to reach the client argument validator with arguments the sidecar accepts) with the
 running list in `tests/e2e/registryCore.js` (`test/state/registry.json`; re-exported by `registry.js`, which adds the
 headless setup and teardown steps). The registry allows `ChatMessage` (identified by `flavor`), `Combat`, `Setting` (key

@@ -14,7 +14,7 @@
 - [ ] #3 terminal UX polish (theme dropdown ✓, popout-takeover + 4:3 default ✓, sidecar launcher + offline panel ✓, toolbar [clear/copy/font/restart] + persisted font size ✓; remaining: scrollback tuning)
 - [ ] (optional/future) structured chat UI — only viable via headless/programmatic mode
       (Agent SDK / `claude -p`), which draws on the $200/mo Agent SDK credit + Commercial Terms
-- [x] dedicated Foundry MCP server for the user's `claude` to call — vertical slice: `create_actor`
+- [x] dedicated Foundry MCP server for the user's `claude` to call — vertical slice: one create tool (now `create_documents`)
       (sidecar hosts MCP over Streamable HTTP on 127.0.0.1:31417; GM identify handshake routes tool
       calls to the GM browser; `Actor.create` round-trips the uuid back). See
       `docs/specs/2026-06-02-wiretap-mcp-bridge-design.md`.
@@ -138,10 +138,18 @@
 
 - [ ] A script that declares a `gate` is gated by the `callTool` dispatcher (`requireGate`, ack `GATE_DENIED`). Each
       core operation in `ctx.core` that touches a gated category must also call `requireGate` itself, because a script
-      can call a core operation outside the gate of its own category; no such operation exists yet.
-- [ ] Wire `denyWiretapSettingWrite` / `resolveSettingKey` into every Setting write path (CRUD, path-scoped writes,
-      batch, replace, delete, settings skills, scripts' `ctx.core.*`) as those paths land; each path gets a test that
-      it refuses `wiretap.*` and writes the string `resolveSettingKey` returned.
+      can call a core operation outside the gate of its own category. The write operations do (`guardWrite`); any
+      further gated core operation (for example `replace_document`, `batch`) must too.
+- [ ] `guardWrite` applies `denyWiretapSettingWrite` to create, update and delete of Settings. The remaining Setting
+      write paths (`replace_document`, `batch`, settings skills) must go through `guardWrite` as they land, each with a
+      test that it refuses `wiretap.*`.
+- [ ] The argument-schema subset has no free-form object node, so `create_documents` and `update_documents` take JSON
+      text for data and values. A bounded free-form node (depth and byte limits on both validators, parity fixtures)
+      would remove the text round trip; it changes the shared schema contract on both sides.
+- [ ] Folder types with no world collection (`ActiveEffect`, `Adventure`) can be created but not deleted (see
+      `docs/POST_WORK_FINDINGS.md`); `create_documents` does not refuse them. Decide whether it should.
+- [ ] `delete_documents` is irreversible and has no Wiretap gate; the confirmation is the Claude Code ask rule in the
+      README. Consider a one-line check in the Wiretap skill or a `setup` helper that writes the rule.
 - [ ] `list_endpoints` must not serialize `Endpoint` objects directly: gate state is shown only as one compact line.
 
 - [ ] Settings menu beyond serverUrl/terminalCommand, keybindings, fonts, compendium packs

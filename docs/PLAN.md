@@ -585,8 +585,8 @@ Protocol v2 replaces v1; a mismatched `protocolVersion` is refused, not translat
   declares a different argument schema, `requires` or `mutates`; `GATE_DENIED` when its declared gate differs from the
   listed one). `requires: 'dom'` scripts route to a `dom: true` endpoint of the `agent` kind only (D25), or of the
   kind the session fixed with `?endpoint=`; with none, the call fails with `NO_ENDPOINT` naming the missing kind. An
-  MCP session picks its endpoint kind with `?endpoint=human|agent` on the initialize URL. `create_actor` is no longer
-  a sidecar handler: the sidecar's only built-in tool is `read_handle`, and the client registers `create_actor` as a
+  MCP session picks its endpoint kind with `?endpoint=human|agent` on the initialize URL. No script tool is a
+  sidecar handler: the sidecar's only built-in tool is `read_handle`, and the client registers every other tool as a
   script (`src/bridge/scripts/`). The client sends the registry after every acknowledged identify and whenever a script
   registers. Its `callTool` handler finds the script by name, judges the declared gate from its own settings
   (`GATE_DENIED`), validates the arguments with `shared/schemaValidate.js` (`ARGS_INVALID`), and runs the handler under
@@ -1050,6 +1050,44 @@ tests and skill text (D16). **Depends on:** M2, M4. **In:**
 or skills. **Context budget:** ack ≤ 256 B per document; a 50-document `batch` ack ≤ 4 KB; a validation error with 30
 failures ≤ 512 B; `delete_documents` `dryRun` within the hard cap. **Risks:** batch partial commits (documented in
 the tool description); irreversible deletes (D12a, `dryRun`).
+
+**As built, phase A (2026-10-13; `create_documents`, `update_documents`, `delete_documents`):**
+
+- Phase B (`replace_document`, `batch`, handle inputs, idempotency keys, `actAs`) is not built.
+- Argument shapes (the argument-schema subset has no free-form object, so structured input is JSON text):
+  `create_documents({ documentName, data: string[1..50], parentUuid?, pack?, keepId?, dryRun?, paths? })` with one JSON
+  object text per document, at most 200,000 bytes of data in all (`WRITE_DATA_MAX_BYTES`);
+  `update_documents({ updates: { uuid, path, value?, op? }[1..200], dryRun?, paths? })` with `value` as JSON text and
+  `op` of `set` (default), `replace` or `delete`; `delete_documents({ uuids: string[1..50], dryRun? })`. Definitions
+  measure 640 B, 709 B and 381 B (`tests/measure/measureContext.mjs`; 8 tools, 4,490 B in all).
+- One choke point, `src/bridge/scripts/writeGuard.js` `guardWrite`, runs before validation and before every write
+  API: the `User` password rule and the `wiretap.*` Setting deny (a by-id update resolves the key from the existing
+  document; a Setting with no readable key is refused) hold whatever the gates say; then the category gates are read
+  from THIS client's settings at call time: `allowUserWrites`, `allowSettingWrites`, `allowModuleConfigWrites`
+  (`core.moduleConfiguration`), `allowFileUpload` (a base64 data URI anywhere in the values; a superset of the file
+  paths the gate names, because the value scan cannot tell a file field from other text), `allowOwnershipWrites` (an
+  `ownership` key in values or paths) and `allowCompendiumWrites` (a `pack`, or a parent inside a pack). No gate is
+  declared on the three definitions because no one gate covers a whole tool.
+- Validation: Foundry validates the cleaned data without writing; failures return as one `VALIDATION_FAILED` error
+  (new code) with at most 10 failures and the true `failureCount` in 512 B, nothing written. `dryRun` returns the
+  same ack shape marked `dryRun: true` and calls no create, update or delete API. New codes: `VALIDATION_FAILED`,
+  `DELETE_REFUSED` (a compendium pack, the signed-in user, the last game master), `WRITE_NOT_APPLIED` (a hook or the
+  system cancelled part of the call).
+- Acks: `[{uuid, name, type}]` (a batch of 50 measures 3,541 B), `[{uuid, changed[]}]` (`changed` is empty when Foundry
+  applied nothing), and a delete dry run `{dryRun, rows, total, cut?}` within the hard cap. `ScriptError` carries
+  `details = { failures, failureCount }`, which `src/bridge/foundryBridge.js` acks (at most 10 failures).
+- `create_actor` is removed from code, tests, README and skills.
+- Review fixes (2026-10-13): a Setting is judged by its `key` text alone (a `namespace` is never read; Foundry's
+  `Setting` schema has no such field and prunes it, MEASURED in the live world by `tests/e2e/writeTools.spec.js`);
+  data and path keys are split on `.` and an `ownership` segment (also behind a `-=` or `==` operator prefix) needs
+  `allowOwnershipWrites`, because Foundry expands dotted keys (MEASURED: `{ 'ownership.default': 3 }` stored
+  `ownership.default` 3); `findUnsafeValue` refuses any dotted segment that is an `UNSAFE_SEGMENTS` entry or an
+  `Object.prototype` name; an update resolves each uuid to a document (a compendium pack uuid or a non-document is
+  `ARGS_INVALID`) and refuses a document written twice, counted by canonical uuid, embedded documents included; a
+  later update that fails after earlier ones applied is `WRITE_NOT_APPLIED` naming the applied uuids; created names
+  are cleaned and bounded; a row with read-back stays within 256 B (`cut: true` otherwise).
+- MEASURED on Foundry 14.365 (`debug/dumps/probe-validation.json` when kept): `DataModelValidationError.getAllFailures()`
+  returns `{}` for a real failure and `getFailure()` with no key returns the root tree, so `failuresOf` walks the tree.
 
 ### M6 — Sheets and gameplay
 

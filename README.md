@@ -110,7 +110,7 @@ method `405`.
   bounded definition, a documented JSON Schema subset), logs the reason, and tells each session routed to that endpoint
   with one debounced `notifications/tools/list_changed` (200 ms quiet, 1,000 ms at most). A call to such a tool runs the
   `callTool` operation on the session's endpoint; each tool is listed with `readOnlyHint` set to the inverse of
-  `mutates`. `create_actor` is one of these scripts: the Foundry client registers it from `src/bridge/scripts/` and the
+  `mutates`. Every shipped tool is one of these scripts: the Foundry client registers it from `src/bridge/scripts/` and the
   sidecar has no handler of its own for it. The client sends its registry after every acknowledged identify and
   whenever a script registers, so a reconnect restores the tool list. The client runs a call only after it has found the
   script by name, judged the script's declared risk gate from its own world settings, and validated the arguments
@@ -121,9 +121,7 @@ method `405`.
   `bridge:registry` pushes per second from one socket: later pushes in the same second are coalesced, and the latest is applied when the second ends (an earlier
   coalesced push is acked `{ ok: true, coalesced: true }`). The listed definitions of all tools, with the room kept
   for the sidecar's own `read_handle`, fit 16,000 bytes; a tool that would overflow it is refused with a logged reason.
-  `create_actor` takes `name` (1 to 128 characters) and an optional `type` (1 to 64 characters), accepts no other
-  argument, is listed with `readOnlyHint` false, and returns the JSON ack `{uuid, name, type}` (a name over about 80
-  bytes is shortened in it). A tool
+  The write tools are listed with `readOnlyHint` false. A tool
   added during a `claude` session was deferred (found through `ToolSearch`) and callable in the same session.
 - **Reading documents.** `list_document_types` returns the world's document classes (`world`, `embedded`, `packOnly`)
   and the subtypes of each (at most 3,000 bytes; the longest subtype lists are left out and named in `omitted` when
@@ -170,6 +168,30 @@ method `405`.
   memory) and a one-level outline of the schema; with one it returns the example subtree and the field's constraints
   (choices, min, max, integer, required, nullable, blank). Free-form fields are marked and embedded collections are
   named by document class instead of expanded. A result is at most 8,000 bytes.
+- **Writing documents.** `create_documents`, `update_documents` and `delete_documents` write the live world through
+  Foundry's document calls (`createDocuments`, `createEmbeddedDocuments`, `update`, `updateEmbeddedDocuments`,
+  `deleteDocuments`, `deleteEmbeddedDocuments`), so system and module pre-write logic and hooks run as for a write made
+  in the UI. The argument-schema subset has no free-form object, so structured input travels as JSON text.
+  `create_documents` takes `documentName` and `data` (1 to 50 JSON object texts, at most 200,000 bytes in all) and
+  optionally `parentUuid` (embedded documents), `pack` (a compendium), `keepId`, `dryRun` and `paths`; it returns one
+  `{uuid, name, type}` per document (4,000 bytes at most, 256 per document). `update_documents` takes `updates`, one
+  patch per entry (`uuid`, `path`, `value` as JSON text, `op` of `set`, `replace` or `delete`), `dryRun` and `paths`;
+  entries with one uuid form that document's update, paths such as `items.<_id>.system.x` are grouped into one
+  `updateEmbeddedDocuments` call per collection, `replace` and `delete` become Foundry's `_replace` and `_del`
+  operators, wildcards and conflicting paths are refused with their `PATH_*` code, and it returns `{uuid, changed}` per
+  document (`changed` is empty when Foundry applied nothing). `delete_documents` takes `uuids` (1 to 50) and `dryRun`;
+  a dry run returns `{dryRun, rows: [uuid, name, type][], total, cut?}` including embedded cascades within 8,000 bytes,
+  and a compendium pack itself cannot be deleted. Deletion is irreversible and has no Wiretap gate: put
+  `"ask": ["mcp__wiretap__delete_documents"]` in the Claude Code permissions to confirm each call. Every call is
+  guarded as a whole before the first write: a User write needs `allowUserWrites` (password fields are refused
+  whatever the gate, and the signed-in user and the last game master cannot be deleted), a Setting write needs
+  `allowSettingWrites` and never a `wiretap.*` key (a by-id write is judged by the key of the existing document), the
+  module configuration setting also needs `allowModuleConfigWrites`, a base64 data URI needs `allowFileUpload`, an
+  `ownership` field or path needs `allowOwnershipWrites`, and a pack or a document inside one needs
+  `allowCompendiumWrites`. Foundry validates the input without writing (`DataModelValidationError.getAllFailures()`);
+  a failure returns `VALIDATION_FAILED` with at most 10 failures and their true count in 512 bytes, and nothing is
+  written. `dryRun` validates and returns the would-be result and calls no create, update or delete API. A write is
+  not atomic across documents once Foundry starts it; a hook that cancels part of a call reports `WRITE_NOT_APPLIED`.
 - **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
   alone does not count). At most 32 sessions are held; an `initialize` beyond that is refused with `503` and a
   `Retry-After` header and no held session is ended, so one client cannot push another's session out. The idle sweep (one
@@ -185,8 +207,8 @@ method `405`.
 
 `skills/wiretap/SKILL.md` is a short user-facing skill that tells an agent which Wiretap tools exist
 (`mcp__wiretap__list_document_types`, `mcp__wiretap__get_document`, `mcp__wiretap__search_documents`,
-`mcp__wiretap__describe_schema`, `mcp__wiretap__create_actor`,
-`mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
+`mcp__wiretap__describe_schema`, `mcp__wiretap__create_documents`, `mcp__wiretap__update_documents`,
+`mcp__wiretap__delete_documents`, `mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
 copy the `skills/wiretap` directory into the `.claude/skills/` directory of the project that runs `claude` (a skill for
 one project), or into `~/.claude/skills/` (a skill for every project), so that the file is
 `.claude/skills/wiretap/SKILL.md`, then start a new `claude` session. A symbolic link to the directory works the same
@@ -386,7 +408,8 @@ default; each unlocks a class of dangerous operation for agents:
 The gate definitions live in `shared/gates.js`; the settings are registered from that table. A GM client sends its
 gate snapshot to the sidecar when it identifies and again whenever a gate setting changes. The sidecar uses the snapshot
 as a pre-check, and the executing browser re-reads its own settings before it acts, so a gate is always judged by the
-world setting of the client that would run the operation. No bridge operation can write a `wiretap.*` setting.
+world setting of the client that would run the operation. No bridge operation can write a `wiretap.*` setting:
+the write tools refuse one on create, update (by id or by a changed `key`) and delete, whatever the gates say.
 
 The push ignores a change whose author is not a GM. Trust assumption: `restricted` only hides the setting in the
 settings window; Foundry lets any user holding the `SETTINGS_MODIFY` permission write a world setting, and that

@@ -152,7 +152,7 @@ fail the call). A `requires: 'dom'` script is routed to a `dom: true` endpoint o
 `?endpoint=` kind) only; see `wiretap-mcp-bridge`. The SDK validates the arguments against the listed shape (zod from the JSON Schema)
 before the handler runs, so a bad call never reaches the client, and strips undeclared arguments; the listed shape equals the picked
 endpoint's schema once the signatures match. The client's `callTool` handler validates the arguments again against its own declared schema (`shared/schemaValidate.js`). The result is shown
-as text (a string as is, anything else as JSON) behind the result enforcer. The production client registers `create_actor`
+as text (a string as is, anything else as JSON) behind the result enforcer. The production client registers its shipped scripts
 and sends its registry after every acknowledged identify and on each registry change (`wiretap-scripts`).
 
 ## Tests
@@ -161,9 +161,9 @@ and sends its registry after every acknowledged identify and on each registry ch
   debouncer.
 - `tests/unit/scripts.test.js` (the shared definition validator and registry payload), `tests/unit/toolRegistry.test.js`,
   `toolRegistry.logs.test.js`: sanitizer, schema subset, bounded safe log lines. `tests/unit/scriptFixtures.js` builds valid
-  definitions (`script`), payloads (`registryPayload`) and the `create_actor` script.
+  definitions (`script`), payloads (`registryPayload`) and the `create_documents` script.
 - `tests/unit/foundryBridge.registry.test.js`: the `bridge:registry` socket handler and its per-socket rate limit. `tests/unit/logText.test.js`: the log helpers.
-- `tests/integration/scriptRegistry.test.js`: `create_actor` through the registry, argument validation before sending, payload shape
+- `tests/integration/scriptRegistry.test.js`: `create_documents` through the registry, argument validation before sending, payload shape
   refusals, annotations and `requires` routing over real sockets.
 - `tests/integration/mcpSessions.test.js`: real HTTP with the SDK client (lifecycle, methods, late tools and
   `list_changed`, endpoint choice, gates, expiry, cap, 503).

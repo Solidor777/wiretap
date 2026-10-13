@@ -1,6 +1,6 @@
 ---
 name: wiretap-mcp-bridge
-description: Wiretap MCP tools and Foundry bridge — the built-in tool (read_handle) and the registered scripts (create_actor, list_document_types, get_document, search_documents and describe_schema among them), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
+description: Wiretap MCP tools and Foundry bridge — the built-in tool (read_handle) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents and delete_documents among them), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
 paths:
   - "server/mcp.ts"
   - "server/endpoints.ts"
@@ -26,7 +26,7 @@ paths:
 Current-state reference; verify against code before relying on a detail. Core context: `wiretap-codebase-core`;
 sidecar composition: `wiretap-sidecar`; MCP sessions and the tool registry: `wiretap-mcp-sessions`.
 
-## Request flow (a registered script such as `create_actor`)
+## Request flow (a registered script such as `create_documents`)
 
 MCP client → `initialize` `POST http://127.0.0.1:<WIRETAP_MCP_PORT>/mcp` (opens a session; later requests carry its
 `Mcp-Session-Id`) → the session lists the scripts the routed endpoint registered with `bridge:registry` → the SDK
@@ -48,7 +48,7 @@ way as the tool result.
 ## Pieces
 
 - `server/mcp.ts`
-  - The sidecar has no `create_actor` handler: the endpoint registers it like any script (`requires: 'api'`,
+  - The sidecar has no handler for a script tool such as `create_documents`: the endpoint registers it like any script (`requires: 'api'`,
     `mutates: true`, `result.budgetBytes` 256). A registered script's ack result is shown as text (a string as is,
     anything else as JSON, an ack with no result as `null`); the enforcer bounds it with the picked endpoint's budget.
     The bridge interface `mcp.ts` needs is `invokeTool`, `tools` and `subscribe`.
@@ -112,7 +112,7 @@ way as the tool result.
 - The gates are world-scope `restricted` settings registered from `GATES` (see `wiretap-client`). `readGateState()`
   builds the sanitized snapshot from `game.settings`; `requireGate(name, moduleId?)` is the executing client's own check
   (`gateDenial` over a snapshot read at call time). A gated op handler calls `requireGate` first and acks the denial as
-  `GATE_DENIED`; no gated op exists yet.
+  `GATE_DENIED`. The write scripts enforce their category gates per call in `src/bridge/scripts/writeGuard.js` (see `wiretap-scripts`).
 - Push: `initFoundryBridge` registers one listener on `createSetting`, `updateSetting` and `deleteSetting` (a first
   change creates the Setting document, a later one updates it, a reset to default deletes it; each document hook
   runs on every client; the world collection is updated before the hook, so `game.settings.get` already returns the new value, or the default after a delete; the author is the last hook argument). For a `wiretap.<gate>` key written by a GM user (`game.users.get(userId)?.isGM`), and only on a connected GM client, it emits `BRIDGE_GATE_STATE` with a fresh
@@ -120,8 +120,8 @@ way as the tool result.
   (`Wiretap | bridge gate state refused (<code>): <message>`). A second `initFoundryBridge` call replaces the listener
   (`Hooks.off` first), so a change is never pushed twice. A non-GM author is ignored; a user holding `SETTINGS_MODIFY` can still write a gate and is trusted at GM level (README). A change while disconnected needs no push: the next identify
   carries the snapshot.
-- No op can set a setting: the op table holds only `callTool`, and the shipped `create_actor` script passes `name` and `type` to `Actor.create`.
-  `foundryBridge.noSettingWrites.test.js` documents it. Each future write path wires `denyWiretapSettingWrite` (`docs/TODO.md`).
+- No op can set a setting: the op table holds only `callTool`. The write scripts reach a `Setting` only through `guardWrite`, which applies `denyWiretapSettingWrite` to every Setting create, update (by id too, from the key of the existing document) and delete, and then needs `allowSettingWrites`.
+  `foundryBridge.noSettingWrites.test.js` documents it. Every write path goes through `guardWrite`, which wires `denyWiretapSettingWrite`.
 
 ## Adding a tool or op
 
@@ -133,7 +133,7 @@ way as the tool result.
    `maxBytes` limit declares an optional integer `maxBytes` in its `inputSchema`.
 4. Add a representative-result fixture for the tool to `FIXTURES` in `tests/unit/contextBudgetHarness.js`; `tests/unit/contextBudget.test.js` fails for a listed tool without one and for a definition or fixture result over its budget.
 5. Unit-test both sides (`tests/unit/mcp.test.js`, `mcpSessions.test.js`, `toolRegistry.test.js`, `foundryBridge.registry.test.js`, `foundryBridge.client.test.js`, `foundryBridge.server.test.js`,
-   `endpoints.test.js`); routing over real sockets is in `tests/integration/endpointRouting.test.js` (fake v4 clients), `create_actor` through the registry, argument validation before sending, the payload shape, annotations and `requires` routing in `tests/integration/scriptRegistry.test.js`; `get_document` and `list_document_types` (read-only annotations, `maxBytes` declared, arguments forwarded, handle over the default cap and inline with `maxBytes` 16000, `DOC_EXCLUDED` as `<code>: <message>`) and the forwarding and bounds of `search_documents` and `describe_schema` (limit, cursor, filter count, field length, path length; refusals asserted as exact MCP validation issues, and the undeclared `maxBytes` of `search_documents` dropped before the client is called) in `tests/integration/readTools.test.js`; sessions, `list_changed`, registry tools, expiry and the cap over real HTTP with the SDK client are in `tests/integration/mcpSessions.test.js` (`tests/integration/mcpHttp.js` is the raw session helper the older integration tests use, because a raw POST without a session no longer works); gate snapshots: `tests/unit/gates.test.js`, `foundryBridge.gateState.test.js` (fake sockets: registered-only rule, throttle, per-endpoint) and `tests/integration/gateState.test.js` (real sockets: identify and event paths, hostile snapshots, two endpoints, no gate state in tool results).
+   `endpoints.test.js`); routing over real sockets is in `tests/integration/endpointRouting.test.js` (fake v4 clients), `create_documents` through the registry, argument validation before sending, the payload shape, annotations and `requires` routing in `tests/integration/scriptRegistry.test.js`; `get_document` and `list_document_types` (read-only annotations, `maxBytes` declared, arguments forwarded, handle over the default cap and inline with `maxBytes` 16000, `DOC_EXCLUDED` as `<code>: <message>`) and the forwarding and bounds of `search_documents` and `describe_schema` (limit, cursor, filter count, field length, path length; refusals asserted as exact MCP validation issues, and the undeclared `maxBytes` of `search_documents` dropped before the client is called) in `tests/integration/readTools.test.js`; sessions, `list_changed`, registry tools, expiry and the cap over real HTTP with the SDK client are in `tests/integration/mcpSessions.test.js` (`tests/integration/mcpHttp.js` is the raw session helper the older integration tests use, because a raw POST without a session no longer works); gate snapshots: `tests/unit/gates.test.js`, `foundryBridge.gateState.test.js` (fake sockets: registered-only rule, throttle, per-endpoint) and `tests/integration/gateState.test.js` (real sockets: identify and event paths, hostile snapshots, two endpoints, no gate state in tool results).
 6. Update this skill and the deferred-work file (`docs/TODO.md`).
 
 ## Result enforcer, handles and `read_handle`
@@ -148,7 +148,7 @@ count raw UTF-8 text bytes, not JSON-escaped wire bytes.
   handler only for a tool that declares an optional integer `maxBytes` (that adds to its definition size); `read_handle`
   declares it (128..16000). The measured size is the UTF-8 bytes of the text content items (other non-image items as their
   JSON, then `structuredContent` as JSON); at or below the limit the result is returned unchanged, one byte over becomes
-  a handle. The registered `create_actor` script declares `result.budgetBytes` = `ACK_MAX_BYTES` (256), so a worst-case ack (every field at its 256-byte bound, about 790 bytes) becomes a handle. `get_document` declares 16,000 and `maxBytes` (integer 128..16000), so a full read over 8,000 B is a handle unless the caller raises `maxBytes`; `list_document_types` declares `DOCUMENT_TYPES_MAX_BYTES` (3,000), `search_documents` `SEARCH_PAGE_MAX_BYTES` (4,000; it declares no `maxBytes`) and `describe_schema` `DESCRIBE_SCHEMA_MAX_BYTES` (8,000).
+  a handle. The write scripts declare `result.budgetBytes` = `ACK_BATCH_MAX_BYTES` (4,000); the script shapes its ack to fit, so a handle is the fallback only. `get_document` declares 16,000 and `maxBytes` (integer 128..16000), so a full read over 8,000 B is a handle unless the caller raises `maxBytes`; `list_document_types` declares `DOCUMENT_TYPES_MAX_BYTES` (3,000), `search_documents` `SEARCH_PAGE_MAX_BYTES` (4,000; it declares no `maxBytes`) and `describe_schema` `DESCRIBE_SCHEMA_MAX_BYTES` (8,000).
 - **Over the limit.** When `ownerLive` is given and returns false (the owning MCP session ended), nothing is stored and the result is the error `SESSION_ENDED: ...`. Otherwise the parts are joined with `\n` and stored (`HandleStore.put`); the result is a single text item
   `{"handle","bytes","summary"}` (any image items are kept; `structuredContent` is dropped), at most 256 bytes
   (`ACK_MAX_BYTES`). `bytes` is the stored size (`put().bytes`, parts plus the joining newlines). `summarizeResult(text)`

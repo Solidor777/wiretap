@@ -33,8 +33,8 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
   stale ok or refusal never changes `identified`. `endpointKind` has an `onChange` calling `reidentifyBridge()`, which
   emits a fresh identify only when the socket is connected and the setting differs from the kind last sent. The op
   table built by `initFoundryBridge(connection, { scripts? })` holds one op, `callTool`, served from the script registry
-  (default: the client's own); lookup uses `Object.hasOwn`, so inherited names (`constructor`, `__proto__`) and the
-  removed `createActor` ack `OP_FAILED` unknown op. The `BRIDGE_INVOKE` listener runs wholly inside one `try`, so a request
+  (default: the client's own); lookup uses `Object.hasOwn`, so inherited names (`constructor`, `__proto__`) and any
+  unregistered name ack `OP_FAILED` unknown op. The `BRIDGE_INVOKE` listener runs wholly inside one `try`, so a request
   that is not an object, an unreadable op or a missing or throwing ack callback never becomes an unhandled rejection
   (`replyInvoke` ignores a missing ack and logs a throwing one). A failed op acks the `code` of a thrown `ScriptError` and `OP_FAILED`
   otherwise, with the message bounded to 256 bytes. After each ok identify ack (and, queued as one microtask per task, on every registry change while
@@ -55,7 +55,7 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 | `bridge/TerminalConnection.svelte.js` | `TerminalConnection` class + `connection` singleton: Socket.IO client to the sidecar, terminal events, `onSocket` hook for sharing the socket |
 | `bridge/popoutState.svelte.js` | `popoutState` rune state `{ open }` |
 | `settings/gates.js` | `registerGateSettings()`: one world-scope, `restricted`, `config: true`, default-closed setting per `GATES` entry of `shared/gates.js` (iterated, no second list); a `boolean` gate is a Boolean, `allowedPluginModules` a String of comma-separated module ids (default `''`; Foundry has no list-of-strings setting editor). `gateLangKey(name, 'Name' \| 'Hint')` derives the `lang/en.json` key `WIRETAP.Settings.Gates.<Name with first letter upper-cased>.<Name\|Hint>`; the hints of `allowMacroExecution`, `allowAgentScripts` and `allowedPluginModules` state the arbitrary-code caveat |
-| `bridge/scripts/**` | The client script runtime: registry, `callTool` dispatcher, `ctx`, the shipped scripts `create_actor`, `list_document_types`, `get_document`, `search_documents` and `describe_schema`, the canonical document export (see `wiretap-scripts`) |
+| `bridge/scripts/**` | The client script runtime: registry, `callTool` dispatcher, `ctx`, the shipped scripts `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents` and `delete_documents`, the canonical document export (see `wiretap-scripts`) |
 | `bridge/gates.js` | `readGateState()` (reads `game.settings` for every gate, a throwing read leaves the gate out, parses the module string, returns `sanitizeGateState(raw)`), `requireGate(name, moduleId?)` (`gateDenial(readGateState(), name, moduleId)`: reads this client's settings at call time, params never carry a gate value) and `gateNameFromSettingKey(key)` (gate name for a `wiretap.<gate>` key, else null) |
 | `test-probe/registerProbe.js` | e2e-only probe (must never ship in the production build); `_probe.scripts.registerE2e()` registers the e2e-only `e2e_gated` script |
 
