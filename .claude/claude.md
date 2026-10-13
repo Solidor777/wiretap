@@ -23,6 +23,9 @@
 * **Give warning:** Surface concerns and confirm with the user when given bad or conflicting instructions.
 * **Project Precedence.** The project `CLAUDE.md` SUPERCEDES any other.
 * **No backwards compatibility (until further notice).** Wiretap has not been published. Rename, remove, or reshape any tool, API, setting, protocol event, or file format when the design calls for it; do not keep aliases, shims, deprecation paths, or migrations for old names. Revisit when the user announces a first release.
+* **Iron rule: no milestone starts with open bugs.** At the end of each milestone, fix every bug in
+  `docs/OPEN_BUGS.md` (and any found during the milestone) before beginning the next milestone. A bug that needs an
+  owner decision is raised with the owner at that point; it is not carried forward.
 * **Headless browsers only.** E2E tests and agent browser work run headless, as in the titan system: Playwright scripts with `headless: true` (`playwright.config.mjs`). Do not use the Playwright MCP `browser_*` tools for Foundry work; they open a visible Chrome window. `npm run test:e2e:headed` exists only for a human debugging a run.
 * **Documentation:**  No unlogged todos — every bug is logged to `docs/OPEN_BUGs.md`. Every other deferred item is logged to `docs/TODO.md`. 
 
@@ -61,7 +64,8 @@ On Fable-class models (`claude-fable-5`, `claude-mythos-5`), follow the global `
 | `wiretap-codebase-core` | description | Architecture, boundaries, cross-cutting rules, skill-maintenance procedure |
 | `wiretap-client` | `paths:` `src/**`, `lang/**` | Sidebar tab, Svelte terminal UI, TerminalConnection, settings |
 | `wiretap-sidecar` | `paths:` `server/**`, `shared/**` | Socket.IO server, PTY relay, composition |
-| `wiretap-mcp-bridge` | `paths:` MCP/bridge files | MCP tools, bridge handshake, ops |
+| `wiretap-mcp-bridge` | `paths:` MCP/bridge files | MCP tools, result enforcer, endpoint router, bridge handshake, ops |
+| `wiretap-mcp-sessions` | `paths:` `server/mcpSessions.ts`, `server/toolRegistry.ts`, session tests | Stateful MCP sessions, expiry and cap, `list_changed`, HTTP limits, the endpoint tool registry |
 | `wiretap-build-test` | `paths:` `tests/**`, build/lint configs | Build, vitest, Playwright e2e |
 
 * **Mandatory update:** when a plan finishes (and after any significant inline change) update every `wiretap-*` skill whose paths the change touched, in the same work unit, to the current state. A plan is not complete until this is done.
@@ -104,11 +108,11 @@ Main-thread rules:
 
 ## Code Hygeine
 * No test or e2e code is compiled into shipping builds.
-* Test and e2e code builds to `test/build/`; stale built files are deleted after every build.
+* All build output goes to `dist/` (the manifest loads `dist/index.js` and `dist/style.css`). The e2e build shares `dist/` and uses hash-free file names, so each build overwrites the last and nothing accumulates. No build step deletes files: before packaging, run `npm run build` then `npm run check:release`, which fails on any file in `dist/` other than `index.js`, `index.js.map` and `style.css`; recycle e2e leftovers with `trash` first.
 * No dynamic imports in shipping builds, ever.
 * No stub fixes — never paper over a problem with a stub/mock; fix the root cause.
 * No unlogged todos — every deferred item is logged to `docs/TODO.md`. Bugs do NOT go here.
-* No unlogged bugs — every bug is logged to `docs/TODO.md`.
+* No unlogged bugs — every bug is logged to `docs/OPEN_BUGS.md`.
 
 ## graphify
 

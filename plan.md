@@ -195,8 +195,11 @@ passes the sidecar enforcer: over budget → `{handle, bytes, summary}`.
 
 **Discovery:** standard `tools/list`, deferred by Claude Code; plugin and agent-saved scripts arrive via
 `notifications/tools/list_changed` (M3). READ (`code.claude.com/docs/en/mcp`, "Dynamic tool updates"): an
-interactive session re-fetches the list on `list_changed`; `-p` and the Agent SDK refresh the tool list. Not measured:
-whether a tool added via `list_changed` is deferred like the initial ones (M3 live check).
+interactive session re-fetches the list on `list_changed`; `-p` and the Agent SDK refresh the tool list. M3 result
+(MEASURED, `docs/experiments/2026-10-m3-results.md`, claude 2.1.296, `-p`): a tool added by `list_changed` is deferred
+like the initial ones (found through `ToolSearch`, callable in the same session); one late tool added a composite 98
+tokens to the context against about 13 for a tool present at session start; the composite is not isolated into the name
+and the announcement wording.
 
 ### 2.5 Agent-saved scripts and Claude Code permissions (D21, DECIDED: option (b))
 
@@ -555,6 +558,18 @@ Protocol v2 replaces v1; a mismatched `protocolVersion` is refused, not translat
   `gateState` (from M2). The per-class `fingerprint` was only for raw-socket eligibility and is dropped with M11 (D27).
 - `bridge:registry` carries `{apiVersion, skills: [{name, moduleId, source: shipped|plugin|agent, description,
   inputSchema, mutates, requires, budgetBytes}]}`.
+  **As built in M3** (the script registry of M14 reshapes this): the payload is a plain array of `{name, description,
+  inputSchema, budgetBytes?, gate?, moduleId?}`; each event replaces the endpoint's whole list (an empty array clears
+  it); the ack is `{ok, accepted, refused}` (`NOT_GM` for an unregistered socket, `OP_FAILED` for a non-array payload,
+  which also clears the list). The sidecar sanitizes every entry: names of at most 32 characters
+  (`CORE_TOOL_NAME_MAX_CHARS`) and at most 30 tools in all (`ALWAYS_LISTED_TOOLS_MAX` less the built-in tools) apply to
+  every registry tool, plugin names of 64 characters are not yet accepted; the JSON Schema is a documented subset
+  (depth 4, 64 nodes, 32 properties, string enums of at most 32 values) and `$ref`, combinators, `pattern`, `format`,
+  `default`, `const` and `Object.prototype`-named properties are refused. A call runs the `callTool` op with
+  `{name, arguments}`; the executing endpoint is resolved by name at call time and its own declaration of the tool
+  supplies the gate and the result budget (`TOOL_GONE` when it no longer registers the name, `GATE_DENIED` when its
+  declared gate differs from the listed one). An MCP session picks its endpoint kind with `?endpoint=human|agent` on
+  the initialize URL.
 - `bridge:credentials` (GM human tab → sidecar only) carries the agent list. It is never broadcast and never sent
   sidecar → client.
 - `bridge:invoke` gains `actAs?`, `dryRun?`, `requestId`, and `code` + `sha256` for agent-saved scripts (if D21).

@@ -64,8 +64,8 @@ Current-state reference; verify against code before relying on a detail. Core co
 ## Shared protocol
 
 `shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (3), `BRIDGE_IDENTIFY`, `BRIDGE_GATE_STATE`,
-`BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CREATE_ACTOR`, `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
-`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, `GATE_DENIED`, and typedefs for the identify (with its optional `gateState`), identify ack, gate-state ack, invoke, op ack and error payloads. Routing,
+`BRIDGE_REGISTRY`, `BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CREATE_ACTOR`, `OP_CALL_TOOL`, `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
+`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, `GATE_DENIED`, and typedefs for the identify (with its optional `gateState`), identify ack, gate-state ack, `RegistryToolDefinition`, `BridgeRegistryAck`, invoke, op ack and error payloads. Routing,
 the endpoint registry and the error contract are in `server/endpoints.ts` (see `wiretap-mcp-bridge`). Both sides import these constants; adding an event means editing this file and both consumers.
 
 ## Risk gates (`shared/gates.js`)
@@ -80,7 +80,7 @@ Tests: `tests/unit/gates.test.js` (every branch enumerated; no coverage provider
 
 ## Shared budgets and document paths
 
-Plain JS with no dependencies and JSDoc types, shared by both sides. Today only `server/` imports them: `handles.ts` (`getBudget`, `resolvePaths`), `resultBudget.ts` and `mcp.ts` (`getBudget`); nothing in `src/` does.
+Plain JS with no dependencies and JSDoc types, shared by both sides. Today only `server/` imports them: `handles.ts` (`getBudget`, `resolvePaths`), `resultBudget.ts`, `mcp.ts`, `mcpSessions.ts` and `toolRegistry.ts` (`getBudget`; `MCP_SESSIONS_MAX` is the session cap, 32); nothing in `src/` does.
 
 - `shared/budgets.js` — `BUDGETS` (frozen table of named entries `{ name, value, unit, severity }`), `BUDGET_SEVERITY`
   (`hard` | `warn`) and `getBudget(name)` (throws on an unknown name; inherited properties are not budgets). The numbers
@@ -116,6 +116,7 @@ Plain JS with no dependencies and JSDoc types, shared by both sides. Today only 
 ## Rules specific to this subsystem
 
 - TypeScript run by `tsx`; typecheck with `npm run typecheck` (`server/tsconfig.json`).
+- MCP sessions (`server/mcpSessions.ts`, held in memory, capped, idle-expired) and the tool registry (`server/toolRegistry.ts`) belong to `wiretap-mcp-sessions`; `createWiretapServer.dispose()` ends every session through `mcp.close()` and leaves no timer.
 - The MCP endpoint and the Socket.IO server both bind `127.0.0.1`. Both refuse a browser request whose `Origin` is not
   in `ALLOWED_ORIGINS` (`tests/integration/originValidation.test.js`); a request with no `Origin` (a local non-browser
   process) is accepted by design, so there is still no authentication on socket events (shared-secret handshake is a
@@ -123,5 +124,5 @@ Plain JS with no dependencies and JSDoc types, shared by both sides. Today only 
 - Windows console-window-close (CTRL_CLOSE) cannot be trapped by Node; PTY teardown covers Ctrl-C, SIGTERM, e2e
   teardown.
 - Tests: `tests/unit/sidecarPty.test.js` (incl. auto-wiring), `terminalPayloads` (input/resize/launch payload validation), `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`; `tests/integration/terminal.test.js`, `serverModes.test.js`,
-  `endpointRouting.test.js` (fake GM clients), `gateState.test.js` (risk-gate snapshots over real sockets), `endpointHealth.test.js` (ping/probe health over real sockets with fake timers), `originValidation.test.js` (hostile, allowed and absent Origin on the
+  `endpointRouting.test.js` (fake GM clients), `mcpSessions.test.js` and `mcpHardening.test.js` (see `wiretap-mcp-sessions`), `gateState.test.js` (risk-gate snapshots over real sockets), `endpointHealth.test.js` (ping/probe health over real sockets with fake timers), `originValidation.test.js` (hostile, allowed and absent Origin on the
   socket handshake; Origin and Host on `/mcp`), unit `origins`, `logThrottle`, `serverStartup.test.js` (occupied Socket.IO/MCP port rejects `ready`; `awaitStartup` exits 1 and frees the other port), `serverDispose.test.js` (terminal.dispose / mcp.close throwing still release both ports).

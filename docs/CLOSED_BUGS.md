@@ -1,5 +1,39 @@
 # Closed bugs
 
+## E2E build wrote into the repo root and accumulated stale hashed chunks
+
+- **Was:** `tests/e2e/global-setup.js` runs `npm run build:e2e` (`vite build --mode e2e`); `vite.config.mjs` set
+  `build.outDir` to the repo root with `emptyOutDir: false`, and the e2e build code-splits the gated probe import into
+  `[name]-[hash].js` chunks. Measured on 2026-10-11 and again on 2026-10-13 before the fix: the root held
+  `TerminalConnection.svelte-BqIjz3bZ.js`, `TerminalConnection.svelte-mN39lUcZ.js`, `registerProbe-B0zWb1xU.js`,
+  `registerProbe-gFiVeMjW.js` (each with a `.js.map`) from different builds, next to the shipping `index.js`,
+  `index.js.map` and `style.css`. Every build with new content added files and nothing removed the old ones.
+- **Fix:** (1) `build.outDir` is `dist/` for the production and the e2e build (`scripts/lib/buildOutput.mjs`, used by
+  `vite.config.mjs`), `emptyOutDir` stays false so Vite deletes nothing; (2) `module.json` `esmodules` and `styles`
+  are `dist/index.js` and `dist/style.css` (Foundry loads them relative to the module root); `lang/` and the other
+  static paths stay where they were; (3) the e2e build emits hash-free names (`[name].js`, `[name][extname]`) so each
+  build overwrites the previous one; the production build keeps the bundler's default naming and has no dynamic import,
+  so it emits only `index.js`, `index.js.map` and `style.css`; (4) `scripts/check-module-build.mjs`
+  (`npm run check:build`, run by the e2e global setup after the build) fails when a file `module.json` names does not
+  exist; `tests/unit/buildOutput.test.js` asserts the output directory, the hash-free e2e names, the production
+  naming, the manifest paths and the check itself.
+- **Measured after the fix (2026-10-13):** `npm run build` wrote `dist/index.js`, `dist/index.js.map`, `dist/style.css`
+  only. Two consecutive `npm run build:e2e` runs left the same seven files in `dist/` (`index.js`, `style.css`,
+  `TerminalConnection.svelte.js`, `registerProbe.js` and their maps) with no hashed name, and the root listing did not
+  change. `npm run test:e2e` (headless, Foundry started by the harness) passed 14 of 14 loading the module from `dist/`.
+- **Left on disk for the owner to recycle with `trash` (not deleted by this work):** `index.js`, `index.js.map`,
+  `style.css`, `TerminalConnection.svelte-BqIjz3bZ.js(.map)`, `TerminalConnection.svelte-mN39lUcZ.js(.map)`,
+  `registerProbe-B0zWb1xU.js(.map)` and `registerProbe-gFiVeMjW.js(.map)` in the repo root. They are no longer loaded
+  (the manifest points at `dist/`); `.gitignore` keeps their ignore lines until they are gone.
+- **Release check:** `npm run check:release` fails while `dist/` holds anything but `index.js`, `index.js.map` and
+  `style.css`; packaging runs `npm run build` and then `npm run check:release`, after the e2e leftovers are recycled.
+- **Owner decision:** `.claude/CLAUDE.md` says test and e2e code builds to `test/build/` and stale built files are
+  deleted after every build. The e2e bundle now shares `dist/` with the shipping build because Foundry loads the module
+  from the paths in `module.json`, so `test/build/` cannot be the e2e output directory without a second manifest, and
+  hash-free names replace "delete stale files" (nothing here deletes). The rule text needs rewording by the owner. A
+  production build after an e2e build leaves the e2e-only `registerProbe.js` chunk in `dist/`; the production
+  `index.js` does not import it (dead-code eliminated).
+
 ## `npm run foundry:start` did not stop Foundry when the invoking process was stopped
 
 - **Was:** the supervisor (`scripts/e2e-foundry-server.mjs`) watched the nearest non-shell ancestor (`pickWatchPid`).

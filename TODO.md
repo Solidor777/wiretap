@@ -45,10 +45,9 @@
 - [ ] `server/index.ts` invalid-`WIRETAP_MODE` branch (`process.exit(1)` before listening) is untested; the entry file
       runs on import, so covering it needs the mode check extracted into a testable function
 
-- [ ] Result handles are keyed by one process-wide owner key (`PROCESS_OWNER_KEY` in `server/mcp.ts`) because MCP
-      sessions are stateless: any MCP caller can read any handle. When sessions become stateful, key the handle store by
-      the MCP session id and release a session's handles when it ends. Until then handle eviction is global across
-      owners (one caller's results can evict another's)
+- [ ] Result-handle eviction is global across owners: handles are owned per MCP session, but the LRU count and byte
+      limits are shared, so one session's puts can evict another session's handles (the evicted owner then gets
+      `HANDLE_NOT_FOUND`). Decide on per-owner quotas or a fairness rule
 - [ ] A `read_handle` `paths` read parses the whole stored text again on every call (nothing cached). Measured: ~185 ms
       worst case for 7.7 MB of small objects, of which parsing is 26 to 55 ms and path resolution 153 to 170 ms, so a
       parsed-document cache would not bring it under 150 ms; make `resolvePaths` cheaper for wildcard reads over large
@@ -56,12 +55,22 @@
 - [ ] Run the live token calibration once: connect Claude Code to the Wiretap MCP server, compare `/context` before and
       after calls against the byte sizes printed by `npx tsx tests/measure/measureContext.mjs`, and replace the inferred
       bytes / 2 token column in `plan.md` with the measured one
-- [ ] Write the production server `instructions` pointer (at most 600 characters, `INSTRUCTIONS_MAX_CHARS`) naming the
-      skill and the tool families as `mcp__wiretap__<tool>`; `startMcpServer` takes the text through its `instructions`
-      option and the context-budget test checks its length and tool names, but no production text is set yet
 - [ ] Screenshot capture must enforce the 480,000 px default area (`IMAGE_DEFAULT_MAX_PIXELS`) when the capture tool
       exists; the result enforcer checks only the longest side (1280 px), the 1,000,000-character data size and the
       PNG type, never the area
+
+- [ ] Reconcile the M3 registry (`bridge:registry` as a plain array, tool names of at most 32 characters, 30 tools in
+      all) with the script registry when it is built: plugin tool names of at most 64 characters
+      (`PLUGIN_TOOL_NAME_MAX_CHARS`), the `{apiVersion, skills}` shape of plan.md section 4.5, and the shared budget of
+      listed tools
+- [ ] Client handler for the `callTool` op (`src/bridge/foundryBridge.js` has no entry for it in `OP_HANDLERS`) and the
+      client side of `bridge:registry`: the production client sends no registry yet, so no registry tool exists in a
+      real session
+- [ ] The client `callTool` handler must validate `arguments` against the client's own declaration of the tool (plan.md M14
+      "client-side argument validation"): today the sidecar validates against the listed shape and refuses a call when the
+      picked endpoint declares a different schema, but `src/` has no handler and so no validation of its own
+- [ ] Extend `WIRETAP_INSTRUCTIONS` when user-facing Wiretap skills ship: the text names no skill today; add the
+      pointer sentence and keep it within `INSTRUCTIONS_MAX_CHARS` (the context-budget test checks the tool names)
 
 ## Carried-over cleanups
 

@@ -13,7 +13,7 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 
 ## Entry and lifecycle
 
-- `src/index.js` imports `~/styles/Global.scss`, `hooks/OnceInit.js`, `hooks/OnceReady.js` (`~` aliases `src/`).
+- Vite builds `src/index.js` to `dist/index.js` and `dist/style.css` (named by `module.json`). `src/index.js` imports `~/styles/Global.scss`, `hooks/OnceInit.js`, `hooks/OnceReady.js` (`~` aliases `src/`).
 - `OnceInit.js` sets `CONFIG.ui.wiretap = WiretapSidebarTab` (guarded on `foundry.applications.sidebar`
   availability) and registers the client settings `serverUrl`, `terminalCommand`, `terminalTheme`,
   `terminalFontSize` under module id `wiretap`, the risk-gate world settings (`registerGateSettings()` from

@@ -10,19 +10,19 @@ code wins: fix this file in the same change.
 
 ## What Wiretap is
 
-A Foundry VTT v14 module (`module.json`, id `wiretap`, `esmodules: index.js`, `socket: true`) that adds a sidebar tab
+A Foundry VTT v14 module (`module.json`, id `wiretap`, `esmodules: dist/index.js`, `socket: true`) that adds a sidebar tab
 hosting an AI-agent terminal and a bridge that lets agents act on the live world. Two processes:
 
 | Process | Location | Role |
 |---|---|---|
-| Foundry client (browser) | `src/` → built to `index.js` + `style.css` at repo root by Vite | Svelte 5 (runes) mounted directly into ApplicationV2; xterm terminal; executes bridge ops on a GM client |
-| Sidecar (Node) | `server/` run by `tsx` (`npm run server:start`, `start-wiretap.sh`) | Socket.IO server (default `:31416`, `WIRETAP_PORT`), node-pty terminal relay, MCP HTTP server (default `127.0.0.1:31417/mcp`, `WIRETAP_MCP_PORT`) |
+| Foundry client (browser) | `src/` → built to `dist/index.js` + `dist/style.css` by Vite (the paths `module.json` names; the e2e build writes the same files with hash-free chunk names) | Svelte 5 (runes) mounted directly into ApplicationV2; xterm terminal; executes bridge ops on a GM client |
+| Sidecar (Node) | `server/` run by `tsx` (`npm run server:start`, `start-wiretap.sh`) | Socket.IO server (default `:31416`, `WIRETAP_PORT`), node-pty terminal relay, stateful MCP HTTP server (sessions with an SSE stream and `tools/list_changed`; default `127.0.0.1:31417/mcp`, `WIRETAP_MCP_PORT`) |
 
 `shared/protocol.js` holds the wire constants used by both sides (imported as `$shared/protocol.js` in the client and
 `../shared/protocol.js` in the sidecar). The Foundry bridge speaks protocol v3 (`PROTOCOL_VERSION`): GM clients identify as `human` or
 `agent` endpoints (acked after registration) and the sidecar routes each invocation through an endpoint registry and
 router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`,
-`ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH` and `NOT_GM`; a client ack cannot produce them (they become `OP_FAILED`). `GATE_DENIED` is not reserved: the executing client re-enforces gates and may send it, so it is never proof that a sidecar check ran. Limits:
+`ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH` and `NOT_GM`; a client ack cannot produce them (they become `OP_FAILED`). `GATE_DENIED` is not reserved: the executing client re-enforces gates and may send it, so it is never proof that a sidecar check ran. A registered GM endpoint can push its tool list with `bridge:registry`; each MCP session lists the tools of the endpoint kind it routes to and is sent `tools/list_changed` when they change. Limits:
 `userId` 64 bytes, `userName` 128 bytes, 64 endpoints, 512 bytes of MCP error text.
 
 ## Subsystem map (one skill per subsystem)
@@ -31,6 +31,7 @@ router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `END
 |---|---|---|
 | Client UI + terminal client | `wiretap-client` | `src/**`, `lang/**` |
 | Sidecar terminal relay | `wiretap-sidecar` | `server/**` (except MCP/bridge files), `shared/**` |
+| MCP sessions + tool registry | `wiretap-mcp-sessions` | `server/mcpSessions.ts`, `server/toolRegistry.ts`, `tests/unit/mcpSessions.test.js`, `tests/unit/toolRegistry*.test.js`, `tests/unit/foundryBridge.registry.test.js`, `tests/integration/mcpSessions.test.js`, `tests/integration/mcpHardening.test.js`, `tests/integration/mcpHttp.js` (the session and HTTP parts of `server/mcp.ts` are described there too) |
 | MCP + Foundry bridge | `wiretap-mcp-bridge` | `server/mcp.ts`, `server/resultBudget.ts`, `server/handles.ts`, `server/utf8.ts`, `server/endpoints.ts`, `server/foundryBridge.ts`, `src/bridge/foundryBridge.js`, `src/bridge/gates.js`, `src/settings/gates.js`, `shared/protocol.js`, `shared/gates.js` |
 | Build, lint, tests | `wiretap-build-test` | `tests/**`, `vite.config.mjs`, `vitest.config.mjs`, `playwright.config.mjs`, `eslint.config.js`, `package.json` |
 
@@ -40,7 +41,7 @@ before touching its files.
 ## Cross-cutting rules (source: `.claude/claude.md`, authoritative)
 
 - All source in `src/` (client) and `server/` (sidecar). Never hand-edit build output.
-- No dynamic imports in shipping builds; no test/e2e code in shipping builds (e2e builds to `test/build/`).
+- No dynamic imports in shipping builds; no test/e2e code in shipping builds. The e2e build writes to the same `dist/` as the production build (Foundry loads the module from the paths in `module.json`) with hash-free file names, so nothing accumulates and nothing is deleted. Packaging runs `npm run build` and then `npm run check:release`, which fails while `dist/` holds anything but `index.js`, `index.js.map` and `style.css` (the e2e chunks `registerProbe.js` and `TerminalConnection.svelte.js` and their maps must be recycled with `trash` first).
 - No `:global` CSS selectors. 120-column wrap; typed and commented declarations; multi-line `{}` scopes.
 - No stub fixes. Bugs → `docs/OPEN_BUGS.md`; deferrals → the TODO file (`TODO.md` at the repo root; `.claude/claude.md` names `docs/TODO.md`, which does not exist); closed bugs → `docs/CLOSED_BUGS.md`.
 - No e2e wait over 1000 ms inside a loaded page.

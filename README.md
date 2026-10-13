@@ -6,7 +6,13 @@ Svelte 5 (runes), SCSS, and Vite.
 ## Development
 
 - `npm run dev` — Vite dev server (proxies to Foundry on :30000)
-- `npm run build` — production build (emits `index.js` + `style.css`)
+- `npm run build` — production build (emits `dist/index.js` + `dist/style.css`, the files `module.json` loads)
+- `npm run check:build` — fails when a file named by `module.json` `esmodules` or `styles` does not exist; the e2e build
+  (`vite build --mode e2e`, run by `npm run test:e2e`) writes to the same `dist/` with hash-free file names, so nothing
+  accumulates and nothing is deleted
+- `npm run check:release` — packaging check: fails while `dist/` holds any file other than `index.js`, `index.js.map` and
+  `style.css`. Package with `npm run build` and then `npm run check:release`; the e2e leftovers (`registerProbe.js`,
+  `TerminalConnection.svelte.js` and their `.map` files) must be recycled with `trash` before packaging
 - `npm test` — unit and integration tests (Vitest), including the context-budget test that holds every MCP tool
   definition and representative result to the budgets in `shared/budgets.js`
 - `npx tsx tests/measure/measureContext.mjs` — manual report of the real tool list and fixture result sizes against
@@ -62,6 +68,39 @@ port with `WIRETAP_MCP_PORT`) whose tools run against the live world through a G
   up (the Socket.IO server, like the MCP endpoint, binds `127.0.0.1` only and is not reachable from other machines) so
   the Foundry client can still identify as a GM.
 
+## MCP sessions and registered tools
+
+The MCP endpoint is stateful Streamable HTTP. A client's `initialize` POST opens a session and returns an
+`Mcp-Session-Id`; later requests carry it. `GET /mcp` opens the session's event stream, `POST /mcp` carries requests
+and `DELETE /mcp` ends the session (in memory only; nothing is deleted on disk). A request without a session id other
+than `initialize` gets `400`, an unknown, expired or ended id gets `404` (a client re-initializes after that; measured
+with `claude` 2.1.296 in `docs/experiments/2026-10-m3-results.md`), a path other than `/mcp` gets `404` and any other
+method `405`.
+
+- **Endpoint choice.** `?endpoint=human` or `?endpoint=agent` on the initialize URL fixes which kind of Foundry GM
+  client the session routes to (any other value gets `400`). Without it a call goes to the first healthy `agent`
+  endpoint, then the first healthy `human` one.
+- **Instructions.** Every session receives a short server `instructions` text that names the tools and explains
+  handles and tool-list changes; it names no skill because none ships yet. An earlier, longer text (531 characters)
+  cost about 221 tokens of context (measured, same results file); the current text is shorter and was not re-measured.
+- **Registered tools.** A registered GM client can push its complete tool list with the Socket.IO event
+  `bridge:registry` (an array of `{ name, description, inputSchema, budgetBytes?, gate?, moduleId? }`; each event
+  replaces the endpoint's previous list). The sidecar refuses any entry over the budgets (name at most 32 characters,
+  description at most 240, bounded definition, a documented JSON Schema subset), logs the reason, and tells each session
+  routed to that endpoint with one debounced `notifications/tools/list_changed` (200 ms quiet, 1,000 ms at most). A
+  call to such a tool runs the `callTool` operation on the session's endpoint. The shipped client sends no registry yet.
+  A tool added during a `claude` session was deferred (found through `ToolSearch`) and callable in the same session.
+- **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
+  alone does not count). At most 32 sessions are held; an `initialize` beyond that is refused with `503` and a
+  `Retry-After` header and no held session is ended, so one client cannot push another's session out. The idle sweep (one
+  per minute) frees slots. Ending a session releases the result handles it owns. One client may open several sessions
+  over its life (measured).
+- **Request limits.** A request body over 1,048,576 bytes gets `413`; a request whose headers or body take longer than
+  10 s and 15 s gets `408`; a connection that sends no request for 30 s is closed (one with a request in flight, such
+  as an open event stream, is not); at most 128 connections are served at once. An unknown session id is answered
+  `404` before any body is read. A refused request is answered with `Connection: close` once the rest of its body
+  (up to 8 MiB) has been read and discarded, so the client sees the status instead of a reset connection.
+
 ## Large results and handles
 
 Every MCP tool result passes through a result enforcer (`server/resultBudget.ts`). A text result of at most 8,000
@@ -93,8 +132,8 @@ objects. A read that fails (bad range, bad path, not JSON) does not keep the han
 
 **Limits.** Handles live only in memory, and nothing is written to disk; a sidecar restart loses them. One stored
 result is at most 8,000,000 bytes (a larger one is refused with `HANDLE_TOO_LARGE`) and at most 1,024 handles are held
-(the least recently used is evicted beyond that). Eviction is global: until handles are owned per session, one caller's
-large results can evict another's. Inside the 64 MB total each entry is accounted as the larger of its
+(the least recently used is evicted beyond that). Handles are owned by the MCP session that stored them and are released when it ends; eviction is still global, so one
+session's large results can evict another's. Inside the 64 MB total each entry is accounted as the larger of its
 UTF-8 size and twice its character count, plus 256 bytes of overhead; least recently used entries are evicted first, and
 a handle not read for 30 minutes (measured on a monotonic clock) expires.
 
