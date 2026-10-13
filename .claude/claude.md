@@ -10,6 +10,9 @@
 ## Reference Docs
 | Doc | Role |
 |---|---|
+| `docs/README.md` | Index of everything in `docs/`: living docs vs historical records. |
+| `docs/PLAN.md` | Forward-looking plan and design reference: decisions, architecture, milestone specs. |
+| `docs/PROGRESS.md` | Work history: milestone completion, results, revision history. |
 | `docs/OPEN_BUGS.md` | Lists of currently open bugs and their history. |
 | `docs/CLOSED_BUGS.md` | Lists of previously closed bugs and their history. |
 | `docs/TODO.md` | Deferred-work backlog |
@@ -160,7 +163,7 @@ git push origin main
 ---
 
 ### 2. Architectural Consent & Verification
-Before executing non-trivial work, summarize the intended change and verify it against `ENGINE_PRINCIPLES.md`, `PLAN.md`, and design docs. Pause and require explicit consent before establishing architecture, dependencies, file layouts, or public APIs.
+Before executing non-trivial work, summarize the intended change and verify it against `ENGINE_PRINCIPLES.md`, `docs/PLAN.md`, and design docs. Pause and require explicit consent before establishing architecture, dependencies, file layouts, or public APIs.
 
 #### ❌ Bad (Unilateral Decisions / Guessing)
 ```markdown
@@ -199,7 +202,7 @@ Never deviate from an agreed spec (skipping, downgrading, or re-scoping tasks) b
 ---
 
 ### 4. Inline Execution & Complication Reporting
-Do the work now. Fix small, clear follow-ups inline alongside unit tests. Defer work *only* if it actively conflicts with the current goal or context limits, and never defer without logging it to `TODO.md`. Surface complications immediately upon discovery, not at the end of a run.
+Do the work now. Fix small, clear follow-ups inline alongside unit tests. Defer work *only* if it actively conflicts with the current goal or context limits, and never defer without logging it to `docs/TODO.md`. Surface complications immediately upon discovery, not at the end of a run.
 
 #### ❌ Bad (Silent Deferrals / Late Reporting)
 ```rust
@@ -433,7 +436,7 @@ Here is the optimized guidelines set for workflow, documentation, and source con
 **Core Directive:** System state must remain synchronized with reality. Documentation updates are mandatory prerequisites for context clearing. Artifacts must remain hygienic, and source control operations must proceed autonomously based on CI triggers.
 
 ### 1. Strict Final-Step Documentation
-Documentation updates are the mandatory final step before clearing or compacting context. The plan is incomplete until all tracking files (`PLAN.md`, `TODO.md`, `OPEN_BUGS.md`, `CLOSED_BUGS.md`, `POST_WORK_FINDINGS.md`) reflect empirically verified reality. Do not record conjecture.
+Documentation updates are the mandatory final step before clearing or compacting context. The plan is incomplete until all tracking files (`docs/PLAN.md`, `docs/PROGRESS.md`, `docs/TODO.md`, `docs/OPEN_BUGS.md`, `docs/CLOSED_BUGS.md`, `docs/POST_WORK_FINDINGS.md`) reflect empirically verified reality. Do not record conjecture.
 
 #### ❌ Bad (Incomplete / Lazy Handoff)
 ```markdown
@@ -455,7 +458,7 @@ Documentation updates are the mandatory final step before clearing or compacting
 ---
 
 ### 2. Segregate Bugs from TODOs
-Maintain strict boundaries for tracking files. Bugs never go in `TODO.md`. Deferrals go in `TODO.md` (optimized and trimmed). Mid-run anomalies go to `POST_WORK_FINDINGS.md`.
+Maintain strict boundaries for tracking files. Bugs never go in `docs/TODO.md`. Deferrals go in `docs/TODO.md` (optimized and trimmed). Mid-run anomalies go to `docs/POST_WORK_FINDINGS.md`.
 
 #### ❌ Bad (Mixed Concerns)
 ```markdown

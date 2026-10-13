@@ -1,9 +1,12 @@
 # Wiretap plan: document skills for every type, plugin skills, seatless agents
 
-Status: draft for approval, revision 5 (2026-10-11: M0 done and folded in, results in
-`docs/experiments/2026-10-m0-results.md`; see §10). Baseline: HEAD `048df55`. Evidence labels: **MEASURED** (command or run
-named), **READ** (source location named), **INFERRED** (not verified; alternatives not excluded). "MEASURED (coord.)"
-= measured by the coordinator's experiment agents in this planning session (claude 2.1.296), not by the user. Paths
+Forward-looking plan and design reference: goals, the context-budget design, decisions, architecture, risk gates,
+milestone specifications, new skills and agents, risks and deferrals. Work history (milestone completion, results,
+deviations, calibration measurements and the revision history) is in [`docs/PROGRESS.md`](PROGRESS.md). The
+documentation index is [`docs/README.md`](README.md).
+
+Evidence labels: **MEASURED** (command or run named), **READ** (source location named), **INFERRED** (not verified; alternatives not excluded). "MEASURED (coord.)"
+= measured by the coordinator's experiment agents in the planning session (claude 2.1.296), not by the user. Paths
 under `foundry/` are relative to `C:\FoundryVTT\V14\dev\foundry\` (v14 stable, build 364, READ `package.json`).
 
 **Project rule in force: no backwards compatibility** (READ `.claude/claude.md:25`). Wiretap is unpublished; tools,
@@ -92,22 +95,8 @@ tokens ≈ bytes / 2, INFERRED from the ratio below):
 | `prototypeToken` | 1,149 | 1,135 |
 | One embedded item, median of the actor's items | 2,113 (31 items, max 17,615) | 1,756 (7 items) |
 
-**Shipped surface against the §2.6 budgets (MEASURED 2026-10-11, `npx tsx tests/measure/measureContext.mjs`, in-process
-real MCP server with a fake GM client, synthetic `MOCK_` fixtures; sizes are UTF-8 bytes counted as §2.6 counts them;
-the token column is bytes / 2, INFERRED from the ratio above, not a live Claude Code count; the live `/context`
-comparison of the script's header has not been run):**
-
-| Item | Bytes | Budget | Est. tokens |
-|---|---|---|---|
-| `create_actor` definition (name 12 chars, description 152 chars) | 503 | 800 | 252 |
-| `read_handle` definition (name 11 chars, description 87 chars) | 766 | 800 | 383 |
-| All shipped definitions (2 tools) | 1,269 | 16,000 (30 tools) | 635 |
-| `create_actor` ack, typical | 61 | 256 | 31 |
-| `create_actor` ack, every field at its 256-byte bound (becomes a handle) | 81 | 256 | 41 |
-| `create_actor` failure, 2,600-character message | 512 | 512 | 256 |
-| `read_handle` default window | 7,977 | 8,000 | 3,989 |
-| `read_handle` `paths` window cut at the cap | 7,992 | 8,000 | 3,996 |
-| Result of 100 KB, handle response | 197 | 256 | 99 |
+**Shipped-surface calibration table (MEASURED 2026-10-11, `npx tsx tests/measure/measureContext.mjs`):** moved to
+[`docs/PROGRESS.md`](PROGRESS.md) (section "M13 calibration"); the budgets it is held to are §2.6.
 
 **Derived (INFERRED, arithmetic on the rows above):**
 
@@ -154,7 +143,7 @@ The user's proposal is adopted with these modifications (agreed by the user 2026
 - **Each script is its own MCP tool**, not a generic `run_script(name, args)` dispatcher. In Claude Code a deferred
   tool costs ≈13 tokens until used and its schema ≈150 tokens once; a dispatcher needs `list_scripts` and
   `describe_script` round trips before the first call and loses the client-side schema check. The dispatcher mode for
-  clients that do not defer is DEFERRED (D19, logged in `TODO.md`).
+  clients that do not defer is DEFERRED (D19, logged in `docs/TODO.md`).
 - **One registry with the core tools.** The generic core tools are shipped scripts of the generic category: one
   registry, one validation path, one result enforcer. Task-shaped scripts call the same op functions (`ctx.core.*`).
 - **Skills reference the tools** (§2.7) so descriptions stay short.
@@ -450,7 +439,7 @@ entries of the same registry with the budgets of §2.6.
 | D16 | `create_actor` is removed when `create_documents` lands; no alias (no-backwards-compatibility rule) | DECIDED | User 2026-10-11; READ `.claude/claude.md:25` |
 | D17 | Context minimisation is a top-priority, cross-cutting requirement; every milestone has a context-budget criterion | DECIDED | User 2026-10-10 |
 | D18 | The user's script proposal: adopted as modified in §2.3 (one registry with the core tools; each script its own deferred MCP tool; combined with result shaping); skills may reference tools as the discovery layer (§2.7) | DECIDED | User 2026-10-11; MEASURED (coord.) §2.1 R1–R6 |
-| D19 | Dispatcher mode (`list_scripts` / `describe_script` / `run_script`) for clients that do not defer tools | DEFERRED (logged in `TODO.md`) | User 2026-10-11 |
+| D19 | Dispatcher mode (`list_scripts` / `describe_script` / `run_script`) for clients that do not defer tools | DEFERRED (logged in `docs/TODO.md`) | User 2026-10-11 |
 | D20 | Budgets of §2.6 enforced in bytes; constructed outputs CI-hard, requested outputs bounded by the runtime hard cap | DECIDED (adoption); the † value changes of revision 3 DECIDED (accepted 2026-10-11) | User 2026-10-11; MEASURED (coord.) §2.1 |
 | D21 | Agent-saved scripts governed by Claude Code permissions (user's position); option (a) as stated vs (b) with minimal Wiretap safeguards (recommended) vs (c) Foundry-UI approval | DECIDED: option (b) (accepted 2026-10-11) | §2.5; READ Claude Code permission and MCP docs |
 | D22 | Ad-hoc agent code `run_js` is not built. Rationale: arbitrary GM-authority code per call defeats the gate hard rule (§4.6); its code travels in every call's arguments (the opposite of the context goal); `execute_macro` (gated) and D21 cover reuse | DECIDED (coordinator's judgement, delegated by the user) | User 2026-10-11 |
@@ -458,7 +447,7 @@ entries of the same registry with the budgets of §2.6.
 | D24 | Default read view = compact; the canonical D14 export with `mode:"full"` or by `paths`, all under the hard cap | DECIDED (in principle) | User 2026-10-11 ("I think this can work") |
 | D25 | DOM scripts route to the agent endpoint by default; a human GM tab only by explicit `endpoint` override | DECIDED | User 2026-10-11 |
 | D26 | Path-scoped reads and writes (§2.8): `paths` parameter on `get_document`, same grammar in `update_documents`, `read_handle`, `describe_schema`; no new tools; `edit` merged into `update_documents` | DECIDED (accepted 2026-10-11; recommendation) | User request 2026-10-11; READ `helpers.mjs:821-868`, `global.d.mts:6-7` |
-| D27 | Build M11 (raw-socket executor) at all? Recommendation: **no; drop it and log it in `TODO.md`.** After E2 it could only serve source reads and valid system-field updates when no client is live, and the sidecar cannot tell valid from invalid values without the system's DataModels, which exist only in a client (READ §4.3); the agent runner (M9) already provides a client for about 440 MB and 1.8 s | DECIDED: drop (user accepted, 2026-10-11) | MEASURED (coord.) M0 E2, E3 |
+| D27 | Build M11 (raw-socket executor) at all? Recommendation: **no; drop it and log it in `docs/TODO.md`.** After E2 it could only serve source reads and valid system-field updates when no client is live, and the sidecar cannot tell valid from invalid values without the system's DataModels, which exist only in a client (READ §4.3); the agent runner (M9) already provides a client for about 440 MB and 1.8 s | DECIDED: drop (user accepted, 2026-10-11) | MEASURED (coord.) M0 E2, E3 |
 | D28 | Screenshot default expressed as pixel area (≤ 480,000 px, the 800×600 area, aspect kept) instead of an 800×600 box (‡ in §2.6) | DECIDED (user accepted, 2026-10-11) | MEASURED (coord.) M0 E9: titan actor sheet 850×926 |
 
 ## 4. Architecture
@@ -673,7 +662,7 @@ Every milestone follows `.claude/claude.md`:
 - **Context-budget criterion (required, D17):** each milestone states one; from M13 on, every tool and result it adds
   is covered by the M13 budget test, and a budget breach fails the milestone. A budget is raised only by the user.
 - **Final step (required): docs + `wiretap-*` skills + `graphify update .`**:
-  - Update `TODO.md`, `docs/OPEN_BUGS.md`, `docs/CLOSED_BUGS.md` and README as touched.
+  - Update `docs/TODO.md`, `docs/OPEN_BUGS.md`, `docs/CLOSED_BUGS.md` and README as touched.
   - Update every `wiretap-*` skill whose paths changed, describing the current state; skills that reference MCP tools
     (§2.7) are updated with the tools.
   - Run `graphify update .`.
@@ -694,27 +683,9 @@ M12 (M11 dropped, D27).
 
 ### M0 — Experiments against Foundry
 
-**Status: DONE 2026-10-11.** Results: [`docs/experiments/2026-10-m0-results.md`](docs/experiments/2026-10-m0-results.md)
-(condensed from the raw JSON in the session scratchpad and checked against it). Run on the launcher
-(`npm run foundry:start`; spawn → listening 26.5 s cold, 4.9 s warm). Every experiment ran; deviations from the
-procedure below: E2 did not measure delete fidelity; E7 ran one restart (not two) as the pre-existing GAMEMASTER
-`E2E GM 1` and used the launcher's `--world` flag instead of `options.json`; the three `wtx-*` users were deleted at the
-end through Foundry document deletion (the safety limit below said they would be kept). No files were deleted.
+**Status:** Done: see [`docs/PROGRESS.md`](PROGRESS.md) (outcomes and deviations); the specification below is
+kept as the reference.
 
-**Outcomes:**
-
-| Exp | Outcome (MEASURED (coord.)) | Decision |
-|---|---|---|
-| P1 | PASS: no password, hash or salt client-visible for any role on any path; an anonymous `/join` session receives the full user list (names, roles) | D3 premise holds |
-| E1 | PASS at socket level (12 samples over 55 s, broadcasts in 14–15 ms), but the stock join form refuses an already-active user | D4: dedicated agent users |
-| E2 | Every create class differs; valid system-field updates identical; server stores invalid `system` data; unknown subtype rejected; raw Scene broken | D1 boundary (§4.3), D27 |
-| E3 | Shell + noCanvas: ready 1.8 s, 438.7 MB WS / 294.8 MB private, 18.2 % of one core idle, 5 processes; drawn canvas on the shell 608 %; an MCP call before identify completes fails | D2 profile; M9 |
-| E4 | ASSISTANT `isGM` true, never outranks a GAMEMASTER for `activeGM`, cannot promote to GAMEMASTER; can create Users, Settings, compendium entries | D4 |
-| E7 | After a restart the page reconnects in 17.4 s, is then redirected to `/join` and stays there; the bridge does not re-identify; a fresh login recovers in 2.1 s (7.8 s after the restart flag) | M9 recovery design |
-| E8 | Actor schema walk 19.9 KB, Items 2.0–2.6 KB, Adventure 26.5 KB; blank export Actor 4.85 KB; 7 classes cannot be constructed blank | D15 |
-| E9 | Titan full actor exports 5.7–12.5 KB; compact ≤ 1,574 B; projections 199–1,224 B; `sheet_layout` depth 2 too shallow (≤ 441 B); actor sheet 850×926 PNG 111–115 KB | §2.6 confirmed except D28 |
-
-The original plan follows for the record.
 
 **Depends on:** the launcher; no concurrent TITAN e2e run (§4.8). **Produces:** `docs/experiments/2026-10-m0-results.md`.
 No product code.
@@ -750,12 +721,14 @@ with TITAN e2e (§4.8); E7 needs control of the Foundry process (the launcher).
 
 ### M1 — Endpoint registry, routing, protocol v2
 
+Done: see [`docs/PROGRESS.md`](PROGRESS.md).
+
 **Goal:** replace `gmSockets` / first-socket routing with an explicit registry and router. **Depends on:** none (can
 start before M0 finishes). **In:**
 
 - `server/endpoints.ts`.
 - `bridge:identify` v2 (`kind`, `dom`, `protocolVersion`; `gateState` arrives with M2, and `fingerprint` is dropped
-  with M11/D27); v1 identify removed. Detailed design: `docs/superpowers/specs/2026-10-11-wiretap-m1-endpoint-registry-design.md`. The
+  with M11/D27); v1 identify removed. Detailed design: `docs/specs/2026-10-11-wiretap-m1-endpoint-registry-design.md`. The
   sidecar acknowledges identify after the endpoint is registered (Socket.IO ack); the client exposes an "identified"
   state that the M9 runner waits on (M0 E3/E7: calls between identify-sent and registration failed).
 - Routing per D5 (DECIDED) with per-call `endpoint` override. The default order lives in one constant and is
@@ -778,6 +751,8 @@ error-contract truncation is unit-tested with a 50-failure input. **Risks:** a s
 refused with a "reload Foundry" message.
 
 ### M13 — Context-budget harness, result enforcer, handle store, path resolver
+
+Done: see [`docs/PROGRESS.md`](PROGRESS.md).
 
 **Goal:** make §2.6 executable before any new tool exists. **Depends on:** M1. **Consent at start:** new files
 `shared/budgets.js`, `shared/docPath.js`, `server/resultBudget.ts`, `server/handles.ts`, `tests/measure/`. **In:**
@@ -810,6 +785,8 @@ reality on other tokenizers → recalibration script; budgets change only by use
 
 ### M2 — Risk-gate options
 
+Done: see [`docs/PROGRESS.md`](PROGRESS.md).
+
 **Goal:** the gate settings and enforcement points before any write skill exists. **Depends on:** M1. **In:**
 
 - World-scope `restricted` settings (§4.6, with D12a and D21 deciding which exist), labels and hints in
@@ -831,6 +808,8 @@ the settings; gate state never appears in results except as one compact line in 
 write path. Mitigation: M4/M5 acceptance includes the deny test per path.
 
 ### M3 — Stateful MCP sessions
+
+Done: see [`docs/PROGRESS.md`](PROGRESS.md).
 
 **Goal:** sessions with an SSE GET stream and `notifications/tools/list_changed` (D11, DECIDED). **Depends on:** M1,
 M13. **In:**
@@ -1140,13 +1119,13 @@ external mode exposes the sidecar, not Foundry; Foundry's exposure is the GM's o
 
 ### M11 — Raw-socket executor (option B)
 
-**Status: DROPPED (D27 DECIDED 2026-10-11, user accepted the recommendation); not built, logged in `TODO.md`.** E2 certifies reads of stored source data only
+**Status: DROPPED (D27 DECIDED 2026-10-11, user accepted the recommendation); not built, logged in `docs/TODO.md`.** E2 certifies reads of stored source data only
 (§4.3). What a read-only B would add: answers when no client endpoint is live, limited to source data (no derived
 values, no compact view key fields that depend on prepared data, sparse `system` for raw-created documents). What it
 costs: a second login path and executor, a second shaping path, and an always-present risk that a later change routes
 a write over it; the server stores invalid `system` values (E2), which the sidecar cannot detect without the
 system's DataModels. The M9 runner provides a full client for ≈ 440 MB and 1.8 s (E3), and recovers from a restart in
-≈ 8 s warm (E7). D27 = drop: this milestone is logged in `TODO.md` and removed from the order; the read-only form below is kept
+≈ 8 s warm (E7). D27 = drop: this milestone is logged in `docs/TODO.md` and removed from the order; the read-only form below is kept
 only as the scope to revisit if a raw-socket path is ever wanted. **Depends on:** M5, M8, M2 (gate snapshot). **In (read-only form):**
 
 - `server/rawSocket.ts` (login with an agent credential, `modifyDocument` with action `get` only; any other action is
@@ -1164,7 +1143,7 @@ op.
 
 ### M12 — Live e2e matrix and documentation
 
-**Goal:** end-to-end coverage for human-tab, agent and (if any) raw endpoints. Close the related `TODO.md` entries
+**Goal:** end-to-end coverage for human-tab, agent and (if any) raw endpoints. Close the related `docs/TODO.md` entries
 (live bridge e2e, auto-wiring e2e). Final README, including a "Context budget" section with §2.6 and the permission
 guidance of §2.5. **Depends on:** M6, M7, M9, M15a, M15b (and M10/M11/M16 if built). **Acceptance:** full `npm test`,
 `npm run typecheck`, `npm run eslint`, `npm run test:e2e` green with output reported; the Wiretap census (§4.8) is
@@ -1215,8 +1194,8 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
 - Elicitation is declared by Claude Code but untested. Not used.
 - Dev `options.json` has `upnp: true` (READ). INFERRED: Foundry `:30000` may be reachable externally. Agent users must
   have passwords.
-- `.gitignore` lists e2e chunks at the repo root (`/*-????????.js`) while the rules say e2e builds to `test/build/`.
-  Out of this plan; flag only.
+- The rules in `.claude/claude.md` say e2e builds to `test/build/`, while the e2e build writes to `dist/` (the root
+  ignore lines for e2e chunks are gone). Out of this plan; flag only.
 - Context measurements are single runs on one model's tokenizer (`claude-haiku-5-5`); other models may count
   differently. Byte budgets plus the recalibration script contain this.
 - Claude Code's deferral, inline-result cap and `_meta` annotations are client behaviour that can change between
@@ -1225,7 +1204,7 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
 - Script catalogue sprawl raises the always-listed name cost (≈13 tokens per tool); the ≤ 30 cap forces review.
 - Shared `test-titan` world with TITAN e2e (§4.8): leftover combats or orphan tokens fail TITAN's run.
 
-## 8. Out of scope / deferred (log in `TODO.md` when this plan is accepted)
+## 8. Out of scope / deferred (log in `docs/TODO.md` when this plan is accepted)
 
 - MCP stdio transport; MCP sampling (unsupported by Claude Code, MEASURED (coord.)).
 - Offline LevelDB/compendium writes while the world is stopped; a Foundry REST layer.
@@ -1234,7 +1213,7 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
 - Rate limiting / quotas per MCP session.
 - Node-side plugin handlers.
 - Structured chat UI (existing TODO).
-- Dispatcher exposure mode (D19; already in `TODO.md`).
+- Dispatcher exposure mode (D19; already in `docs/TODO.md`).
 - Persisting handles across sidecar restarts.
 - Compendium pack creation/deletion tools (§9 C1).
 
@@ -1273,63 +1252,5 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
 
 ## 10. Changes made in this revision
 
-**Revision 3 (2026-10-11):**
-
-- Evidence labels: every "MEASURED by user" is now "MEASURED (coord.)" (the coordinator's experiment agents), defined
-  in the header.
-- Header: the no-backwards-compatibility rule; applied throughout (D16 removal, protocol v1 refused, `create_actor`
-  removed in M5, M1/M14 wording).
-- Decisions: DECIDED D5, D11, D12, D14 (incl. `keepId`), D16, D18 (incl. skills as discovery), D20 (adoption), D22 (not
-  built), D23, D24, D25; D19 DEFERRED; new D12a (delete gate, PENDING-USER), D21 restated around Claude Code
-  permissions (PENDING-USER), new D26 path-scoped reads/writes (PENDING-USER).
-- §2: path-slice measurements (`pathsizes.mjs`, no new `claude -p` runs); deferral facts cross-checked against the
-  Claude Code docs; ranking adds skills and paths; §2.5 rewritten (Claude Code permission facts READ, options a/b/c,
-  recommendation b, sidecar store instead of a `wiretap.*` setting, invariants S1–S7); §2.6 final budgets with hard vs
-  warning and † changes (core names 32, plugin names 64, description 160/240, compact tuple cap 40, hard cap 8 KB
-  default with `maxBytes` ≤ 16 KB); new §2.7 skills as discovery layer; new §2.8 path-scoped reads and writes;
-  catalogue renumbered §2.9 (`get_document`/`update_documents`/`delete_documents` rows, `edit` merged into
-  `update_documents`, `propose_script` replaced by `save_script`/`disable_script`).
-- Architecture: path resolver `shared/docPath.js`; agent-script store replaces the proposal log and the approval UI;
-  `bridge:proposals` removed; server `instructions`; gates `allowAgentScripts` (replaces `allowApprovedScripts`),
-  `allowAdhocCode` removed; `allowDelete`/`allowUndo` per D12a; new §4.8 test-data cleanup pattern read from TITAN.
-- Milestones: shared rules split file deletion (banned) from document deletion (allowed); M0 status and launcher
-  prerequisite, delete-only-own-`wtx-` rule, delete in E2/E4, path sizes in E8/E9, no combats/tokens left; M1 v1
-  refused; M13 adds `docPath.js`, hard/warn budgets and the skill-reference check; M3 no longer "confirm at start",
-  adds `instructions`; M14 adds the discovery layer; M4 `paths`; M5 path writes, `delete_documents`, `create_actor`
-  removal; M6 `undo_last` per D12a; M16 rewritten for D21 options; e2e milestones use the §4.8 teardown; M12 census.
-- §7–§9: risks for deletes, permission bypass, shared world; C1 and C6 resolved (C1 keeps the pack-deletion residue);
-  C7, C8 updated; C9 added.
-
-**Revision 2 (2026-10-10):** added G0 and §2 (cost model, ranking, script verdict, design, catalogue, budgets);
-renumbered sections; D17–D25; architecture components for budgets, handles and scripts; milestones M13–M16; a
-context-budget criterion in every milestone.
-
-**Revision 4 (2026-10-11):** the user accepted the open recommendations: D12a (no gate for ordinary document
-deletes; `User`/`Setting` deletes stay behind their gates; no pack deletion), D20 † value changes (8 KB default hard
-cap, name and description limits), D21 option (b) (Claude Code permissions plus the minimal Wiretap safeguards), D26
-(`paths` parameter on `get_document`, shared grammar), the three proposed extra gates (`allowOwnershipWrites`,
-`allowCompendiumWrites`, `allowModuleConfigWrites`) and the e2e running-list location. No PENDING-USER decisions
-remain except those that wait on M0 results.
-
-**Revision 5 (2026-10-11): M0 results folded in.**
-
-- M0 marked DONE with an outcome table and its deviations; results recorded in
-  `docs/experiments/2026-10-m0-results.md` (condensed from the raw JSON and checked against it, including E7 and the
-  experiment agent's corrections: the E4 role-2 rerun, the E2 malformed-path rerun, the E7 `autoRecovered` false
-  positive).
-- Decisions now DECIDED with M0 evidence: D1 (B-eligible = source reads only; the per-operation table in §4.3), D2
-  (headless shell + `core.noCanvas` as the default agent profile), D3 (P1 PASS), D4 (ASSISTANT agents on dedicated
-  users; activeGM implication stated), D15 (E8-driven `describe_schema`: blank export + outline, constraints only with
-  `path`). New PENDING-USER: D27 (drop M11, recommended) and D28 (screenshot default as pixel area).
-- §2.6: E9 confirms the compact (≤ 1,574 B) and projection budgets; notes that titan full actor exports exceed the 8 KB
-  default cap; `sheet_layout` depth to be measured in M15b; screenshot default rephrased (‡, D28).
-- Milestones: all BLOCKED-BY-M0 markers removed (M4, M8, M9, M11, M15b); M1 adds an identify acknowledgement; M4
-  `describe_schema` design per E8 and compact view from the E9 prototype; M8 role and password warnings; M9 rewritten
-  around the default profile, identify-ack wait, `/join`-redirect re-login recovery (E7), measured resource and
-  recovery budgets and a restart e2e; M10 anonymous user-listing note; M11 reduced to a read-only form pending D27;
-  M15b `sheet_layout` depth measurement.
-- §7: risks for server-accepted invalid data, the server `TypeError` noise, anonymous user listing, the agent as
-  active GM, login-not-reconnect recovery and the launcher defect; the obsolete "E2 may show" risk removed.
-
-**Revision 6 (2026-10-11):** the user accepted D27 (drop M11, the raw-socket executor; logged in `TODO.md`) and D28
-(screenshot default as a pixel area of at most 480,000 px, aspect kept). No PENDING-USER decisions remain.
+The revision history (revisions 2 to 6) is in [`docs/PROGRESS.md`](PROGRESS.md), section "Revision history". The
+section number stays because other documents cite it.

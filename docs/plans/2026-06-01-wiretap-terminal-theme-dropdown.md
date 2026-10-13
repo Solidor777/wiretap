@@ -9,7 +9,7 @@
 
 **Tech:** Svelte 5 runes (`$state`/`$derived`/`$effect`), Foundry `game.settings.register` with `choices`, xterm `term.options.theme`.
 
-**Spec:** `docs/superpowers/specs/2026-06-01-wiretap-terminal-theme-dropdown-design.md`
+**Spec:** `docs/specs/2026-06-01-wiretap-terminal-theme-dropdown-design.md`
 
 ---
 

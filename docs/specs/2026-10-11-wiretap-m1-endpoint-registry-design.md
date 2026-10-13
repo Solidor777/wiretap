@@ -1,6 +1,6 @@
 # Wiretap M1 — endpoint registry, routing, protocol v2 — design
 
-Source: `plan.md` §5 M1, §4.5, decisions D5, D16, D25 (all DECIDED). No backwards compatibility
+Source: `docs/PLAN.md` §5 M1, §4.5, decisions D5, D16, D25 (all DECIDED). No backwards compatibility
 (`.claude/claude.md`): v1 identify is refused, not translated.
 
 Out of scope: tokens (M10), risk-gate state in identify (M2), skills registry (M7), credentials (M8), runner (M9),
@@ -70,7 +70,7 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
 - R6.1 README: the routing order constant and the override; the identify-ack contract for runner authors.
 - R6.2 Skills `wiretap-mcp-bridge`, `wiretap-sidecar`, `wiretap-client` and `wiretap-codebase-core` updated to the new
   current state. `graphify update .` run.
-- R6.3 `plan.md` M1 text matches this spec (gateState moves to M2; fingerprint dropped).
+- R6.3 `docs/PLAN.md` M1 text matches this spec (gateState moves to M2; fingerprint dropped).
 
 ## Addendum A (code-review findings, 2026-10-11)
 
@@ -108,7 +108,7 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
   so an ack from an earlier connection cannot mark a later one identified; op lookup uses `Object.hasOwn` so inherited
   names (`constructor`) are unknown ops.
 - R8 Cleanups: lines over 120 columns in touched files; typed + commented declarations flagged by the review; the double
-  blank line in `src/bridge/foundryBridge.js`; the `plan.md` §4 component-table registry row matches M1; the
+  blank line in `src/bridge/foundryBridge.js`; the `docs/PLAN.md` §4 component-table registry row matches M1; the
   `mcpConfigFile.test.js` scratch root includes a timestamp (open bug in `docs/OPEN_BUGS.md` moves to CLOSED when fixed).
 - R7.3 Refused Socket.IO origin handshakes are logged (`Wiretap sidecar | refused origin "<origin>"`, the origin cut to
   64 bytes) through the same throttle as refused identifies: at most 10 lines per minute, then ONE
@@ -121,7 +121,7 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
 - R5.7 The "does nothing before the bridge is wired" client test imports a fresh module instance (`vi.resetModules`) and
   asserts `reidentifyBridge` reads no setting; the origin test asserts the refusal body `Origin not allowed` (HTTP 403 on
   a polling handshake; the client library reports only `websocket error` / `xhr poll error`).
-- Deferred (needs a decision, logged in `TODO.md`): endpoint health and fallback after a timeout (a hung preferred
+- Deferred (needs a decision, logged in `docs/TODO.md`): endpoint health and fallback after a timeout (a hung preferred
   endpoint blocks later calls; automatic retry of a mutation on another endpoint risks a double apply).
 
 ## Addendum B (endpoint health, 2026-10-11; decision accepted by the owner)
@@ -157,6 +157,6 @@ new tools. The raw-socket `fingerprint` field is dropped with M11 (D27).
   integration test with two fake clients (agent acks pings but never invokes; agent acks neither); client ping-handler
   unit test.
 - R9.8 Docs: README routing section, `wiretap-sidecar`, `wiretap-mcp-bridge` and `wiretap-client` skills, the
-  `TODO.md` failover item removed, and two items logged in `TODO.md`: late-ack logging with `requestId` (so an operator
+  `docs/TODO.md` failover item removed, and two items logged in `docs/TODO.md`: late-ack logging with `requestId` (so an operator
   can tell whether a timed-out mutation applied) and retrying idempotent ops, which needs a sidecar-trusted `mutates:
   false` on shipped ops only (M7).

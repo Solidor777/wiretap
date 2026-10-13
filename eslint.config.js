@@ -85,10 +85,7 @@ export default [
          'scripts/',
          'styles/',
          'templates/',
-         'index.js',
          'server/',
-         // Hashed e2e chunks of the earlier layout, which emitted them at the repo root; the build now writes to dist/.
-         '*-????????.js',
          'node_modules/',
          'fix-comments.js',
          'count-long.cjs',

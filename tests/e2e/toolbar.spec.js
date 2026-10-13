@@ -25,7 +25,7 @@ test.afterAll(async () => {
 // (spurious exit + the `conpty_console_list_agent` AttachConsole crash seen in the sidecar log), which flakes
 // terminal e2e on this machine (the pre-existing terminal.spec pop-out tests flake the same way on a clean
 // checkout). Node 22 LTS substantially reduces it vs Node 25 (single runs are commonly clean) but does not
-// fully eliminate it — full reliability needs the sidecar PTY-shutdown hardening (see TODO.md). Each test is
+// fully eliminate it — full reliability needs the sidecar PTY-shutdown hardening (see docs/TODO.md). Each test is
 // kept short so the PTY only has to survive a few seconds.
 test.describe('wiretap terminal toolbar', () => {
    // Ensure no PTY leaks between serial tests.

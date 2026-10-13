@@ -1,7 +1,7 @@
 # M3 live check results (stateful MCP sessions)
 
 Run 2026-10-12 on a Windows host with `claude` 2.1.296 (`claude --version` printed `2.1.296 (Claude Code)`), model
-`haiku` (the M0 method of `plan.md` §2.1). Labels: **MEASURED** (command and output named), **INFERRED** (not
+`haiku` (the M0 method of `docs/PLAN.md` §2.1). Labels: **MEASURED** (command and output named), **INFERRED** (not
 verified). No credentials appear here. The throwaway scripts live in the gitignored `test/tmp/m3live/` and are not
 committed.
 
@@ -17,7 +17,7 @@ committed.
   cfg.json --allowedTools ... < /dev/null` under `timeout 120` (headless; no browser). `cfg.json` is
   `{"mcpServers":{"wiretap":{"type":"http","url":"http://127.0.0.1:41517/mcp"}}}`.
 - Context per assistant message = `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`, as in
-  `plan.md` §2.1.
+  `docs/PLAN.md` §2.1.
 - After every run the listeners were checked with `netstat -ano | grep ":415"` (no listener), and the sidecar was
   stopped with `taskkill /T /F` on its own pid.
 
@@ -51,7 +51,7 @@ started with `instructions: ''`.
 
 - The 98 tokens are the announcement of the new deferred tool as the client reports it; the stream does not contain
   its text, so how much is the name and how much is surrounding wording is INFERRED (not separable here). The M0 figure
-  for a tool present at session start was about 12 to 14 tokens each (`plan.md` §2.1, R2 and R3), so one late tool
+  for a tool present at session start was about 12 to 14 tokens each (`docs/PLAN.md` §2.1, R2 and R3), so one late tool
   costs more than that, once.
 - Every run shows the same figures for the first turn, so the variation is the model's own output, not the server.
 - The instructions text changed after this measurement: the sentence about Wiretap skills was removed because no skill

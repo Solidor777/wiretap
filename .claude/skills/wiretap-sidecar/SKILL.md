@@ -120,7 +120,7 @@ Plain JS with no dependencies and JSDoc types, shared by both sides. Today only 
 - The MCP endpoint and the Socket.IO server both bind `127.0.0.1`. Both refuse a browser request whose `Origin` is not
   in `ALLOWED_ORIGINS` (`tests/integration/originValidation.test.js`); a request with no `Origin` (a local non-browser
   process) is accepted by design, so there is still no authentication on socket events (shared-secret handshake is a
-  `TODO.md` item).
+  `docs/TODO.md` item).
 - Windows console-window-close (CTRL_CLOSE) cannot be trapped by Node; PTY teardown covers Ctrl-C, SIGTERM, e2e
   teardown.
 - Tests: `tests/unit/sidecarPty.test.js` (incl. auto-wiring), `terminalPayloads` (input/resize/launch payload validation), `mcpWiring`, `mcpConfigFile`, `serverMode`, `shutdown`; `tests/integration/terminal.test.js`, `serverModes.test.js`,

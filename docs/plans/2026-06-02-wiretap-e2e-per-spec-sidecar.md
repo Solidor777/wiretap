@@ -10,7 +10,7 @@
 
 **Tech Stack:** Playwright, Node child_process, the existing `npm run server:start` sidecar (tsx + socket.io + node-pty). Verification runs under portable Node 22 at `%TEMP%\node22\node-v22.12.0-win-x64`.
 
-**Spec:** `docs/superpowers/specs/2026-06-02-wiretap-e2e-per-spec-sidecar-design.md` (approved).
+**Spec:** `docs/specs/2026-06-02-wiretap-e2e-per-spec-sidecar-design.md` (approved).
 
 ---
 

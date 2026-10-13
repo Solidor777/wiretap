@@ -10,7 +10,7 @@
 
 **Tech Stack:** `node-pty` (sidecar, native/ConPTY), `@xterm/xterm` + `@xterm/addon-fit` (browser, bundled), socket.io (reused), Svelte 5 runes, Vitest (node integration + happy-dom unit).
 
-**Spec:** `docs/superpowers/specs/2026-06-01-wiretap-bridge-02-terminal-relay-design.md`
+**Spec:** `docs/specs/2026-06-01-wiretap-bridge-02-terminal-relay-design.md`
 
 **Carried facts:** socket.io reused from #1 (Foundry's global `io`); `serverUrl` client setting exists; `server/` is TS + eslint-ignored + typechecked; commits authored `Solidor <justintarquin2019@gmail.com>` (user-confirmed) with the Claude co-author trailer.
 

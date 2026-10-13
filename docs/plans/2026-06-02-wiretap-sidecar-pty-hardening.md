@@ -10,7 +10,7 @@
 
 **Tech Stack:** Node + TypeScript sidecar (tsx, socket.io, node-pty 1.1.0 — N-API, bundles winpty + ConPTY), Vitest, Playwright. Measurements run under portable Node 22 at `%TEMP%\node22\node-v22.12.0-win-x64`.
 
-**Spec:** `docs/superpowers/specs/2026-06-02-wiretap-sidecar-pty-hardening-design.md` (approved).
+**Spec:** `docs/specs/2026-06-02-wiretap-sidecar-pty-hardening-design.md` (approved).
 
 ---
 

@@ -16,7 +16,7 @@ hosting an AI-agent terminal and a bridge that lets agents act on the live world
 | Process | Location | Role |
 |---|---|---|
 | Foundry client (browser) | `src/` → built to `dist/index.js` + `dist/style.css` by Vite (the paths `module.json` names; the e2e build writes the same files with hash-free chunk names) | Svelte 5 (runes) mounted directly into ApplicationV2; xterm terminal; executes bridge ops on a GM client |
-| Sidecar (Node) | `server/` run by `tsx` (`npm run server:start`, `start-wiretap.sh`) | Socket.IO server (default `:31416`, `WIRETAP_PORT`), node-pty terminal relay, stateful MCP HTTP server (sessions with an SSE stream and `tools/list_changed`; default `127.0.0.1:31417/mcp`, `WIRETAP_MCP_PORT`) |
+| Sidecar (Node) | `server/` run by `tsx` (`npm run server:start`, `scripts/start-wiretap.sh`) | Socket.IO server (default `:31416`, `WIRETAP_PORT`), node-pty terminal relay, stateful MCP HTTP server (sessions with an SSE stream and `tools/list_changed`; default `127.0.0.1:31417/mcp`, `WIRETAP_MCP_PORT`) |
 
 `shared/protocol.js` holds the wire constants used by both sides (imported as `$shared/protocol.js` in the client and
 `../shared/protocol.js` in the sidecar). The Foundry bridge speaks protocol v3 (`PROTOCOL_VERSION`): GM clients identify as `human` or
@@ -43,7 +43,7 @@ before touching its files.
 - All source in `src/` (client) and `server/` (sidecar). Never hand-edit build output.
 - No dynamic imports in shipping builds; no test/e2e code in shipping builds. The e2e build writes to the same `dist/` as the production build (Foundry loads the module from the paths in `module.json`) with hash-free file names, so nothing accumulates and nothing is deleted. Packaging runs `npm run build` and then `npm run check:release`, which fails while `dist/` holds anything but `index.js`, `index.js.map` and `style.css` (the e2e chunks `registerProbe.js` and `TerminalConnection.svelte.js` and their maps must be recycled with `trash` first).
 - No `:global` CSS selectors. 120-column wrap; typed and commented declarations; multi-line `{}` scopes.
-- No stub fixes. Bugs → `docs/OPEN_BUGS.md`; deferrals → the TODO file (`TODO.md` at the repo root; `.claude/claude.md` names `docs/TODO.md`, which does not exist); closed bugs → `docs/CLOSED_BUGS.md`.
+- No stub fixes. Bugs → `docs/OPEN_BUGS.md`; deferrals → `docs/TODO.md`; closed bugs → `docs/CLOSED_BUGS.md`.
 - No e2e wait over 1000 ms inside a loaded page.
 - The MCP HTTP endpoint and the sidecar Socket.IO server both bind `127.0.0.1` only (the Socket.IO server is attached
   to an `http.Server` listening on `127.0.0.1`; the bind address is not configurable). Both execute world mutations or
@@ -55,6 +55,20 @@ before touching its files.
   file) apply only on creation, `.wiretap` and the file are `lstat`-checked for symbolic links, and the lstat-then-write
   gap is a documented residual risk. Tests that write files use unique roots under the gitignored `test/tmp/` or mock
   `node:fs`.
+
+## Documentation map (`docs/`)
+
+| File | Role |
+|---|---|
+| `docs/README.md` | Index of `docs/`: living docs vs historical records |
+| `docs/PLAN.md` | Forward-looking plan and design reference (decisions D*, architecture, milestone specs); section numbers are cited elsewhere |
+| `docs/PROGRESS.md` | Work history: milestone completion table, results, plan revision history |
+| `docs/TODO.md` | Deferred-work backlog |
+| `docs/OPEN_BUGS.md`, `docs/CLOSED_BUGS.md` | Open and fixed bugs |
+| `docs/POST_WORK_FINDINGS.md` | Gotchas found in post-work review (not a to-do list) |
+| `docs/specs/`, `docs/plans/`, `docs/experiments/` | Historical design specs, implementation plans and measured results |
+
+Repo root holds config and entry files only; launcher scripts are in `scripts/`.
 
 ## Keeping the skills current (mandatory)
 

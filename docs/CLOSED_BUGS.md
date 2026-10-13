@@ -21,10 +21,9 @@
   only. Two consecutive `npm run build:e2e` runs left the same seven files in `dist/` (`index.js`, `style.css`,
   `TerminalConnection.svelte.js`, `registerProbe.js` and their maps) with no hashed name, and the root listing did not
   change. `npm run test:e2e` (headless, Foundry started by the harness) passed 14 of 14 loading the module from `dist/`.
-- **Left on disk for the owner to recycle with `trash` (not deleted by this work):** `index.js`, `index.js.map`,
+- **Recycled with `trash` afterwards (2026-10-13), no longer in the root:** `index.js`, `index.js.map`,
   `style.css`, `TerminalConnection.svelte-BqIjz3bZ.js(.map)`, `TerminalConnection.svelte-mN39lUcZ.js(.map)`,
-  `registerProbe-B0zWb1xU.js(.map)` and `registerProbe-gFiVeMjW.js(.map)` in the repo root. They are no longer loaded
-  (the manifest points at `dist/`); `.gitignore` keeps their ignore lines until they are gone.
+  `registerProbe-B0zWb1xU.js(.map)` and `registerProbe-gFiVeMjW.js(.map)` in the repo root. They were no longer loaded (the manifest points at `dist/`); their `.gitignore` and eslint ignore lines were removed once they were gone.
 - **Release check:** `npm run check:release` fails while `dist/` holds anything but `index.js`, `index.js.map` and
   `style.css`; packaging runs `npm run build` and then `npm run check:release`, after the e2e leftovers are recycled.
 - **Owner decision:** `.claude/CLAUDE.md` says test and e2e code builds to `test/build/` and stale built files are

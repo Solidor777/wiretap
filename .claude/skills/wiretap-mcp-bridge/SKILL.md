@@ -42,7 +42,7 @@ way as the tool result.
   `{"mcpServers":{"wiretap":{"type":"http","url":"http://127.0.0.1:<port>/mcp"}}}`; see `wiretap-sidecar`).
 - Standalone: `npm run server:mcp` (`mcp-only` mode: Socket.IO, bridge and MCP up, no terminal relay) plus
   `claude mcp add --transport http wiretap http://127.0.0.1:31417/mcp`.
-- Only Streamable HTTP exists; stdio is not built (`TODO.md`).
+- Only Streamable HTTP exists; stdio is not built (`docs/TODO.md`).
 
 ## Pieces
 
@@ -120,7 +120,7 @@ way as the tool result.
   (`Hooks.off` first), so a change is never pushed twice. A non-GM author is ignored; a user holding `SETTINGS_MODIFY` can still write a gate and is trusted at GM level (README). A change while disconnected needs no push: the next identify
   carries the snapshot.
 - No op can set a setting: `OP_HANDLERS` holds only `createActor`, which passes `name` and `type` to `Actor.create`.
-  `foundryBridge.noSettingWrites.test.js` documents it. Each future write path wires `denyWiretapSettingWrite` (`TODO.md`).
+  `foundryBridge.noSettingWrites.test.js` documents it. Each future write path wires `denyWiretapSettingWrite` (`docs/TODO.md`).
 
 ## Adding a tool or op
 
@@ -133,7 +133,7 @@ way as the tool result.
 4. Add a representative-result fixture for the tool to `FIXTURES` in `tests/unit/contextBudgetHarness.js`; `tests/unit/contextBudget.test.js` fails for a listed tool without one and for a definition or fixture result over its budget.
 5. Unit-test both sides (`tests/unit/mcp.test.js`, `mcpSessions.test.js`, `toolRegistry.test.js`, `foundryBridge.registry.test.js`, `foundryBridge.client.test.js`, `foundryBridge.server.test.js`,
    `endpoints.test.js`); routing over real sockets is in `tests/integration/endpointRouting.test.js` (fake v3 clients); sessions, `list_changed`, registry tools, expiry and the cap over real HTTP with the SDK client are in `tests/integration/mcpSessions.test.js` (`tests/integration/mcpHttp.js` is the raw session helper the older integration tests use, because a raw POST without a session no longer works); gate snapshots: `tests/unit/gates.test.js`, `foundryBridge.gateState.test.js` (fake sockets: registered-only rule, throttle, per-endpoint) and `tests/integration/gateState.test.js` (real sockets: identify and event paths, hostile snapshots, two endpoints, no gate state in tool results).
-6. Update this skill and the deferred-work file (`TODO.md` at the repo root).
+6. Update this skill and the deferred-work file (`docs/TODO.md`).
 
 ## Result enforcer, handles and `read_handle`
 
@@ -199,7 +199,7 @@ count raw UTF-8 text bytes, not JSON-escaped wire bytes.
   `makeReadHandleHandler` and `withResultBudget`, so a session reads only handles its own calls stored (another
   session's handle gives `HANDLE_NOT_FOUND`). `HandleStore.releaseOwner(ownerKey)` drops every handle of one owner; the
   session manager's `onEnd` calls it when a session ends (DELETE, idle expiry, cap eviction, dispose). Eviction by the
-  count and byte limits stays global across owners (`TODO.md`). `startMcpServer` creates the store once per server (or
+  count and byte limits stays global across owners (`docs/TODO.md`). `startMcpServer` creates the store once per server (or
   takes `options.handleStore`); `options.instructions` replaces `WIRETAP_INSTRUCTIONS`; `tools` are
   `ToolRegistration` entries (`name`, `description`, `inputSchema` zod shape, `handler`, `budgetBytes?`) registered on every
   session; tests use it for test-local tools (no production test tool exists).

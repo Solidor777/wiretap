@@ -12,7 +12,7 @@
 
 **Reference source:** `C:\FoundryVTT\V14\dev\foundryuserdata\Data\systems\titan` (build configs) and `C:\FoundryVTT\V14\foundry\client\applications\sidebar\` (sidebar API).
 
-**Spec:** `docs/superpowers/specs/2026-06-01-wiretap-scaffold-design.md`
+**Spec:** `docs/specs/2026-06-01-wiretap-scaffold-design.md`
 
 ---
 

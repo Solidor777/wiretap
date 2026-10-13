@@ -17,7 +17,7 @@
       "Sidecar": {
          "Connecting": "Connecting to sidecar…",
          "OfflineTitle": "Sidecar not running",
-         "OfflineHint": "Double-click start-wiretap.cmd in the Wiretap module folder. This tab will connect automatically once it's running.",
+         "OfflineHint": "Double-click scripts/start-wiretap.cmd in the Wiretap module folder. This tab will connect automatically once it's running.",
          "Trying": "Trying {url}"
       },
       "Settings": {

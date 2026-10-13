@@ -9,7 +9,7 @@
 
 **Tech Stack:** Svelte 5 (runes), Foundry VTT v14 ApplicationV2, xterm.js, Vitest + @testing-library/svelte, SCSS.
 
-**Spec:** `docs/superpowers/specs/2026-06-02-wiretap-terminal-toolbar-design.md` (approved).
+**Spec:** `docs/specs/2026-06-02-wiretap-terminal-toolbar-design.md` (approved).
 
 ---
 

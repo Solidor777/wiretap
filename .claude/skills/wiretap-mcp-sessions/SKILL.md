@@ -134,9 +134,9 @@ missing name, or a different argument schema (`schemaSignature`, the schema as l
 declared gate that differs from the listed tool's → `GATE_DENIED` without sending; the gate is judged on the picked
 endpoint's snapshot; the result budget is the picked endpoint's `budgetBytes` (a different description or budget does not
 fail the call). The sidecar validates the arguments against the listed shape, which equals the picked endpoint's schema
-once the signatures match. The client has no `callTool` handler yet, so it re-validates nothing (`TODO.md`). The result is shown
+once the signatures match. The client has no `callTool` handler yet, so it re-validates nothing (`docs/TODO.md`). The result is shown
 as text (a string as is, anything else as JSON) behind the result enforcer. The production client sends no registry and
-has no `callTool` handler (`TODO.md`).
+has no `callTool` handler (`docs/TODO.md`).
 
 ## Tests
 

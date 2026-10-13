@@ -10,7 +10,7 @@
 
 **Tech Stack:** Node + TypeScript (run via `tsx`), socket.io `^4.8.3` (server) / Foundry's bundled `socket.io-client` `^4.8.3` (browser global `io`), Svelte 5 runes, Vitest (node integration + happy-dom unit).
 
-**Spec:** `docs/superpowers/specs/2026-06-01-wiretap-bridge-01-transport-design.md`
+**Spec:** `docs/specs/2026-06-01-wiretap-bridge-01-transport-design.md`
 
 **Verified facts (do not re-litigate):**
 - Foundry v14 bundles `socket.io-client@^4.8.3`; the sidecar pins `socket.io@^4.8.3`.

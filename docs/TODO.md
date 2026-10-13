@@ -17,7 +17,7 @@
 - [x] dedicated Foundry MCP server for the user's `claude` to call — vertical slice: `create_actor`
       (sidecar hosts MCP over Streamable HTTP on 127.0.0.1:31417; GM identify handshake routes tool
       calls to the GM browser; `Actor.create` round-trips the uuid back). See
-      `docs/superpowers/specs/2026-06-02-wiretap-mcp-bridge-design.md`.
+      `docs/specs/2026-06-02-wiretap-mcp-bridge-design.md`.
 - [ ] MCP follow-ups: more tools (`create_item`, `create_walls`, scene reads); live-Foundry e2e for
       the bridge (drive an MCP HTTP client against the sidecar, assert an Actor appears); optional
       Wiretap settings UI (enable toggle + port); shared-secret handshake on the sidecar socket.
@@ -27,11 +27,11 @@
       the ack with its `requestId`, so an operator can tell whether a timed-out mutation applied
 - [ ] Retry idempotent ops after an ENDPOINT_TIMEOUT: needs a sidecar-trusted `mutates: false` flag on shipped ops only
       (never client-declared), so a read can move to another endpoint and a mutation is still sent exactly once (M7)
-- [ ] Raw-socket executor (plan.md M11, dropped by D27): reads of stored source data only, for when no client
+- [ ] Raw-socket executor (docs/PLAN.md M11, dropped by D27): reads of stored source data only, for when no client
       endpoint is live. M0 showed raw creates skip the system's pre-create logic and the server accepts invalid data;
       revisit only if a raw path is ever wanted
 - [ ] Script dispatcher mode for MCP clients that do not defer tool schemas: `list_scripts` / `describe_script` /
-      `run_script` (plan.md D19; per-script deferred tools are the primary mode, build this only if such a client is
+      `run_script` (docs/PLAN.md D19; per-script deferred tools are the primary mode, build this only if such a client is
       targeted)
 - [ ] Surface a notice in the terminal stream when the MCP config write fails (today the failure is only logged by the
       sidecar and `claude` launches without the Wiretap tools; deferred by decision)
@@ -54,19 +54,19 @@
       arrays if it matters
 - [ ] Run the live token calibration once: connect Claude Code to the Wiretap MCP server, compare `/context` before and
       after calls against the byte sizes printed by `npx tsx tests/measure/measureContext.mjs`, and replace the inferred
-      bytes / 2 token column in `plan.md` with the measured one
+      bytes / 2 token column in `docs/PLAN.md` with the measured one
 - [ ] Screenshot capture must enforce the 480,000 px default area (`IMAGE_DEFAULT_MAX_PIXELS`) when the capture tool
       exists; the result enforcer checks only the longest side (1280 px), the 1,000,000-character data size and the
       PNG type, never the area
 
 - [ ] Reconcile the M3 registry (`bridge:registry` as a plain array, tool names of at most 32 characters, 30 tools in
       all) with the script registry when it is built: plugin tool names of at most 64 characters
-      (`PLUGIN_TOOL_NAME_MAX_CHARS`), the `{apiVersion, skills}` shape of plan.md section 4.5, and the shared budget of
+      (`PLUGIN_TOOL_NAME_MAX_CHARS`), the `{apiVersion, skills}` shape of docs/PLAN.md section 4.5, and the shared budget of
       listed tools
 - [ ] Client handler for the `callTool` op (`src/bridge/foundryBridge.js` has no entry for it in `OP_HANDLERS`) and the
       client side of `bridge:registry`: the production client sends no registry yet, so no registry tool exists in a
       real session
-- [ ] The client `callTool` handler must validate `arguments` against the client's own declaration of the tool (plan.md M14
+- [ ] The client `callTool` handler must validate `arguments` against the client's own declaration of the tool (docs/PLAN.md M14
       "client-side argument validation"): today the sidecar validates against the listed shape and refuses a call when the
       picked endpoint declares a different schema, but `src/` has no handler and so no validation of its own
 - [ ] Extend `WIRETAP_INSTRUCTIONS` when user-facing Wiretap skills ship: the text names no skill today; add the

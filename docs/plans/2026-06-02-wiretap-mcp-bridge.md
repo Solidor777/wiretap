@@ -952,7 +952,7 @@ with:
 - [x] dedicated Foundry MCP server for the user's `claude` to call — vertical slice: `create_actor`
       (sidecar hosts MCP over Streamable HTTP on 127.0.0.1:31417; GM identify handshake routes tool
       calls to the GM browser; `Actor.create` round-trips the uuid back). See
-      `docs/superpowers/specs/2026-06-02-wiretap-mcp-bridge-design.md`.
+      `docs/specs/2026-06-02-wiretap-mcp-bridge-design.md`.
 - [ ] MCP follow-ups: more tools (`create_item`, `create_walls`, scene reads); live-Foundry e2e for
       the bridge (drive an MCP HTTP client against the sidecar, assert an Actor appears); optional
       Wiretap settings UI (enable toggle + port); shared-secret handshake on the sidecar socket.

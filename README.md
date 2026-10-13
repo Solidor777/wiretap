@@ -34,8 +34,8 @@ up, Foundry app in `<userdata>/../foundry`); override with `FOUNDRY_DATA_PATH`, 
 Wiretap's terminal needs a small local Node sidecar (it runs the real PTY; a browser can't). Start it with
 a single action:
 
-- **Windows:** double-click `start-wiretap.cmd` in the module folder.
-- **macOS/Linux:** run `./start-wiretap.sh` from the module folder.
+- **Windows:** double-click `scripts/start-wiretap.cmd` in the module folder.
+- **macOS/Linux:** run `./scripts/start-wiretap.sh` from the module folder.
 
 A console window opens and stays up while the sidecar runs — its log shows `listening on http://127.0.0.1:31416`.
 **Close that window (or press Ctrl-C) to stop the sidecar.** The Wiretap tab (GM-only) connects automatically
@@ -294,3 +294,9 @@ holding `SETTINGS_MODIFY` is trusted at GM level for the gates.
 
 Known limit: any arbitrary-code capability (`allowMacroExecution`, `allowAgentScripts`, a listed plugin module) can
 call `game.settings.set` directly. While one is enabled, the guarantee is only that no core skill can change a gate.
+
+## Documentation
+
+See [`docs/README.md`](docs/README.md) for the index. Key files: [`docs/PLAN.md`](docs/PLAN.md) (plan and design),
+[`docs/PROGRESS.md`](docs/PROGRESS.md) (milestone history), [`docs/TODO.md`](docs/TODO.md) (deferred work),
+[`docs/OPEN_BUGS.md`](docs/OPEN_BUGS.md) and [`docs/CLOSED_BUGS.md`](docs/CLOSED_BUGS.md) (bugs).
