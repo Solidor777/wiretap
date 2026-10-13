@@ -45,6 +45,18 @@ const EXPECTED = [
       'hard',
    ],
    [
+      'MCP_SESSIONS_MAX',
+      32,
+      'count',
+      'hard',
+   ],
+   [
+      'MCP_BODY_MAX_BYTES',
+      1_048_576,
+      'bytes',
+      'hard',
+   ],
+   [
       'ALWAYS_LISTED_TOOLS_MAX',
       30,
       'count',

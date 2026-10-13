@@ -7,6 +7,7 @@ import {
    denyWiretapSettingWrite,
    gateDenial,
    isGateOpen,
+   isModuleId,
    isModuleAllowed,
    isWiretapSettingKey,
    resolveSettingKey,
@@ -440,6 +441,18 @@ describe('resolveSettingKey', () => {
    it('returns null for anything that has no string key', () => {
       for (const input of [undefined, null, 5, true, {}, { key: 5 }, [], ['a']]) {
          expect(resolveSettingKey(input)).toBeNull();
+      }
+   });
+});
+
+describe('isModuleId', () => {
+   it('accepts Foundry module ids and refuses everything else', () => {
+      expect(isModuleId('my-module')).toBe(true);
+      expect(isModuleId('a')).toBe(true);
+      expect(isModuleId('a'.repeat(GATE_MODULE_ID_MAX_CHARS))).toBe(true);
+      expect(isModuleId('a'.repeat(GATE_MODULE_ID_MAX_CHARS + 1))).toBe(false);
+      for (const bad of ['', 'Bad', '-lead', 'has space', 'a/b', 5, null, undefined, {}]) {
+         expect(isModuleId(bad)).toBe(false);
       }
    });
 });

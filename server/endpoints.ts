@@ -10,9 +10,12 @@ import {
    GATE_DENIED,
    OP_FAILED,
    PROTOCOL_MISMATCH,
+   OP_CALL_TOOL,
    PROTOCOL_VERSION,
+   TOOL_GONE,
 } from '../shared/protocol.js';
 import { closedGateState, gateDenial, sanitizeGateState, type GateState } from '../shared/gates.js';
+import type { RegistryTool } from './toolRegistry.ts';
 import { truncateUtf8 } from './utf8.ts';
 
 /** The kind of a bridge endpoint: a person's browser tab or an agent-runner browser. */
@@ -42,6 +45,8 @@ export interface Endpoint extends EndpointIdentity {
    socketId: string;
    health: EndpointHealth;
    registeredAt: number;
+   // The tools the endpoint registered with `bridge:registry` (sanitized); empty until it registers any.
+   tools: RegistryTool[];
 }
 
 /** The result of validating an identify payload. */
@@ -65,6 +70,14 @@ export interface InvokeOptions {
    requireGate?: RequiredGate;
 }
 
+/** Options of a routed call to a registry tool. */
+export interface ToolInvokeOptions {
+   // Restricts the choice to one endpoint kind, with no fallback.
+   endpoint?: EndpointKind;
+   // The definition the caller listed to its client; the picked endpoint's own declaration must match its gate.
+   listed: RegistryTool;
+}
+
 /** The registry of identified GM endpoints. */
 export interface EndpointRegistry {
    // Adds a new socket's endpoint as healthy, or updates an already-registered socket's identity while keeping its
@@ -81,15 +94,34 @@ export interface EndpointRegistry {
    setGateState: (socketId: string, gateState: GateState) => void;
    // Finds the earliest-registered healthy endpoint of a kind.
    firstOfKind: (kind: EndpointKind) => Endpoint | undefined;
+   // Replaces a registered socket's tools (already sanitized); ignored for an unregistered socket.
+   setTools: (socketId: string, tools: RegistryTool[]) => void;
+   // Calls the listener after every change that can alter which endpoint a call reaches or which tools it lists:
+   // a register, a remove, a health change and a tool replacement. A gate state change does not notify. The listener
+   // runs synchronously inside the change and must not throw. Returns the function that unsubscribes it.
+   subscribe: (listener: () => void) => () => void;
 }
 
 /** The router that picks an endpoint for an invocation and runs it, and probes endpoints that stop answering. */
 export interface Router {
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
+   // Runs the `callTool` operation for a registry tool on the picked endpoint. The tool is resolved by name on that
+   // endpoint: its own declaration (not the listed one) supplies the gate that is judged against that endpoint's
+   // snapshot and is returned with the result. Fails with TOOL_GONE when the endpoint no longer registers the name or
+   // declares other arguments for it, and with GATE_DENIED when its declared gate differs from the listed one. A
+   // different description or result budget does not fail the call; the picked endpoint's budget applies.
+   invokeTool: (
+      name: string,
+      args: Record<string, unknown>,
+      options: ToolInvokeOptions,
+   ) => Promise<{ result: unknown; tool: RegistryTool }>;
    // Display and diagnostic accessor only: copies the gate snapshot of the endpoint a call with the same `endpoint`
    // option would reach now, every gate closed when none is eligible. It is not a gate check, because a later `invoke`
    // may pick a different endpoint; enforcement uses the `requireGate` option of `invoke`.
    gateState: (options?: InvokeOptions) => GateState;
+   // Copies the tool list of the endpoint a call with the same `endpoint` option would reach now; empty when none is
+   // eligible. Like `gateState` it is a listing aid, not a guarantee that a later `invoke` reaches the same endpoint.
+   tools: (options?: InvokeOptions) => RegistryTool[];
    // Stops probing a socket's endpoint; called when the socket disconnects.
    forget: (socketId: string) => void;
    // Stops every probe; the router starts no new one afterwards.
@@ -180,7 +212,21 @@ const RESERVED_CODES: ReadonlySet<string> = new Set([
    ENDPOINT_UNAVAILABLE,
    PROTOCOL_MISMATCH,
    NOT_GM,
+   TOOL_GONE,
 ]);
+
+/**
+ * Compare two optional gate declarations.
+ * @param {RequiredGate | undefined} a - The first declaration.
+ * @param {RequiredGate | undefined} b - The second declaration.
+ * @returns {boolean} Whether both declare no gate, or both declare the same gate and module id.
+ */
+function sameGate(a: RequiredGate | undefined, b: RequiredGate | undefined): boolean {
+   if (a === undefined || b === undefined) {
+      return a === b;
+   }
+   return a.gate === b.gate && a.moduleId === b.moduleId;
+}
 
 /** The structured error every bridge failure is thrown as. */
 export class BridgeError extends Error {
@@ -238,6 +284,19 @@ export class EndpointTimeoutError extends Error {
 export function createEndpointRegistry(now: () => number = Date.now): EndpointRegistry {
    // Endpoints keyed by socket id; Map iteration order is insertion order and re-setting a key keeps its position.
    const endpoints: Map<string, Endpoint> = new Map();
+   // Listeners told about changes, in subscription order.
+   const listeners: Set<() => void> = new Set();
+
+   /**
+    * Tell every listener that the endpoint set, an endpoint's health or its tools changed.
+    * @returns {void}
+    */
+   function notify(): void {
+      for (const listener of [...listeners]) {
+         listener();
+      }
+   }
+
    return {
       /**
        * Add an endpoint, or update the identity of the socket's existing entry (its registration time, position and
@@ -256,9 +315,11 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
          endpoints.set(socketId, {
             ...identity,
             socketId,
+            tools: existing?.tools ?? [],
             health: existing?.health ?? 'healthy',
             registeredAt: existing?.registeredAt ?? now(),
          });
+         notify();
          return true;
       },
 
@@ -268,7 +329,9 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
        * @returns {void}
        */
       remove(socketId: string): void {
-         endpoints.delete(socketId);
+         if (endpoints.delete(socketId)) {
+            notify();
+         }
       },
 
       /**
@@ -296,8 +359,9 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
        */
       setHealth(socketId: string, health: EndpointHealth): void {
          const existing: Endpoint | undefined = endpoints.get(socketId);
-         if (existing) {
+         if (existing && existing.health !== health) {
             existing.health = health;
+            notify();
          }
       },
 
@@ -317,18 +381,44 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       /**
        * Find the earliest-registered healthy endpoint of a kind.
        * @param {EndpointKind} kind - The endpoint kind.
-       * @returns {Endpoint | undefined} The endpoint, or undefined when no healthy endpoint of that kind is registered.
+       * @returns {Endpoint | undefined} The endpoint, or undefined when no healthy endpoint of the kind is registered.
        */
       firstOfKind(kind: EndpointKind): Endpoint | undefined {
          return [...endpoints.values()].find((endpoint) => endpoint.kind === kind && endpoint.health === 'healthy');
+      },
+
+      /**
+       * Replace a registered endpoint's tools.
+       * @param {string} socketId - The socket id; an unregistered socket is ignored.
+       * @param {RegistryTool[]} tools - The new tools, already sanitized.
+       * @returns {void}
+       */
+      setTools(socketId: string, tools: RegistryTool[]): void {
+         const existing: Endpoint | undefined = endpoints.get(socketId);
+         if (existing) {
+            existing.tools = tools;
+            notify();
+         }
+      },
+
+      /**
+       * Subscribe to endpoint-set, health and tool changes.
+       * @param {() => void} listener - Called synchronously after each change; must not throw.
+       * @returns {() => void} The function that removes the listener.
+       */
+      subscribe(listener: () => void): () => void {
+         listeners.add(listener);
+         return () => {
+            listeners.delete(listener);
+         };
       },
    };
 }
 
 /**
- * Validate a `bridge:identify` payload: protocol version 3, well-formed fields within the size limits (`userId` at most
- * 64 bytes, `userName` at most 128 bytes), and a GM user. The optional `gateState` is sanitized, never refused: an
- * absent or invalid value yields the all-closed snapshot.
+ * Validate a `bridge:identify` payload: protocol version 3, well-formed fields within the size limits (`userId` at
+ * most 64 bytes, `userName` at most 128 bytes), and a GM user. The optional `gateState` is sanitized, never refused:
+ * an absent or invalid value yields the all-closed snapshot.
  * @param {unknown} payload - The payload received from the socket.
  * @returns {IdentifyResult} The identity to register, or the refusal (PROTOCOL_MISMATCH for a wrong version, a
  *          malformed field or an over-long field, NOT_GM for a non-GM user).
@@ -367,12 +457,20 @@ export function validateIdentify(payload: unknown): IdentifyResult {
          ok: false,
          error: {
             code: PROTOCOL_MISMATCH,
-            message: `Identify userId is limited to ${MAX_USER_ID_BYTES} bytes and userName to ${MAX_USER_NAME_BYTES}.`,
+            message:
+               `Identify userId is limited to ${MAX_USER_ID_BYTES} bytes ` +
+               `and userName to ${MAX_USER_NAME_BYTES}.`,
          },
       };
    }
    if (!fields.isGM) {
-      return { ok: false, error: { code: NOT_GM, message: 'Only a GM client may register as a bridge endpoint.' } };
+      return {
+         ok: false,
+         error: {
+            code: NOT_GM,
+            message: 'Only a GM client may register as a bridge endpoint.',
+         },
+      };
    }
    return {
       ok: true,
@@ -616,10 +714,11 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
    // send, with no await in between, so no endpoint change can split the check from the send. `gateState` reuses the
    // pick for display only.
    /**
-    * Choose the endpoint a call with these options would reach: the first healthy endpoint of the first eligible kind.
+    * Choose the endpoint a call with these options would reach: the first healthy endpoint of the first eligible
+    * kind.
     * @param {InvokeOptions} options - `endpoint` restricts the choice to one kind with no fallback.
-    * @returns {{ endpoint: Endpoint | undefined, kinds: readonly EndpointKind[] }} The endpoint (undefined when none is
-    *          healthy) and the eligible kinds.
+    * @returns {{ endpoint: Endpoint | undefined, kinds: readonly EndpointKind[] }} The endpoint (undefined when none
+    *          is healthy) and the eligible kinds.
     */
    function pick(options: InvokeOptions): { endpoint: Endpoint | undefined; kinds: readonly EndpointKind[] } {
       const kinds: readonly EndpointKind[] = options.endpoint === undefined ? ROUTE_ORDER : [options.endpoint];
@@ -631,6 +730,104 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
          }
       }
       return { endpoint, kinds };
+   }
+
+   /**
+    * Pick one endpoint, judge the gate on it and run an operation there. With `listed`, the operation is a registry
+    * tool call: the tool is looked up by `listed.name` on the picked endpoint and that endpoint's own declaration
+    * supplies the gate, so a tool listed from one endpoint never borrows the declaration of another.
+    * @param {string} op - The operation name.
+    * @param {object} params - The operation parameters.
+    * @param {InvokeOptions} options - `endpoint` restricts the kind; `requireGate` is the gate of a plain call.
+    * @param {RegistryTool} [listed] - The listed tool of a registry tool call.
+    * @returns {Promise<{ result: unknown, tool?: RegistryTool }>} The result, and the picked endpoint's declaration of
+    *          the tool for a registry tool call.
+    */
+   async function dispatch(
+      op: string,
+      params: object,
+      options: InvokeOptions,
+      listed?: RegistryTool,
+   ): Promise<{ result: unknown; tool?: RegistryTool }> {
+      const { endpoint, kinds } = pick(options);
+      if (!endpoint) {
+         // No healthy endpoint of an eligible kind: unresponsive ones that are still connected make it UNAVAILABLE.
+         const stuck: boolean = registry.list().some((candidate) => kinds.includes(candidate.kind));
+         throw stuck ? endpointUnavailable(options.endpoint) : noEndpoint(options.endpoint);
+      }
+      // The gate to judge: the picked endpoint's own declaration of the tool for a registry tool call.
+      let requireGate: RequiredGate | undefined = options.requireGate;
+      // The picked endpoint's declaration of the listed tool.
+      let declared: RegistryTool | undefined;
+      if (listed) {
+         declared = endpoint.tools.find((tool) => tool.name === listed.name);
+         if (!declared) {
+            throw new BridgeError(TOOL_GONE, 'The Foundry endpoint no longer registers this tool.');
+         }
+         if (!sameGate(declared.gate, listed.gate)) {
+            deps.log(`Wiretap sidecar | invoke ${op} denied: the endpoint declares a different gate for the tool`);
+            throw new BridgeError(
+               GATE_DENIED,
+               'The endpoint declares a different gate for this tool than the one listed; list the tools again.',
+            );
+         }
+         if (declared.schemaSignature !== listed.schemaSignature) {
+            // The caller validated the arguments against the listed schema, which this endpoint no longer declares.
+            throw new BridgeError(
+               TOOL_GONE,
+               'The endpoint now declares different arguments for this tool; list the tools again.',
+            );
+         }
+         requireGate = declared.gate;
+      }
+      if (requireGate) {
+         // The gate is judged on the snapshot of the endpoint picked above; a denial is thrown before any send.
+         // The denial of the gate on the picked endpoint's snapshot, or null when it is open.
+         const denial: ReturnType<typeof gateDenial> = gateDenial(
+            endpoint.gateState,
+            requireGate.gate,
+            requireGate.moduleId,
+         );
+         if (denial) {
+            deps.log(`Wiretap sidecar | invoke ${op} denied by gate ${denial.code}`);
+            throw new BridgeError(GATE_DENIED, truncateUtf8(denial.message, MAX_GATE_DENIAL_BYTES));
+         }
+      }
+      const requestId: string = newRequestId();
+      deps.log(
+         `Wiretap sidecar | invoke ${op} requestId=${requestId} -> ${endpoint.kind} endpoint ${endpoint.socketId}`,
+      );
+      let ack: unknown;
+      try {
+         ack = await deps.send(endpoint.socketId, {
+            op,
+            params,
+            requestId,
+         });
+      } catch (cause) {
+         if (cause instanceof EndpointTimeoutError) {
+            deps.log(`Wiretap sidecar | invoke ${op} requestId=${requestId} timed out`);
+            // The health check finishes before the error is thrown, so the next call already sees its outcome.
+            await check(endpoint.socketId);
+            throw new BridgeError(ENDPOINT_TIMEOUT, TIMEOUT_MESSAGE);
+         }
+         // Every non-timeout transport failure (a disconnect, a missing socket, a failed write) is a gone endpoint.
+         deps.log(
+            `Wiretap sidecar | invoke ${op} requestId=${requestId} endpoint gone: ${
+               cause instanceof Error ? cause.message : String(cause)
+            }`,
+         );
+         throw new BridgeError(ENDPOINT_GONE, 'The Foundry endpoint disconnected before it answered.');
+      }
+      if ((ack as { ok?: unknown } | undefined)?.ok === true) {
+         return {
+            result: (ack as { result?: unknown }).result,
+            tool: declared,
+         };
+      }
+      const error: BridgeError = normalizeAckError(ack);
+      deps.log(`Wiretap sidecar | invoke ${op} requestId=${requestId} failed: ${error.code}`);
+      throw error;
    }
 
    return {
@@ -647,57 +844,57 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       },
 
       /**
+       * Copy the tool list of the endpoint a call with the same options would reach now. A listing aid only: a later
+       * `invoke` picks its endpoint again.
+       * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback.
+       * @returns {RegistryTool[]} A copy of the endpoint's tools; empty when no healthy endpoint is eligible.
+       */
+      tools(options: InvokeOptions = {}): RegistryTool[] {
+         const { endpoint } = pick(options);
+         return endpoint ? [...endpoint.tools] : [];
+      },
+
+      /**
        * Run an operation on a chosen endpoint.
        * @param {string} op - The operation name.
        * @param {object} params - The operation parameters.
        * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback; `requireGate`
        *        makes the picked endpoint's own snapshot decide whether the call is sent at all.
        * @returns {Promise<unknown>} The operation result; rejects with a BridgeError (NO_ENDPOINT,
-       *          ENDPOINT_UNAVAILABLE, GATE_DENIED, ENDPOINT_GONE, ENDPOINT_TIMEOUT, or the normalized client failure).
+       *          ENDPOINT_UNAVAILABLE, GATE_DENIED, ENDPOINT_GONE, ENDPOINT_TIMEOUT, or the normalized client
+       *          failure).
        */
       async invoke(op: string, params: object, options: InvokeOptions = {}): Promise<unknown> {
-         const { endpoint, kinds } = pick(options);
-         if (!endpoint) {
-            // No healthy endpoint of an eligible kind: unresponsive ones that are still connected make it UNAVAILABLE.
-            const stuck: boolean = registry.list().some((candidate) => kinds.includes(candidate.kind));
-            throw stuck ? endpointUnavailable(options.endpoint) : noEndpoint(options.endpoint);
-         }
-         if (options.requireGate) {
-            // The gate is judged on the snapshot of the endpoint picked above; a denial is thrown before any send.
-            const denial = gateDenial(endpoint.gateState, options.requireGate.gate, options.requireGate.moduleId);
-            if (denial) {
-               deps.log(`Wiretap sidecar | invoke ${op} denied by gate ${denial.code}`);
-               throw new BridgeError(GATE_DENIED, truncateUtf8(denial.message, MAX_GATE_DENIAL_BYTES));
-            }
-         }
-         const requestId: string = newRequestId();
-         deps.log(
-            `Wiretap sidecar | invoke ${op} requestId=${requestId} -> ${endpoint.kind} endpoint ${endpoint.socketId}`,
+         return (await dispatch(op, params, options)).result;
+      },
+
+      /**
+       * Run a registry tool on the picked endpoint, resolving the tool by name on that endpoint.
+       * @param {string} name - The tool name.
+       * @param {Record<string, unknown>} args - The validated tool arguments.
+       * @param {ToolInvokeOptions} options - `endpoint` restricts the kind; `listed` is the listed definition.
+       * @returns {Promise<{ result: unknown, tool: RegistryTool }>} The result and the picked endpoint's declaration
+       *          of the tool; rejects as `invoke` does, plus TOOL_GONE and the GATE_DENIED of a changed declaration.
+       */
+      async invokeTool(
+         name: string,
+         args: Record<string, unknown>,
+         options: ToolInvokeOptions,
+      ): Promise<{ result: unknown; tool: RegistryTool }> {
+         // The result, and the declaration of the tool on the endpoint that ran it.
+         const outcome: Awaited<ReturnType<typeof dispatch>> = await dispatch(
+            OP_CALL_TOOL,
+            {
+               name,
+               arguments: args,
+            },
+            { endpoint: options.endpoint },
+            options.listed,
          );
-         let ack: unknown;
-         try {
-            ack = await deps.send(endpoint.socketId, { op, params, requestId });
-         } catch (cause) {
-            if (cause instanceof EndpointTimeoutError) {
-               deps.log(`Wiretap sidecar | invoke ${op} requestId=${requestId} timed out`);
-               // The health check finishes before the error is thrown, so the next call already sees its outcome.
-               await check(endpoint.socketId);
-               throw new BridgeError(ENDPOINT_TIMEOUT, TIMEOUT_MESSAGE);
-            }
-            // Every non-timeout transport failure (a disconnect, a missing socket, a failed write) is a gone endpoint.
-            deps.log(
-               `Wiretap sidecar | invoke ${op} requestId=${requestId} endpoint gone: ${
-                  cause instanceof Error ? cause.message : String(cause)
-               }`,
-            );
-            throw new BridgeError(ENDPOINT_GONE, 'The Foundry endpoint disconnected before it answered.');
-         }
-         if ((ack as { ok?: unknown } | undefined)?.ok === true) {
-            return (ack as { result?: unknown }).result;
-         }
-         const error: BridgeError = normalizeAckError(ack);
-         deps.log(`Wiretap sidecar | invoke ${op} requestId=${requestId} failed: ${error.code}`);
-         throw error;
+         return {
+            result: outcome.result,
+            tool: outcome.tool as RegistryTool,
+         };
       },
 
       /**

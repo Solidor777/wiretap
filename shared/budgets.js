@@ -78,8 +78,12 @@ export const BUDGETS = table([
    budget('DESCRIPTION_TARGET_CHARS', 160, 'chars', BUDGET_SEVERITY.WARN),
    // Description length above which the definition is refused.
    budget('DESCRIPTION_MAX_CHARS', 240, 'chars', BUDGET_SEVERITY.HARD),
-   // Server `instructions` text sent to the client at session start; it points to the skills and tool families.
+   // Server `instructions` text sent to the client at session start; it names the tool families.
    budget('INSTRUCTIONS_MAX_CHARS', 600, 'chars', BUDGET_SEVERITY.HARD),
+   // MCP sessions held at once; an initialize beyond it is refused until the idle sweep frees a slot.
+   budget('MCP_SESSIONS_MAX', 32, 'count', BUDGET_SEVERITY.HARD),
+   // Request body bytes the MCP endpoint reads; a larger body is refused with 413 and the request is destroyed.
+   budget('MCP_BODY_MAX_BYTES', 1_048_576, 'bytes', BUDGET_SEVERITY.HARD),
    // Tools listed to the client at all times (core plus shipped).
    budget('ALWAYS_LISTED_TOOLS_MAX', 30, 'count', BUDGET_SEVERITY.HARD),
    // Serialized size of all core and shipped definitions together (16 KB).

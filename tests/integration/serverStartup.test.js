@@ -5,6 +5,18 @@ import { createWiretapServer } from '../../server/server.ts';
 import { startMcpServer } from '../../server/mcp.ts';
 import { awaitStartup } from '../../server/shutdown.ts';
 
+/**
+ * Build a bridge that has no endpoint: no tools, no changes and an invoke that resolves to nothing.
+ * @returns {{ invoke: Function, tools: Function, subscribe: Function }} A bridge with no endpoint behind it.
+ */
+function idleBridge() {
+   return {
+      invoke: async () => undefined,
+      tools: () => [],
+      subscribe: () => () => undefined,
+   };
+}
+
 /** @type {import('node:net').Server[]} Occupier servers opened by a test, closed afterwards. */
 const occupiers = [];
 
@@ -72,14 +84,14 @@ afterEach(async () => {
 describe('startMcpServer ready', () => {
    it('resolves once the port is bound', async () => {
       /** @type {{ close: () => void, ready: Promise<void> }} The started MCP server. */
-      const mcp = startMcpServer({ invoke: async () => ({}) }, await freePort());
+      const mcp = startMcpServer(idleBridge(), await freePort());
       servers.push({ dispose: mcp.close });
       await expect(mcp.ready).resolves.toBeUndefined();
    });
 
    it('rejects with EADDRINUSE when the MCP port is occupied', async () => {
       /** @type {{ close: () => void, ready: Promise<void> }} The MCP server that cannot bind. */
-      const mcp = startMcpServer({ invoke: async () => ({}) }, await occupyPort());
+      const mcp = startMcpServer(idleBridge(), await occupyPort());
       servers.push({ dispose: mcp.close });
       await expect(mcp.ready).rejects.toMatchObject({ code: 'EADDRINUSE' });
    });

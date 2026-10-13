@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { z } from 'zod';
+import { WIRETAP_INSTRUCTIONS } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
 import {
    FIXTURES,
@@ -11,6 +12,7 @@ import {
    collectReport,
    findToolMentions,
    makeBigDocument,
+   registryEntry,
    startHarness,
    textBytes,
    trivialFixture,
@@ -311,7 +313,196 @@ describe('context budgets of the real MCP server', () => {
          ]);
       });
    });
+   describe('tools registered by a Foundry client', () => {
+      /**
+       * Build the fixture of a registry tool: a short answer within the acknowledgement budget.
+       * @param {string} name - The registry tool name.
+       * @returns {import('./contextBudgetHarness.js').FixtureCase[]} The fixture cases.
+       */
+      function registryFixture(name) {
+         return [
+            {
+               label: 'short answer',
+               budget: 'ACK_MAX_BYTES',
+               run: ({ client, setGmAck }) => {
+                  setGmAck({
+                     ok: true,
+                     result: 'done',
+                  });
+                  return client.callTool({
+                     name,
+                     arguments: {},
+                  });
+               },
+            },
+            {
+               label: 'result over the cap becomes a handle',
+               budget: 'ACK_MAX_BYTES',
+               run: ({ client, setGmAck }) => {
+                  setGmAck({
+                     ok: true,
+                     result: makeBigDocument(),
+                  });
+                  return client.callTool({
+                     name,
+                     arguments: {},
+                  });
+               },
+            },
+         ];
+      }
+
+      /**
+       * Report on the running harness with the production fixtures plus the given ones.
+       * @param {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} fixtures - Fixtures by tool name.
+       * @returns {Promise<import('./contextBudgetHarness.js').BudgetReport>} The breaches and sizes measured on it.
+       */
+      function reportOn(fixtures) {
+         return collectReport({
+            client: harness.client,
+            setGmAck: harness.setGmAck,
+            fixtures: {
+               ...FIXTURES,
+               ...fixtures,
+            },
+         });
+      }
+
+      it('counts a registered tool toward the tool list and holds its results to the budgets', async () => {
+         harness = await startHarness({ registry: [registryEntry('registry_one')] });
+         const report = await reportOn({ registry_one: registryFixture('registry_one') });
+         expect(report.failures).toEqual([]);
+         expect(report.listing.map((tool) => tool.name)).toContain('registry_one');
+         expect(report.totals.count).toBe(3);
+         expect(report.fixtureRuns.filter((run) => run.tool === 'registry_one')).toHaveLength(2);
+      });
+
+      it('fails a registered tool that has no representative-result fixture', async () => {
+         harness = await startHarness({ registry: [registryEntry('registry_one')] });
+         const report = await reportOn({});
+         expect(report.failures).toEqual(['tool "registry_one": no representative-result fixture']);
+      });
+
+      it('counts a tool registered after the session started once the client has been told', async () => {
+         harness = await startHarness();
+         expect((await reportOn({})).totals.count).toBe(2);
+         const changed = harness.nextToolListChange();
+         expect(await harness.registerTools([registryEntry('registry_late')])).toEqual({
+            ok: true,
+            accepted: 1,
+            refused: 0,
+         });
+         await changed;
+         const without = await reportOn({});
+         expect(without.failures).toEqual(['tool "registry_late": no representative-result fixture']);
+         expect(without.totals.count).toBe(3);
+         const report = await reportOn({ registry_late: registryFixture('registry_late') });
+         expect(report.failures).toEqual([]);
+      });
+
+      it('fails a late tool whose result is over its budget', async () => {
+         harness = await startHarness();
+         const changed = harness.nextToolListChange();
+         await harness.registerTools([registryEntry('registry_late', { budgetBytes: 2000 })]);
+         await changed;
+         const report = await reportOn({
+            registry_late: [
+               {
+                  label: 'answer over the budget',
+                  budget: 'ERROR_MAX_BYTES',
+                  run: ({ client, setGmAck }) => {
+                     setGmAck({
+                        ok: true,
+                        result: 'a'.repeat(1500),
+                     });
+                     return client.callTool({
+                        name: 'registry_late',
+                        arguments: {},
+                     });
+                  },
+               },
+            ],
+         });
+         expect(report.failures).toEqual([
+            'tool "registry_late" fixture "answer over the budget": ' +
+               'result is 1500 bytes, at most 512 bytes (ERROR_MAX_BYTES)',
+         ]);
+      });
+
+      it('lists no more tools than the always-listed budget however many the endpoint registers', async () => {
+         harness = await startHarness();
+         /** @type {string[]} The names offered, 40 in all. */
+         const names = Array.from({ length: 40 }, (_, index) => `registry_${index}`);
+         const changed = harness.nextToolListChange();
+         const ack = await harness.registerTools(names.map((name) => registryEntry(name)));
+         await changed;
+         const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - 2;
+         expect(ack.accepted).toBe(room);
+         expect(ack.refused).toBe(40 - room);
+         /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of all 40 tools. */
+         const fixtures = Object.fromEntries(names.map((name) => [
+            name,
+            registryFixture(name),
+         ]));
+         const report = await reportOn(fixtures);
+         expect(report.failures).toEqual([]);
+         expect(report.totals.count + report.helperTotals.count).toBeLessThanOrEqual(
+            getBudget('ALWAYS_LISTED_TOOLS_MAX').value,
+         );
+      });
+
+      it('refuses a definition over a budget at the registry, so it is never listed', async () => {
+         harness = await startHarness();
+         const ack = await harness.registerTools([
+            registryEntry('registry_wide_name_that_is_over_thirty_two_characters'),
+            registryEntry('registry_long', { description: 'd'.repeat(241) }),
+            registryEntry('registry_fat', {
+               inputSchema: {
+                  type: 'object',
+                  properties: Object.fromEntries(
+                     Array.from({ length: 12 }, (_, index) => [
+                        `field${index}`,
+                        {
+                           type: 'string',
+                           description: 'x'.repeat(40),
+                        },
+                     ]),
+                  ),
+               },
+            }),
+         ]);
+         expect(ack).toEqual({
+            ok: true,
+            accepted: 0,
+            refused: 3,
+         });
+         expect((await reportOn({})).totals.count).toBe(2);
+      });
+   });
+
    describe('server instructions', () => {
+      it('sends the production instructions within the budget, naming only tools the server lists', async () => {
+         harness = await startHarness();
+         const instructions = harness.client.getInstructions();
+         expect(instructions).toBe(WIRETAP_INSTRUCTIONS);
+         expect(instructions.length).toBeGreaterThan(0);
+         expect(instructions.length).toBeLessThanOrEqual(getBudget('INSTRUCTIONS_MAX_CHARS').value);
+         /** @type {string[]} The tools the instructions point to. */
+         const mentioned = findToolMentions(instructions);
+         expect(mentioned).toEqual([
+            'create_actor',
+            'read_handle',
+         ]);
+         /** @type {string[]} The tools the server lists. */
+         const listed = (await harness.client.listTools()).tools.map((tool) => tool.name);
+         for (const name of mentioned) {
+            expect(listed).toContain(name);
+         }
+         expect(instructions).toContain('tools/list_changed');
+         // No skill ships yet, so the text must not send the model looking for one.
+         expect(instructions.toLowerCase()).not.toContain('skill');
+      });
+
       it('accepts instructions that name a listed tool', async () => {
          const report = await reportWith([], {}, undefined, 'Read stored results with mcp__wiretap__read_handle.');
          expect(report.failures).toEqual([]);

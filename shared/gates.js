@@ -98,6 +98,16 @@ export function closedGateState() {
 }
 
 /**
+ * Check whether a value is a Foundry module id: a string of 1 to `GATE_MODULE_ID_MAX_CHARS` characters matching
+ * MODULE_ID_PATTERN.
+ * @param {unknown} value - The untrusted value.
+ * @returns {boolean} Whether it is a module id.
+ */
+export function isModuleId(value) {
+   return typeof value === 'string' && value.length <= GATE_MODULE_ID_MAX_CHARS && MODULE_ID_PATTERN.test(value);
+}
+
+/**
  * Reduce an untrusted value to a valid module id list: an array of at most `GATE_MODULES_MAX` entries, keeping the
  * module ids (MODULE_ID_PATTERN, 1 to `GATE_MODULE_ID_MAX_CHARS` characters) without duplicates. A longer array is
  * treated as empty without being walked.
@@ -111,8 +121,8 @@ function sanitizeModuleList(value) {
    /** @type {Set<string>} The accepted ids in first-seen order. */
    const ids = new Set();
    for (const id of value) {
-      if (typeof id === 'string' && id.length <= GATE_MODULE_ID_MAX_CHARS && MODULE_ID_PATTERN.test(id)) {
-         ids.add(id);
+      if (isModuleId(id)) {
+         ids.add(/** @type {string} */ (id));
       }
    }
    return [...ids];

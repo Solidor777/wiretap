@@ -4,6 +4,7 @@ import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
    BRIDGE_PING,
+   BRIDGE_REGISTRY,
    ENDPOINT_LIMIT,
    NOT_GM,
    OP_FAILED,
@@ -21,6 +22,8 @@ import {
    type Router,
 } from './endpoints.ts';
 import { createLogThrottle } from './logThrottle.ts';
+import { describeCause } from './logText.ts';
+import { sanitizeRegistry, type RegistryOutcome, type RegistryTool } from './toolRegistry.ts';
 
 // Milliseconds to wait for a Foundry client to ack a bridge invocation before failing.
 const INVOKE_TIMEOUT_MS: number = 10_000;
@@ -41,6 +44,18 @@ const GATE_REFUSAL_LOG_WINDOW_MS: number = 60_000;
 // Maximum refused-gate-state log lines inside one window, across all sockets.
 const GATE_REFUSAL_LOG_LIMIT: number = 10;
 
+// Length in milliseconds of the window that bounds refused-registry-socket log lines.
+const REGISTRY_REFUSAL_LOG_WINDOW_MS: number = 60_000;
+
+// Maximum refused-registry-socket log lines inside one window, across all sockets.
+const REGISTRY_REFUSAL_LOG_LIMIT: number = 10;
+
+// Length in milliseconds of the window that bounds registry tool-refusal log lines.
+const REGISTRY_LINE_LOG_WINDOW_MS: number = 60_000;
+
+// Maximum registry tool-refusal log lines inside one window, across all endpoints.
+const REGISTRY_LINE_LOG_LIMIT: number = 10;
+
 // Length in milliseconds of the window that bounds endpoint-health log lines.
 const HEALTH_LOG_WINDOW_MS: number = 60_000;
 
@@ -60,16 +75,23 @@ export interface FoundryBridgeOptions {
  * operation to the chosen endpoint and awaits its ack. Knows nothing about which operations exist — callers pass an
  * op name and params.
  * @param {FoundryBridgeOptions} [options] - Injectable logger and clock.
- * @returns {{ handleConnection: (socket: Socket) => void, invoke: Function, gateState: Function, dispose: () => void }}
- *          The bridge with a per-socket connection handler, the router's `invoke(op, params, { endpoint? })`, the
- *          router's `gateState({ endpoint? })` (a copy of the risk-gate snapshot of the endpoint such a call would
- *          reach, every gate closed when none is eligible; never part of a tool result), and `dispose`, which stops
- *          every endpoint health probe.
+ * @returns {{ handleConnection: (socket: Socket) => void, invoke: Function, invokeTool: Function,
+ *          gateState: Function, tools: Function, subscribe: Function, dispose: () => void }} The bridge with a
+ *          per-socket connection handler, the router's `invoke(op, params, { endpoint? })`, the router's
+ *          `invokeTool(name, args, { endpoint?, listed })` (a registry tool call that resolves the tool by name on the
+ *          picked endpoint), the router's `gateState({ endpoint? })` (a copy of the risk-gate
+ *          snapshot of the endpoint such a call would reach, every gate closed when none is eligible; never part of a
+ *          tool result), the router's `tools({ endpoint? })` (the registered tools of that endpoint), `subscribe`
+ *          (listener for endpoint-set, health and tool changes; returns its unsubscribe function), and `dispose`,
+ *          which stops every endpoint health probe.
  */
 export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    handleConnection: (socket: Socket) => void;
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
+   invokeTool: Router['invokeTool'];
    gateState: (options?: InvokeOptions) => GateState;
+   tools: (options?: InvokeOptions) => RegistryTool[];
+   subscribe: (listener: () => void) => () => void;
    dispose: () => void;
 } {
    // The sidecar log sink.
@@ -95,6 +117,23 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       limit: GATE_REFUSAL_LOG_LIMIT,
       windowMs: GATE_REFUSAL_LOG_WINDOW_MS,
       noun: 'gate state refusals',
+   });
+   // Writes a refused-registry-socket log line subject to the per-window limit, with one summary line per window.
+   const logRegistryRefusal: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: REGISTRY_REFUSAL_LOG_LIMIT,
+      windowMs: REGISTRY_REFUSAL_LOG_WINDOW_MS,
+      noun: 'registry socket refusals',
+   });
+   // Writes a registry tool-refusal log line subject to the per-window limit; a hostile endpoint can send entries
+   // without bound, each refused with its own reason.
+   const logRegistryLine: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: REGISTRY_LINE_LOG_LIMIT,
+      windowMs: REGISTRY_LINE_LOG_WINDOW_MS,
+      noun: 'registry refusal lines',
    });
    // Writes an endpoint-health log line subject to the per-window limit; a never-acking endpoint is probed every 5 s
    // and would otherwise log without bound.
@@ -169,6 +208,76 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    });
 
    /**
+    * Answer an ack callback when there is one; a callback that throws is ignored, since the endpoint's state is
+    * already decided.
+    * @param {unknown} ack - The callback the client passed, if any.
+    * @param {object} value - The ack value.
+    * @returns {void}
+    */
+   function reply(ack: unknown, value: object): void {
+      try {
+         if (typeof ack === 'function') {
+            ack(value);
+         }
+      } catch {
+         // The sender's ack callback failed; nothing more can be done for it.
+      }
+   }
+
+   /**
+    * Apply a `bridge:registry` payload to a registered endpoint and ack the outcome. A payload that is not an array,
+    * or one whose processing throws, clears the endpoint's tools (fail closed) and acks OP_FAILED.
+    * @param {Socket} socket - The sending socket.
+    * @param {unknown} payload - The untrusted payload.
+    * @param {unknown} ack - The ack callback, if any.
+    * @returns {void}
+    */
+   function applyRegistry(socket: Socket, payload: unknown, ack: unknown): void {
+      if (registry.get(socket.id) === undefined) {
+         logRegistryRefusal(`Wiretap sidecar | refused registry from ${socket.id}: ${NOT_GM}`);
+         reply(ack, {
+            ok: false,
+            error: {
+               code: NOT_GM,
+               message: 'Only a registered GM endpoint may push a registry.',
+            },
+         });
+         return;
+      }
+      try {
+         const outcome: RegistryOutcome = sanitizeRegistry(payload, logRegistryLine);
+         if (!outcome.ok) {
+            registry.setTools(socket.id, []);
+            logRegistryLine(`Wiretap sidecar | registry payload from ${socket.id} refused: ${outcome.reason}`);
+            reply(ack, {
+               ok: false,
+               error: {
+                  code: OP_FAILED,
+                  message: outcome.reason,
+               },
+            });
+            return;
+         }
+         registry.setTools(socket.id, outcome.tools);
+         reply(ack, {
+            ok: true,
+            accepted: outcome.tools.length,
+            refused: outcome.refused,
+         });
+      } catch (cause) {
+         registry.setTools(socket.id, []);
+         logRegistryLine(`Wiretap sidecar | registry from ${socket.id} failed: ${describeCause(cause)}`);
+         reply(ack, {
+            ok: false,
+            error: {
+               code: OP_FAILED,
+               message: 'The registry could not be applied; the endpoint has no tools.',
+            },
+         });
+      }
+   }
+
+   /**
     * Drop a socket's endpoint and stop its health probe.
     * @param {string} socketId - The socket id.
     * @returns {void}
@@ -181,9 +290,10 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    return {
       /**
        * Register per-socket bridge handlers: validate and register an endpoint on identify (acking the result after
-       * registration), apply a registered endpoint's `bridge:gateState` snapshot (sanitized; a non-registered socket is
-       * refused with NOT_GM, logged through a throttle, and changes nothing), and on disconnect drop the endpoint, stop
-       * its health probe and fail its pending invocations with ENDPOINT_GONE.
+       * registration), apply a registered endpoint's `bridge:gateState` snapshot (sanitized; a non-registered socket
+       * is refused with NOT_GM, logged through a throttle, and changes nothing), and on disconnect drop the endpoint,
+       * stop its health probe and fail its pending invocations with ENDPOINT_GONE. Also applies a registered
+       * endpoint's `bridge:registry` tool list (sanitized and bounded; any other socket is refused with NOT_GM).
        * @param {Socket} socket - The connected Socket.IO socket.
        * @returns {void}
        */
@@ -195,7 +305,10 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
             if (result.ok && !registry.register(socket.id, result.identity)) {
                result = {
                   ok: false,
-                  error: { code: ENDPOINT_LIMIT, message: 'Too many Foundry endpoints are registered.' },
+                  error: {
+                     code: ENDPOINT_LIMIT,
+                     message: 'Too many Foundry endpoints are registered.',
+                  },
                };
             }
             if (!result.ok) {
@@ -205,7 +318,14 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
                logRefusal(`Wiretap sidecar | refused identify from ${socket.id}: ${result.error.code}`);
             }
             if (typeof ack === 'function') {
-               ack(result.ok ? { ok: true } : { ok: false, error: result.error });
+               ack(
+                  result.ok
+                     ? { ok: true }
+                     : {
+                          ok: false,
+                          error: result.error,
+                       },
+               );
             }
          });
          socket.on(BRIDGE_GATE_STATE, (payload: unknown, ack?: unknown) => {
@@ -223,29 +343,34 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
                         ? { ok: true }
                         : {
                              ok: false,
-                             error: { code: NOT_GM, message: 'Only a registered GM endpoint may push a gate state.' },
+                             error: {
+                                code: NOT_GM,
+                                message: 'Only a registered GM endpoint may push a gate state.',
+                             },
                           },
                   );
                }
             } catch (cause) {
                // Fail closed: whatever threw, this endpoint's gates are all closed and the sender is told.
                registry.setGateState(socket.id, closedGateState());
-               log(
-                  `Wiretap sidecar | gate state from ${socket.id} failed: ${
-                     cause instanceof Error ? cause.message : String(cause)
-                  }`,
-               );
+               log(`Wiretap sidecar | gate state from ${socket.id} failed: ${describeCause(cause)}`);
                try {
                   if (typeof ack === 'function') {
                      ack({
                         ok: false,
-                        error: { code: OP_FAILED, message: 'Gate state could not be applied; every gate is closed.' },
+                        error: {
+                           code: OP_FAILED,
+                           message: 'Gate state could not be applied; every gate is closed.',
+                        },
                      });
                   }
                } catch {
                   // The sender's ack callback failed twice; the endpoint is already closed, so nothing more is done.
                }
             }
+         });
+         socket.on(BRIDGE_REGISTRY, (payload: unknown, ack?: unknown) => {
+            applyRegistry(socket, payload, ack);
          });
          socket.on('disconnect', () => {
             dropEndpoint(socket.id);
@@ -259,7 +384,13 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
 
       invoke: router.invoke,
 
+      invokeTool: router.invokeTool,
+
       gateState: router.gateState,
+
+      tools: router.tools,
+
+      subscribe: registry.subscribe,
 
       /**
        * Stop every endpoint health probe so no timer outlives the bridge.

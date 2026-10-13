@@ -11,11 +11,12 @@ import { fileURLToPath } from 'node:url';
 import { io as ioClient } from 'socket.io-client';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { createWiretapServer } from '../../server/server.ts';
 import { startMcpServer } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
-import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, PROTOCOL_VERSION } from '../../shared/protocol.js';
+import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, BRIDGE_REGISTRY, PROTOCOL_VERSION } from '../../shared/protocol.js';
 
 /**
  * @typedef {object} GmAck
@@ -300,15 +301,37 @@ export const FIXTURES = {
 };
 
 /**
+ * Build the registry entry of a synthetic tool a fake GM client registers through `bridge:registry`.
+ * @param {string} name - The tool name.
+ * @param {object} [overrides] - Fields replacing the defaults.
+ * @returns {object} An entry a fake GM client can send in a registry event.
+ */
+export function registryEntry(name, overrides = {}) {
+   return {
+      name,
+      description: `Synthetic registry tool ${name}.`,
+      inputSchema: {
+         type: 'object',
+         properties: { text: { type: 'string' } },
+      },
+      ...overrides,
+   };
+}
+
+/**
  * Start the sidecar bridge with a fake GM client, an MCP server and a connected SDK client. The server lists the
- * built-in tools, the test-local helper tool and `extraTools`.
+ * built-in tools, the test-local helper tool, `extraTools`, and the tools the fake GM client registers: those in
+ * `registry` before the session starts, and later ones through the returned `registerTools`.
  * @param {object} [options] - What to register.
  * @param {import('../../server/mcp.ts').ToolRegistration[]} [options.tools] - Tools registered after the helper tool.
- * @param {string} [options.instructions] - The server instructions text.
- * @returns {Promise<{ client: Client, setGmAck: Function, close: Function }>} The client, the control for the fake GM
- * client's answers and the teardown.
+ * @param {string} [options.instructions] - The server instructions text; the production text when absent.
+ * @param {object[]} [options.registry] - Registry entries the fake GM client sends before the SDK client connects.
+ * @returns {Promise<{ client: Client, setGmAck: Function, registerTools: Function, nextToolListChange: Function,
+ * close: Function }>} The client, the control for the fake GM client's answers, `registerTools(entries)` (sends a
+ * registry and resolves with its ack), `nextToolListChange()` (resolves when the client receives its next
+ * `notifications/tools/list_changed`, rejects after one second) and the teardown.
  */
-export async function startHarness({ tools = [], instructions } = {}) {
+export async function startHarness({ tools = [], instructions, registry } = {}) {
    /** @type {Array<() => unknown>} Teardown steps for what has been started, in start order. */
    const teardown = [];
    /**
@@ -347,6 +370,9 @@ export async function startHarness({ tools = [], instructions } = {}) {
          kind: 'human',
          dom: true,
       });
+      if (registry !== undefined) {
+         await gm.emitWithAck(BRIDGE_REGISTRY, registry);
+      }
       /** @type {ReturnType<typeof startMcpServer>} The MCP server under test. */
       const mcp = startMcpServer(server.bridge, 0, {
          tools: [
@@ -354,6 +380,10 @@ export async function startHarness({ tools = [], instructions } = {}) {
             ...tools,
          ],
          instructions,
+         sessions: {
+            listChangedQuietMs: 10,
+            listChangedMaxWaitMs: 50,
+         },
       });
       teardown.push(() => mcp.close());
       await mcp.ready;
@@ -362,6 +392,13 @@ export async function startHarness({ tools = [], instructions } = {}) {
          name: 'test',
          version: '0.0.0',
       });
+      /** @type {Array<() => void>} Resolvers of the callers waiting for the next tool list change. */
+      const waiters = [];
+      client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+         for (const resolve of waiters.splice(0)) {
+            resolve();
+         }
+      });
       teardown.push(() => client.close());
       await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${mcp.port()}/mcp`)));
       return {
@@ -369,6 +406,11 @@ export async function startHarness({ tools = [], instructions } = {}) {
          setGmAck: (ack) => {
             gmAck = ack;
          },
+         registerTools: (entries) => gm.emitWithAck(BRIDGE_REGISTRY, entries),
+         nextToolListChange: () => new Promise((resolve, reject) => {
+            waiters.push(resolve);
+            setTimeout(() => reject(new Error('no tools/list_changed within 1000 ms')), 1000).unref();
+         }),
          close,
       };
    } catch (error) {

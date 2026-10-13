@@ -886,3 +886,40 @@ describe('memory only', () => {
       expect(source).not.toMatch(/\brequire\s*\(|\bimport\s*\(/);
    });
 });
+
+describe('releaseOwner', () => {
+   it("releases every handle of one owner, frees their accounted bytes and leaves other owners' handles", () => {
+      const { store } = makeStore();
+      const first = putOk(store, OWNER_A, 'alpha');
+      const second = putOk(store, OWNER_A, 'beta');
+      const kept = putOk(store, OWNER_B, 'gamma');
+      expect(store.releaseOwner(OWNER_A)).toBe(2);
+      expect(store.slice(OWNER_A, first).ok).toBe(false);
+      expect(store.slice(OWNER_A, second).ok).toBe(false);
+      expect(store.slice(OWNER_B, kept).ok).toBe(true);
+      expect(store.stats()).toEqual({
+         entries: 1,
+         bytes: cost('gamma'),
+      });
+   });
+
+   it('answers 0 for an owner with no handles and stays idempotent', () => {
+      const { store } = makeStore();
+      putOk(store, OWNER_B, 'gamma');
+      expect(store.releaseOwner(OWNER_A)).toBe(0);
+      expect(store.releaseOwner(OWNER_B)).toBe(1);
+      expect(store.releaseOwner(OWNER_B)).toBe(0);
+      expect(store.stats()).toEqual({
+         entries: 0,
+         bytes: 0,
+      });
+   });
+
+   it('does not let a released owner key read a handle stored afterwards by a new owner of another key', () => {
+      const { store } = makeStore();
+      putOk(store, OWNER_A, 'alpha');
+      store.releaseOwner(OWNER_A);
+      const fresh = putOk(store, OWNER_B, 'delta');
+      expect(store.slice(OWNER_A, fresh).ok).toBe(false);
+   });
+});

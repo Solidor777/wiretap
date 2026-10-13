@@ -12,6 +12,7 @@ import {
    normalizeAckError,
    validateIdentify,
 } from '../../server/endpoints.ts';
+import { sanitizeRegistry } from '../../server/toolRegistry.ts';
 import { truncateUtf8 } from '../../server/utf8.ts';
 import { closedGateState } from '../../shared/gates.js';
 import {
@@ -22,10 +23,12 @@ import {
    ENDPOINT_UNAVAILABLE,
    NOT_GM,
    NO_ENDPOINT,
+   OP_CALL_TOOL,
    OP_CREATE_ACTOR,
    OP_FAILED,
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
+   TOOL_GONE,
 } from '$shared/protocol.js';
 
 /**
@@ -68,6 +71,7 @@ describe('createEndpointRegistry', () => {
             kind: 'agent',
             dom: true,
             gateState: closedGateState(),
+            tools: [],
             health: 'healthy',
             registeredAt: 1234,
          },
@@ -169,6 +173,119 @@ describe('createEndpointRegistry health', () => {
       expect(() => registry.setHealth('ghost', 'unresponsive')).not.toThrow();
       expect(registry.get('ghost')).toBeUndefined();
       expect(registry.list()).toEqual([]);
+   });
+});
+
+describe('createEndpointRegistry tools', () => {
+   /**
+    * Build a registry tool.
+    * @param {string} name - The name to give the tool.
+    * @returns {object} A tool in the shape the registry stores.
+    */
+   function tool(name) {
+      return {
+         name,
+         description: 'A synthetic tool.',
+         shape: {},
+         signature: name,
+      };
+   }
+
+   it('registers an endpoint with no tools', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 's1', 'human');
+      expect(registry.get('s1').tools).toEqual([]);
+   });
+
+   it('replaces the tools of a registered socket and ignores an unregistered one', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 's1', 'human');
+      registry.setTools('s1', [
+         tool('a'),
+         tool('b'),
+      ]);
+      expect(registry.get('s1').tools.map((entry) => entry.name)).toEqual([
+         'a',
+         'b',
+      ]);
+      registry.setTools('s1', [tool('c')]);
+      expect(registry.get('s1').tools.map((entry) => entry.name)).toEqual(['c']);
+      registry.setTools('ghost', [tool('x')]);
+      expect(registry.get('ghost')).toBeUndefined();
+   });
+
+   it('keeps the tools when the same socket identifies again', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 's1', 'human');
+      registry.setTools('s1', [tool('a')]);
+      add(registry, 's1', 'human');
+      expect(registry.get('s1').tools.map((entry) => entry.name)).toEqual(['a']);
+   });
+});
+
+describe('createEndpointRegistry change notifications', () => {
+   /**
+    * Build a registry with a counting listener.
+    * @returns {{ registry: ReturnType<typeof createEndpointRegistry>, listener: import('vitest').Mock }} The pieces.
+    */
+   function setup() {
+      const registry = createEndpointRegistry();
+      const listener = vi.fn();
+      registry.subscribe(listener);
+      return { registry, listener };
+   }
+
+   it('notifies on register, a repeated identify, tools, health and removal', () => {
+      const { registry, listener } = setup();
+      add(registry, 's1', 'human');
+      expect(listener).toHaveBeenCalledTimes(1);
+      add(registry, 's1', 'human');
+      expect(listener).toHaveBeenCalledTimes(2);
+      registry.setTools('s1', []);
+      expect(listener).toHaveBeenCalledTimes(3);
+      registry.setHealth('s1', 'unresponsive');
+      expect(listener).toHaveBeenCalledTimes(4);
+      registry.remove('s1');
+      expect(listener).toHaveBeenCalledTimes(5);
+   });
+
+   it('does not notify for a gate state, an unchanged health, or an unregistered socket', () => {
+      const { registry, listener } = setup();
+      add(registry, 's1', 'human');
+      listener.mockClear();
+      registry.setGateState('s1', {
+         ...closedGateState(),
+         allowFileUpload: true,
+      });
+      registry.setHealth('s1', 'healthy');
+      registry.setHealth('ghost', 'unresponsive');
+      registry.setTools('ghost', []);
+      registry.remove('ghost');
+      expect(listener).not.toHaveBeenCalled();
+   });
+
+   it('does not notify for a registration the limit refused', () => {
+      const { registry, listener } = setup();
+      const identity = validateIdentify(identify()).identity;
+      for (let index = 0; index < MAX_ENDPOINTS; index += 1) {
+         registry.register(`s${index}`, identity);
+      }
+      listener.mockClear();
+      expect(registry.register('extra', identity)).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+   });
+
+   it('stops notifying a listener after it unsubscribes and serves several listeners', () => {
+      const registry = createEndpointRegistry();
+      const first = vi.fn();
+      const second = vi.fn();
+      const stop = registry.subscribe(first);
+      registry.subscribe(second);
+      add(registry, 's1', 'human');
+      stop();
+      add(registry, 's2', 'human');
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(second).toHaveBeenCalledTimes(2);
    });
 });
 
@@ -345,6 +462,7 @@ describe('normalizeAckError', () => {
       ENDPOINT_UNAVAILABLE,
       PROTOCOL_MISMATCH,
       NOT_GM,
+      TOOL_GONE,
    ])(
       'turns the reserved protocol code %s from a client into OP_FAILED',
       (code) => {
@@ -1137,5 +1255,237 @@ describe('createRouter endpoint health', () => {
       await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       router.dispose();
       expect(calls).toEqual([['set', 5_000], ['clear', 77]]);
+   });
+});
+
+describe('createRouter tools', () => {
+   /**
+    * Build a router over a registry whose endpoints each carry one tool named after their socket.
+    * @param {Array<[string, string]>} endpoints - `[socketId, kind]` pairs registered in order.
+    * @returns {{ router: ReturnType<typeof createRouter>, registry: ReturnType<typeof createEndpointRegistry> }} The
+    * router and the registry it routes over.
+    */
+   function setup(endpoints) {
+      const registry = createEndpointRegistry();
+      for (const [id, kind] of endpoints) {
+         add(registry, id, kind);
+         registry.setTools(id, [
+            {
+               name: `tool_${id}`,
+               description: 'A synthetic tool.',
+               shape: {},
+               signature: id,
+            },
+         ]);
+      }
+      const router = createRouter(registry, {
+         send: async () => ({ ok: true }),
+         ping: async () => undefined,
+         log: () => undefined,
+      });
+      return { router, registry };
+   }
+
+   it('lists the tools of the endpoint a call would reach, agents first', () => {
+      const { router } = setup([
+         [
+            'h',
+            'human',
+         ],
+         [
+            'a',
+            'agent',
+         ],
+      ]);
+      expect(router.tools().map((entry) => entry.name)).toEqual(['tool_a']);
+      expect(router.tools({ endpoint: 'human' }).map((entry) => entry.name)).toEqual(['tool_h']);
+      expect(router.tools({ endpoint: 'agent' }).map((entry) => entry.name)).toEqual(['tool_a']);
+   });
+
+   it('skips an unresponsive endpoint and lists nothing when none is eligible', () => {
+      const { router, registry } = setup([
+         [
+            'h',
+            'human',
+         ],
+         [
+            'a',
+            'agent',
+         ],
+      ]);
+      registry.setHealth('a', 'unresponsive');
+      expect(router.tools().map((entry) => entry.name)).toEqual(['tool_h']);
+      registry.setHealth('h', 'unresponsive');
+      expect(router.tools()).toEqual([]);
+      expect(router.tools({ endpoint: 'agent' })).toEqual([]);
+   });
+
+   it('returns a copy, so the caller cannot change the registered tools', () => {
+      const { router, registry } = setup([[
+         'h',
+         'human',
+      ]]);
+      router.tools().pop();
+      expect(registry.get('h').tools).toHaveLength(1);
+   });
+});
+
+describe('router invokeTool', () => {
+   /**
+    * Build the registry tool a client would register.
+    * @param {string} name - Name the tool registers under.
+    * @param {object} [overrides] - Registry entry fields replacing the defaults.
+    * @returns {object} The sanitized tool.
+    */
+   function tool(name, overrides = {}) {
+      const outcome = sanitizeRegistry(
+         [
+            {
+               name,
+               description: `The ${name} tool.`,
+               inputSchema: { type: 'object' },
+               ...overrides,
+            },
+         ],
+         () => undefined,
+      );
+      return outcome.tools[0];
+   }
+
+   /**
+    * Build a router over endpoints that registered tools.
+    * @param {Array<[string, string, object[]]>} endpoints - Socket id, kind and registered tools of each endpoint.
+    * @returns {{ router: ReturnType<typeof createRouter>, registry: ReturnType<typeof createEndpointRegistry>,
+    * sent: object[] }} The router, its registry and the payloads it sent.
+    */
+   function setup(endpoints) {
+      const registry = createEndpointRegistry();
+      endpoints.forEach(([id, kind, tools]) => {
+         add(registry, id, kind);
+         registry.setTools(id, tools);
+      });
+      const sent = [];
+      const router = createRouter(registry, {
+         send: async (socketId, payload) => {
+            sent.push({
+               socketId,
+               payload,
+            });
+            return {
+               ok: true,
+               result: 'ran',
+            };
+         },
+         ping: async () => undefined,
+         log: () => undefined,
+         newRequestId: () => 'req-1',
+      });
+      return {
+         router,
+         registry,
+         sent,
+      };
+   }
+
+   it('runs the tool on the picked endpoint and returns that endpoint\'s declaration with the result', async () => {
+      const listed = tool('echo');
+      const picked = tool('echo', { budgetBytes: 50 });
+      const { router, sent } = setup([['a', 'agent', [picked]]]);
+      const outcome = await router.invokeTool('echo', { text: 'hi' }, { listed });
+      expect(outcome.result).toBe('ran');
+      expect(outcome.tool).toBe(picked);
+      expect(sent).toEqual([
+         {
+            socketId: 'a',
+            payload: {
+               op: OP_CALL_TOOL,
+               params: {
+                  name: 'echo',
+                  arguments: { text: 'hi' },
+               },
+               requestId: 'req-1',
+            },
+         },
+      ]);
+   });
+
+   it('fails with TOOL_GONE, sending nothing, when the picked endpoint does not register the name', async () => {
+      const { router, sent } = setup([['a', 'agent', [tool('other')]]]);
+      await expect(router.invokeTool('echo', {}, { listed: tool('echo') })).rejects.toMatchObject({
+         name: 'BridgeError',
+         code: TOOL_GONE,
+      });
+      expect(sent).toEqual([]);
+   });
+
+   it('denies, sending nothing, when the picked endpoint declares a different gate than the listed tool', async () => {
+      const listed = tool('writer', { gate: 'allowUserWrites' });
+      const { router, registry, sent } = setup([['a', 'agent', [tool('writer')]]]);
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowUserWrites: true,
+      });
+      await expect(router.invokeTool('writer', {}, { listed })).rejects.toMatchObject({ code: GATE_DENIED });
+      expect(sent).toEqual([]);
+   });
+
+   it('denies when the picked endpoint declares a gate the listed tool did not', async () => {
+      const listed = tool('writer');
+      const { router, sent } = setup([['a', 'agent', [tool('writer', { gate: 'allowUserWrites' })]]]);
+      await expect(router.invokeTool('writer', {}, { listed })).rejects.toMatchObject({ code: GATE_DENIED });
+      expect(sent).toEqual([]);
+   });
+
+   it('judges the shared gate on the snapshot of the picked endpoint only', async () => {
+      const gated = tool('writer', { gate: 'allowUserWrites' });
+      const { router, registry, sent } = setup([
+         ['h', 'human', [gated]],
+         ['a', 'agent', [gated]],
+      ]);
+      registry.setGateState('h', {
+         ...closedGateState(),
+         allowUserWrites: true,
+      });
+      await expect(router.invokeTool('writer', {}, { listed: gated })).rejects.toMatchObject({ code: GATE_DENIED });
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowUserWrites: true,
+      });
+      await router.invokeTool('writer', {}, { listed: gated });
+      expect(sent.map((entry) => entry.socketId)).toEqual(['a']);
+   });
+
+   it('restricts the pick to the endpoint kind and does not fall back', async () => {
+      const listed = tool('echo');
+      const { router, sent } = setup([['a', 'agent', [listed]]]);
+      await expect(router.invokeTool('echo', {}, {
+         endpoint: 'human',
+         listed,
+      })).rejects.toMatchObject({ code: NO_ENDPOINT });
+      expect(sent).toEqual([]);
+   });
+
+   it('refuses the call, sending nothing, when the picked endpoint declares other arguments for the name', async () => {
+      const listed = tool('echo');
+      const other = tool('echo', {
+         inputSchema: {
+            type: 'object',
+            properties: { count: { type: 'integer' } },
+         },
+      });
+      const { router, sent } = setup([['a', 'agent', [other]]]);
+      await expect(router.invokeTool('echo', {}, { listed })).rejects.toMatchObject({ code: TOOL_GONE });
+      expect(sent).toEqual([]);
+   });
+
+   it('runs the call when only the description or the result budget differs', async () => {
+      const listed = tool('echo');
+      const picked = tool('echo', {
+         description: 'Another description.',
+         budgetBytes: 50,
+      });
+      const { router, sent } = setup([['a', 'agent', [picked]]]);
+      await router.invokeTool('echo', {}, { listed });
+      expect(sent).toHaveLength(1);
    });
 });

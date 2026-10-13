@@ -1020,6 +1020,48 @@ describe('the enforcer never fails open', () => {
    });
 });
 
+describe('owner liveness', () => {
+   /** @type {object} A text result over the default limit. */
+   const BIG = textResult('z'.repeat(9000));
+
+   it('stores a large result for a live owner', async () => {
+      const store = createHandleStore();
+      const wrapped = withResultBudget(async () => BIG, {
+         store,
+         ownerKey: OWNER,
+         ownerLive: () => true,
+      });
+      const out = await wrapped({});
+      expect(JSON.parse(out.content[0].text).handle).toBeTruthy();
+      expect(store.stats().entries).toBe(1);
+   });
+
+   it('answers SESSION_ENDED and stores nothing once the owner has ended', async () => {
+      const store = createHandleStore();
+      const wrapped = withResultBudget(async () => BIG, {
+         store,
+         ownerKey: OWNER,
+         ownerLive: () => false,
+      });
+      const out = await wrapped({});
+      expect(out.isError).toBe(true);
+      expect(out.content[0].text.startsWith('SESSION_ENDED: ')).toBe(true);
+      expect(store.stats().entries).toBe(0);
+   });
+
+   it('still returns a result under the limit for an ended owner', async () => {
+      const store = createHandleStore();
+      const small = textResult('ok');
+      const wrapped = withResultBudget(async () => small, {
+         store,
+         ownerKey: OWNER,
+         ownerLive: () => false,
+      });
+      const out = await wrapped({});
+      expect(out.content[0].text).toBe('ok');
+   });
+});
+
 describe('entry size cap', () => {
    it('answers a result over 8,000,000 bytes with HANDLE_TOO_LARGE inside the acknowledgement budget', async () => {
       const { out, store } = await enforce(textResult('a'.repeat(8_000_001)));

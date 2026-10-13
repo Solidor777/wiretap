@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
+import { callCreateActor } from './mcpHttp.js';
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
@@ -30,42 +31,6 @@ function freePort() {
          probe.close(() => resolve(port));
       });
    });
-}
-
-/**
- * POST a JSON-RPC request to the MCP endpoint and parse the (JSON or SSE) response.
- * @param {number} mcpPort - The loopback port of the MCP server under test.
- * @param {object} body - The JSON-RPC request.
- * @returns {Promise<object>} The parsed JSON-RPC response.
- */
-async function mcpCall(mcpPort, body) {
-   /** @type {Response} The HTTP response from the MCP endpoint. */
-   const res = await fetch(`http://127.0.0.1:${mcpPort}/mcp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
-      body: JSON.stringify(body),
-   });
-   /** @type {string} The raw response body. */
-   const text = await res.text();
-   /** @type {string | undefined} The first SSE data line, if the response is an event stream. */
-   const dataLine = text.split('\n').find((line) => line.startsWith('data:'));
-   return JSON.parse(dataLine ? dataLine.slice(5) : text);
-}
-
-/**
- * Call the `create_actor` MCP tool.
- * @param {number} mcpPort - The loopback port of the MCP server under test.
- * @returns {Promise<{ isError?: boolean, content: { text: string }[] }>} The tool result.
- */
-async function callCreateActor(mcpPort) {
-   /** @type {{ result: object }} The JSON-RPC response. */
-   const response = await mcpCall(mcpPort, {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: { name: 'create_actor', arguments: { name: 'Bob', type: 'npc' } },
-   });
-   return response.result;
 }
 
 /**

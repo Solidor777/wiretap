@@ -88,6 +88,8 @@ export interface HandleStore {
    put: (ownerKey: string, text: string) => PutResult;
    /** Read a window of a stored value; only the owner that stored it can read it. */
    slice: (ownerKey: string, handle: unknown, options?: SliceOptions) => SliceResult;
+   /** Release every handle an owner holds; returns how many were released. Other owners' handles are untouched. */
+   releaseOwner: (ownerKey: string) => number;
    /** The entry count and accounted bytes currently held. */
    stats: () => HandleStats;
 }
@@ -359,12 +361,18 @@ export function createHandleStore(options: HandleStoreOptions = {}): HandleStore
          // The UTF-8 size of the value.
          const bytes: number = Buffer.byteLength(text, 'utf8');
          if (bytes > maxEntryBytes) {
-            return fail('HANDLE_TOO_LARGE', `Result of ${bytes} bytes exceeds the ${maxEntryBytes} byte handle limit.`);
+            return fail(
+               'HANDLE_TOO_LARGE',
+               `Result of ${bytes} bytes exceeds the ${maxEntryBytes} byte handle limit.`,
+            );
          }
          // The accounted size: V8 may hold the text as two bytes per unit, so the larger of the two sizes counts.
          const accounted: number = Math.max(bytes, 2 * text.length) + HANDLE_ENTRY_OVERHEAD_BYTES;
          if (accounted > maxTotalBytes) {
-            return fail('HANDLE_TOO_LARGE', `Result of ${bytes} bytes exceeds the ${maxTotalBytes} byte handle store.`);
+            return fail(
+               'HANDLE_TOO_LARGE',
+               `Result of ${bytes} bytes exceeds the ${maxTotalBytes} byte handle store.`,
+            );
          }
          purgeExpired();
          while (entries.size > 0 && (entries.size >= maxCount || totalBytes + accounted > maxTotalBytes)) {
@@ -500,6 +508,20 @@ export function createHandleStore(options: HandleStoreOptions = {}): HandleStore
             result.truncated = true;
          }
          return result;
+      },
+
+      releaseOwner(ownerKey: string): number {
+         // The handles of this owner, collected first because `drop` changes the map during iteration.
+         const owned: string[] = [];
+         for (const [handle, entry] of entries) {
+            if (entry.ownerKey === ownerKey) {
+               owned.push(handle);
+            }
+         }
+         for (const handle of owned) {
+            drop(handle);
+         }
+         return owned.length;
       },
 
       stats(): HandleStats {

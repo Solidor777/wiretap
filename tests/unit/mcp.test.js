@@ -6,6 +6,18 @@ import { createHandleStore } from '../../server/handles.ts';
 import { BridgeError } from '../../server/endpoints.ts';
 import { NO_ENDPOINT, OP_CREATE_ACTOR, OP_FAILED } from '$shared/protocol.js';
 
+/**
+ * Build a bridge that has no endpoint: no tools, no changes and an invoke that resolves to nothing.
+ * @returns {{ invoke: Function, tools: Function, subscribe: Function }} A bridge with no endpoint behind it.
+ */
+function idleBridge() {
+   return {
+      invoke: async () => undefined,
+      tools: () => [],
+      subscribe: () => () => undefined,
+   };
+}
+
 describe('makeCreateActorHandler', () => {
    it('returns success content containing the new actor uuid', async () => {
       const bridge = { invoke: async () => ({
@@ -215,7 +227,7 @@ describe('startMcpServer on an ephemeral port', () => {
    }
 
    it('accepts the Host of the real bound port and refuses any other Host', async () => {
-      const mcp = startMcpServer({ invoke: async () => undefined }, 0);
+      const mcp = startMcpServer(idleBridge(), 0);
       try {
          await mcp.ready;
          /** @type {number} The ephemeral port the OS assigned. */

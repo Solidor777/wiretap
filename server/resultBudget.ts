@@ -2,6 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { getBudget } from '../shared/budgets.js';
 import { BridgeError, formatBridgeError } from './endpoints.ts';
 import type { HandleStore, PutResult } from './handles.ts';
+import { describeCause } from './logText.ts';
 import { truncateUtf8 } from './utf8.ts';
 
 // Most top-level keys a summary lists, and how many of them get a count.
@@ -31,9 +32,6 @@ const TOOL_FAILED_MESSAGE: string = 'Tool failed.';
 // Longest cause text written to the server log, in UTF-8 bytes.
 const LOG_CAUSE_BYTES: number = 512;
 
-// Characters replaced in logged cause text: C0 and C1 controls (newlines included) and the Unicode line separators.
-const LOG_CONTROL_PATTERN: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
-
 /** A tool callback: the validated arguments in, an MCP tool result out. */
 export type ToolHandler<Args> = (args: Args, extra?: unknown) => Promise<CallToolResult>;
 
@@ -43,6 +41,11 @@ export interface ResultBudgetOptions {
    store: HandleStore;
    /** The owner key that may read those handles back. */
    ownerKey: string;
+   /**
+    * Whether the owner still exists. When it returns false an over-limit result is answered with a `SESSION_ENDED`
+    * error instead of being stored, since no one could read the handle. Absent means the owner always exists.
+    */
+   ownerLive?: () => boolean;
    /** The tool's own result budget in bytes; the effective limit is the smaller of this and the hard cap. */
    budgetBytes?: number;
 }
@@ -82,41 +85,28 @@ function errorResult(text: string): CallToolResult {
 }
 
 /**
- * Describe a thrown value as text without ever throwing.
- * @param {unknown} err - The thrown value.
- * @returns {string} Its message, its string form, or a fixed text when neither can be read.
- */
-function describeThrown(err: unknown): string {
-   try {
-      return err instanceof Error ? err.message : String(err);
-   } catch {
-      return 'unprintable value';
-   }
-}
-
-/**
  * Write one line to the server log: what failed and a bounded cause. The line never reaches the tool caller. The cause
- * comes from handler output, so control characters and line breaks are replaced by spaces: it cannot forge log lines.
+ * comes from handler output, so `describeCause` replaces control characters and line breaks: it cannot forge lines.
  * @param {string} what - What failed.
- * @param {string} cause - The cause text, cut to `LOG_CAUSE_BYTES`.
+ * @param {unknown} cause - The thrown value.
  * @returns {void}
  */
-function logFailure(what: string, cause: string): void {
-   console.warn(`Wiretap sidecar | ${what}: ${truncateUtf8(cause.replace(LOG_CONTROL_PATTERN, ' '), LOG_CAUSE_BYTES)}`);
+function logFailure(what: string, cause: unknown): void {
+   console.warn(`Wiretap sidecar | ${what}: ${describeCause(cause, LOG_CAUSE_BYTES)}`);
 }
 
 /**
  * Turn a value a handler threw into an error result. A BridgeError carries a bounded code and message meant for the
- * caller and passes as `<code>: <message>`; anything else becomes a fixed generic text and its real message goes to the
- * server log.
+ * caller and passes as `<code>: <message>`; anything else becomes a fixed generic text and its real message goes to
+ * the server log.
  * @param {unknown} err - The thrown value.
  * @returns {CallToolResult} The error result, within the error budget.
  */
-function failureResult(err: unknown): CallToolResult {
+export function failureResult(err: unknown): CallToolResult {
    if (err instanceof BridgeError) {
       return errorResult(truncateUtf8(formatBridgeError(err), getBudget('ERROR_MAX_BYTES').value));
    }
-   logFailure('tool failed', describeThrown(err));
+   logFailure('tool failed', err);
    return errorResult(TOOL_FAILED_MESSAGE);
 }
 
@@ -427,6 +417,9 @@ function enforce(raw: unknown, args: unknown, options: ResultBudgetOptions): Cal
    }
    // The acknowledgement budget in bytes.
    const ackMaxBytes: number = getBudget('ACK_MAX_BYTES').value;
+   if (options.ownerLive && !options.ownerLive()) {
+      return errorResult('SESSION_ENDED: The MCP session ended, so the large result was not stored.');
+   }
    // The text kept for later slices: the parts joined by newlines.
    const stored: string = parts.join('\n');
    // The outcome of storing it.
@@ -477,7 +470,7 @@ export function withResultBudget<Args>(handler: ToolHandler<Args>, options: Resu
       try {
          return enforce(raw, args, options);
       } catch (err) {
-         logFailure('tool result rejected', describeThrown(err));
+         logFailure('tool result rejected', err);
          return errorResult(INVALID_RESULT_MESSAGE);
       }
    };

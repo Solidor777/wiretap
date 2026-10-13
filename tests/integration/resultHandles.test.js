@@ -400,6 +400,8 @@ describe('large results become handles', () => {
             invoke: async () => {
                throw new Error('SECRET_INTERNAL_DETAIL');
             },
+            tools: () => [],
+            subscribe: () => () => undefined,
          },
          0,
       );
