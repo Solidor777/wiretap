@@ -9,6 +9,7 @@ import {
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
 } from '$shared/protocol.js';
+import { getBudget } from '$shared/budgets.js';
 import { cleanForLog, describeCause } from '$shared/logText.js';
 import { SCRIPT_API_VERSION } from '$shared/scripts.js';
 import { truncateUtf8 } from '$shared/utf8.js';
@@ -93,6 +94,33 @@ function failureMessage(thrown) {
 }
 
 /**
+ * Longest path or message of one acked validation failure, in UTF-8 bytes. The sidecar accepts 512; the client keeps
+ * its ack small.
+ * @type {number}
+ */
+const FAILURE_TEXT_MAX_BYTES = 160;
+
+/**
+ * Build the structured failures of a script error for the ack: at most `ERROR_MAX_FAILURES` entries with each text
+ * bounded, and the true total beside them.
+ * @param {ScriptError} err - The script error.
+ * @returns {{ failures?: { path: string, message: string }[], failureCount?: number }} The ack fields; empty when the
+ * error carries no failures.
+ */
+function failureDetails(err) {
+   if (!Array.isArray(err.failures)) {
+      return {};
+   }
+   return {
+      failures: err.failures.slice(0, getBudget('ERROR_MAX_FAILURES').value).map((failure) => ({
+         path: truncateUtf8(String(failure.path), FAILURE_TEXT_MAX_BYTES),
+         message: truncateUtf8(String(failure.message), FAILURE_TEXT_MAX_BYTES),
+      })),
+      failureCount: err.failureCount ?? err.failures.length,
+   };
+}
+
+/**
  * Longest caller-supplied op name echoed in an error, in UTF-8 bytes.
  * @type {number}
  */
@@ -171,6 +199,7 @@ export function initFoundryBridge(connection, { scripts = scriptRegistry } = {})
                   error: {
                      code: err instanceof ScriptError ? err.code : OP_FAILED,
                      message: failureMessage(err),
+                     ...(err instanceof ScriptError ? failureDetails(err) : {}),
                   },
                });
             }

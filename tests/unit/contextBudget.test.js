@@ -112,13 +112,15 @@ describe('context budgets of the real MCP server', () => {
       expect(report.failures).toEqual([]);
       expect(report.listing.map((tool) => tool.name).sort()).toEqual(
          [
-            'create_actor',
+            'create_documents',
+            'delete_documents',
             'describe_schema',
             'get_document',
             HELPER_TOOL_NAME,
             'list_document_types',
             'read_handle',
             'search_documents',
+            'update_documents',
          ].sort(),
       );
       expect(report.totals.count).toBe(1 + SHIPPED_COUNT);
@@ -126,21 +128,25 @@ describe('context budgets of the real MCP server', () => {
       expect(report.fixtureRuns.length).toBeGreaterThanOrEqual(8);
    });
 
-   it('keeps a create_actor ack at its bound inside the acknowledgement budget', async () => {
+   it('turns a create_documents ack over the batch budget into a handle within the ack budget', async () => {
       harness = await startHarness();
       harness.setGmAck({
          ok: true,
-         result: {
+         result: Array.from({ length: 50 }, () => ({
             uuid: `Actor.${'U'.repeat(250)}`,
             name: 'N'.repeat(256),
             type: 'T'.repeat(256),
-         },
+         })),
       });
       const result = await harness.client.callTool({
-         name: 'create_actor',
-         arguments: { name: 'MOCK_ACTOR' },
+         name: 'create_documents',
+         arguments: {
+            documentName: 'Actor',
+            data: ['{"name":"MOCK_ACTOR"}'],
+         },
       });
       expect(textBytes(result)).toBeLessThanOrEqual(getBudget('ACK_MAX_BYTES').value);
+      expect(JSON.parse(result.content[0].text)).toHaveProperty('handle');
    });
 
    it('turns an over-cap result into a handle of at most 256 bytes and serves slices within the cap', async () => {
@@ -256,7 +262,7 @@ describe('context budgets of the real MCP server', () => {
       it('fails a 31st tool', async () => {
          /**
           * @type {number} The tools the sidecar itself lists. Fillers fill the fixed-name room, so no registry script
-          * (create_actor included) is listed beside them.
+          * (the shipped scripts included) is listed beside them.
           */
          const shipped = RESERVED_SCRIPT_NAMES.length;
          /** @type {number} Fillers that bring the counted tools to one over the maximum. */
@@ -276,7 +282,7 @@ describe('context budgets of the real MCP server', () => {
       it('does not count the helper tool toward the tool count, but counts the tools under test', async () => {
          /**
           * @type {number} The tools the sidecar itself lists. Fillers fill the fixed-name room, so no registry script
-          * (create_actor included) is listed beside them.
+          * (the shipped scripts included) is listed beside them.
           */
          const shipped = RESERVED_SCRIPT_NAMES.length;
          /** @type {number} Fillers that bring the counted tools exactly to the maximum. */
@@ -583,8 +589,11 @@ describe('context budgets of the real MCP server', () => {
             },
          });
          const result = await harness.client.callTool({
-            name: 'create_actor',
-            arguments: { name: 'MOCK_ACTOR' },
+            name: 'create_documents',
+            arguments: {
+               documentName: 'Actor',
+               data: ['{"name":"MOCK_ACTOR"}'],
+            },
          });
          expect(result.isError).toBe(true);
          /** @type {string[]} The text lines after the first. */

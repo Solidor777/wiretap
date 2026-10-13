@@ -161,6 +161,12 @@ export const BUDGETS = table([
    budget('REGISTRY_PUSHES_PER_SECOND_MAX', 2, 'count', BUDGET_SEVERITY.HARD),
    // Most script executions one client runs at once; a call beyond it is answered with a short busy error.
    budget('SCRIPT_CONCURRENCY_MAX', 8, 'count', BUDGET_SEVERITY.HARD),
+   // Acknowledgement of a whole write call that touches up to `WRITE_DOCUMENTS_MAX` documents (4 KB).
+   budget('ACK_BATCH_MAX_BYTES', 4000, 'bytes', BUDGET_SEVERITY.HARD),
+   // Documents (or update entries, or uuids) one create, update or delete call may carry.
+   budget('WRITE_DOCUMENTS_MAX', 50, 'count', BUDGET_SEVERITY.HARD),
+   // Total JSON text of the data one create or update call carries; a larger call is refused before it is parsed.
+   budget('WRITE_DATA_MAX_BYTES', 200000, 'bytes', BUDGET_SEVERITY.HARD),
 ]);
 
 /**

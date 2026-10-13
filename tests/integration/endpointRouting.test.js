@@ -3,8 +3,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
-import { callCreateActor, mcpCall } from './mcpHttp.js';
-import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
+import { callCreateDocuments, mcpCall } from './mcpHttp.js';
+import { createDocumentsArgs, createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
@@ -73,14 +73,14 @@ function identify(overrides = {}) {
 }
 
 /**
- * Identify a fake client as a GM endpoint and register the create_actor script on it.
+ * Identify a fake client as a GM endpoint and register the create_documents script on it.
  * @param {import('socket.io-client').Socket} client - The fake client.
  * @param {object} [overrides] - Identify fields replacing the defaults.
  * @returns {Promise<void>}
  */
-async function identifyWithCreateActor(client, overrides = {}) {
+async function identifyWithCreateDocuments(client, overrides = {}) {
    expect(await client.emitWithAck(BRIDGE_IDENTIFY, identify(overrides))).toEqual({ ok: true });
-   expect(await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript()]))).toMatchObject({
+   expect(await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createDocumentsScript()]))).toMatchObject({
       ok: true,
    });
 }
@@ -136,16 +136,16 @@ describe('endpoint routing over Socket.IO', () => {
       const agentSeen = [];
       const human = await connectFake(port, 'human', humanSeen);
       const agent = await connectFake(port, 'agent', agentSeen);
-      await identifyWithCreateActor(human, { kind: 'human' });
-      await identifyWithCreateActor(agent, { kind: 'agent', userId: 'u2' });
-      const result = await callCreateActor(mcpPort);
+      await identifyWithCreateDocuments(human, { kind: 'human' });
+      await identifyWithCreateDocuments(agent, { kind: 'agent', userId: 'u2' });
+      const result = await callCreateDocuments(mcpPort);
       expect(result.isError).toBeFalsy();
       expect(result.content[0].text).toContain('Actor.agent');
       expect(humanSeen).toEqual([]);
       expect(agentSeen).toHaveLength(1);
       expect(agentSeen[0]).toMatchObject({
          op: OP_CALL_TOOL,
-         params: { name: 'create_actor', arguments: { name: 'Bob', type: 'npc' } },
+         params: { name: 'create_documents', arguments: createDocumentsArgs() },
       });
       expect(agentSeen[0].requestId).toMatch(/^[0-9a-f-]{36}$/);
    });
@@ -155,12 +155,12 @@ describe('endpoint routing over Socket.IO', () => {
       const humanSeen = [];
       const human = await connectFake(port, 'human', humanSeen);
       const agent = await connectFake(port, 'agent', []);
-      await identifyWithCreateActor(human, { kind: 'human' });
-      await identifyWithCreateActor(agent, { kind: 'agent', userId: 'u2' });
+      await identifyWithCreateDocuments(human, { kind: 'human' });
+      await identifyWithCreateDocuments(agent, { kind: 'agent', userId: 'u2' });
       agent.close();
       // The server processes the disconnect asynchronously; poll until the call reaches the human endpoint.
       const result = await poll(async () => {
-         const attempt = await callCreateActor(mcpPort);
+         const attempt = await callCreateDocuments(mcpPort);
          return attempt.content[0].text.includes('Actor.human') ? attempt : undefined;
       }, 'the agent disconnect to be processed');
       expect(result.isError).toBeFalsy();
@@ -181,16 +181,16 @@ describe('endpoint routing over Socket.IO', () => {
       });
    });
 
-   it('returns the structured NO_ENDPOINT text from create_actor when its endpoint is gone', async () => {
+   it('returns the structured NO_ENDPOINT text from create_documents when its endpoint is gone', async () => {
       const port = await start();
       const gm = await connectFake(port, 'human', []);
-      await identifyWithCreateActor(gm);
-      // Open the session while the endpoint is there, so create_actor is listed to it.
+      await identifyWithCreateDocuments(gm);
+      // Open the session while the endpoint is there, so create_documents is listed to it.
       await mcpCall(mcpPort, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
       gm.close();
       // The session drops the tool one debounce after the disconnect; until then the call reaches the router.
       const result = await poll(async () => {
-         const attempt = await callCreateActor(mcpPort);
+         const attempt = await callCreateDocuments(mcpPort);
          return attempt.content[0].text.startsWith(`${NO_ENDPOINT}: `) ? attempt : undefined;
       }, 'the call to find no endpoint');
       expect(result.isError).toBe(true);
@@ -234,7 +234,7 @@ describe('endpoint routing over Socket.IO', () => {
          });
       });
       await new Promise((resolve) => client.on('connect', resolve));
-      await identifyWithCreateActor(client);
+      await identifyWithCreateDocuments(client);
       const error = await server.bridge.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       expect(error.code).toBe(OP_FAILED);
       expect(Buffer.byteLength(error.message, 'utf8')).toBeLessThanOrEqual(512);
@@ -243,7 +243,7 @@ describe('endpoint routing over Socket.IO', () => {
       error.failures.forEach((failure) => {
          expect(Buffer.byteLength(failure.message, 'utf8')).toBeLessThanOrEqual(512);
       });
-      const result = await callCreateActor(mcpPort);
+      const result = await callCreateDocuments(mcpPort);
       expect(result.isError).toBe(true);
       expect(result.content[0].text.endsWith('(+50 more)')).toBe(true);
       expect(Buffer.byteLength(result.content[0].text, 'utf8')).toBeLessThanOrEqual(512);
@@ -271,8 +271,8 @@ describe('endpoint routing over Socket.IO', () => {
       clients.push(client);
       client.on(BRIDGE_INVOKE, (request, ack) => ack({ ok: true }));
       await new Promise((resolve) => client.on('connect', resolve));
-      await identifyWithCreateActor(client);
-      const result = await callCreateActor(mcpPort);
+      await identifyWithCreateDocuments(client);
+      const result = await callCreateDocuments(mcpPort);
       expect(result.isError).toBeFalsy();
       expect(result.content[0].text).toBe('null');
    });

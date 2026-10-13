@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { OP_CALL_TOOL } from '../../shared/protocol.js';
 import { SCRIPT_API_VERSION } from '../../shared/scripts.js';
-import { createActorScript } from '../unit/scriptFixtures.js';
+import { createDocumentsArgs, createDocumentsScript } from '../unit/scriptFixtures.js';
 import { createHarness, entry } from './mcpHarness.js';
 
 /**
@@ -22,7 +22,7 @@ describe('scripts registered over the bridge', () => {
       await harness.cleanup();
    });
 
-   describe('create_actor through the registry', () => {
+   describe('create_documents through the registry', () => {
       it('lists only read_handle until a client registers scripts', async () => {
          harness = createHarness();
          await harness.start();
@@ -30,52 +30,56 @@ describe('scripts registered over the bridge', () => {
          expect(await harness.toolNames(client)).toEqual(['read_handle']);
       });
 
-      it('lists create_actor once the client registers it, with no hard-coded handler behind it', async () => {
+      it('lists create_documents once the client registers it, with no hard-coded handler behind it', async () => {
          harness = createHarness();
          await harness.start();
          const gm = await harness.connectGm();
          const { client } = await harness.connectClient();
-         expect(await gm.register([createActorScript()])).toEqual({
+         expect(await gm.register([createDocumentsScript()])).toEqual({
             ok: true,
             accepted: 1,
             refused: 0,
          });
          await expect.poll(() => harness.toolNames(client), { timeout: 1000 }).toEqual([
-            'create_actor',
+            'create_documents',
             'read_handle',
          ]);
       });
 
-      it('runs a create_actor call as a callTool op on the registering client and returns its result', async () => {
+      it('runs a create_documents call as a callTool op on the registering client and returns its result', async () => {
          harness = createHarness();
          await harness.start();
          const gm = await harness.connectGm({
             answer: () => ({
                ok: true,
-               result: {
-                  uuid: 'Actor.MOCKACTOR0000001',
-                  name: 'MOCK_ACTOR',
-                  type: 'npc',
-               },
+               result: [
+                  {
+                     uuid: 'Actor.MOCKACTOR0000001',
+                     name: 'MOCK_ACTOR',
+                     type: 'npc',
+                  },
+               ],
             }),
          });
-         await gm.register([createActorScript()]);
+         await gm.register([createDocumentsScript()]);
          const { client } = await harness.connectClient();
          const result = await client.callTool({
-            name: 'create_actor',
-            arguments: { name: 'MOCK_ACTOR' },
+            name: 'create_documents',
+            arguments: createDocumentsArgs('MOCK_ACTOR'),
          });
          expect(result.isError).toBeUndefined();
-         expect(JSON.parse(textOf(result))).toEqual({
-            uuid: 'Actor.MOCKACTOR0000001',
-            name: 'MOCK_ACTOR',
-            type: 'npc',
-         });
+         expect(JSON.parse(textOf(result))).toEqual([
+            {
+               uuid: 'Actor.MOCKACTOR0000001',
+               name: 'MOCK_ACTOR',
+               type: 'npc',
+            },
+         ]);
          expect(gm.invokes).toHaveLength(1);
          expect(gm.invokes[0].op).toBe(OP_CALL_TOOL);
          expect(gm.invokes[0].params).toEqual({
-            name: 'create_actor',
-            arguments: { name: 'MOCK_ACTOR' },
+            name: 'create_documents',
+            arguments: createDocumentsArgs('MOCK_ACTOR'),
          });
       });
 
@@ -91,34 +95,34 @@ describe('scripts registered over the bridge', () => {
                },
             }),
          });
-         await gm.register([createActorScript()]);
+         await gm.register([createDocumentsScript()]);
          const { client } = await harness.connectClient();
          const result = await client.callTool({
-            name: 'create_actor',
-            arguments: { name: 'MOCK_ACTOR' },
+            name: 'create_documents',
+            arguments: createDocumentsArgs('MOCK_ACTOR'),
          });
          expect(result.isError).toBe(true);
          expect(textOf(result)).toBe('OP_FAILED: MOCK_FAILURE');
       });
 
-      it('turns an acknowledgement over its 256-byte budget into a handle', async () => {
+      it('turns an acknowledgement over its 4,000-byte budget into a handle', async () => {
          harness = createHarness();
          await harness.start();
          const gm = await harness.connectGm({
             answer: () => ({
                ok: true,
-               result: {
+               result: Array.from({ length: 20 }, () => ({
                   uuid: `Actor.${'U'.repeat(250)}`,
                   name: 'N'.repeat(256),
                   type: 'T'.repeat(256),
-               },
+               })),
             }),
          });
-         await gm.register([createActorScript()]);
+         await gm.register([createDocumentsScript()]);
          const { client } = await harness.connectClient();
          const result = await client.callTool({
-            name: 'create_actor',
-            arguments: { name: 'MOCK_ACTOR' },
+            name: 'create_documents',
+            arguments: createDocumentsArgs('MOCK_ACTOR'),
          });
          expect(JSON.parse(textOf(result))).toHaveProperty('handle');
          expect(Buffer.byteLength(textOf(result))).toBeLessThanOrEqual(256);
@@ -130,16 +134,19 @@ describe('scripts registered over the bridge', () => {
          harness = createHarness();
          await harness.start();
          const gm = await harness.connectGm();
-         await gm.register([createActorScript()]);
+         await gm.register([createDocumentsScript()]);
          const { client } = await harness.connectClient();
          const missing = await client.callTool({
-            name: 'create_actor',
+            name: 'create_documents',
             arguments: {},
          });
          expect(missing.isError).toBe(true);
          const wrongType = await client.callTool({
-            name: 'create_actor',
-            arguments: { name: 7 },
+            name: 'create_documents',
+            arguments: {
+               documentName: 7,
+               data: ['{}'],
+            },
          });
          expect(wrongType.isError).toBe(true);
          expect(gm.invokes).toEqual([]);
@@ -149,16 +156,16 @@ describe('scripts registered over the bridge', () => {
          harness = createHarness();
          await harness.start();
          const gm = await harness.connectGm();
-         await gm.register([createActorScript()]);
+         await gm.register([createDocumentsScript()]);
          const { client } = await harness.connectClient();
          await client.callTool({
-            name: 'create_actor',
+            name: 'create_documents',
             arguments: {
-               name: 'MOCK_ACTOR',
+               ...createDocumentsArgs('MOCK_ACTOR'),
                extra: 'x',
             },
          });
-         expect(gm.invokes[0].params.arguments).toEqual({ name: 'MOCK_ACTOR' });
+         expect(gm.invokes[0].params.arguments).toEqual(createDocumentsArgs('MOCK_ACTOR'));
       });
    });
 

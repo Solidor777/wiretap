@@ -411,12 +411,33 @@ export function resolvePaths(documentExport, paths) {
 }
 
 /**
- * Scans a written value, without recursion, for an own key named like an `UNSAFE_SEGMENTS` entry and for nesting
- * deeper than `VALUE_DEPTH_MAX`. Each object is scanned once, so a cyclic value terminates.
+ * Matches the Foundry operator prefix a data key may carry (`-=key` deletes, `==key` replaces).
+ * @type {RegExp}
+ */
+const KEY_OPERATOR_PREFIX = /^(?:-=|==)/;
+
+/**
+ * Tells whether a data key names an unsafe segment. Foundry expands a dotted key into nested objects before it
+ * cleans the data (`common/utils/helpers.mjs` `expandObjectInPlace`), so every dot-separated segment is judged as
+ * `parsePath` judges a path segment: an `UNSAFE_SEGMENTS` entry or any name found on `Object.prototype`.
+ * @param {string} key - A key of a written object.
+ * @returns {boolean} True when any segment of the key is unsafe.
+ */
+function keyHasUnsafeSegment(key) {
+   return key.split('.').some((segment) => {
+      /** @type {string} The segment without its operator prefix. */
+      const name = segment.replace(KEY_OPERATOR_PREFIX, '');
+      return UNSAFE_SEGMENTS.includes(name) || name in Object.prototype;
+   });
+}
+
+/**
+ * Scans a written value, without recursion, for an own key with an unsafe segment (see `keyHasUnsafeSegment`) and for
+ * nesting deeper than `VALUE_DEPTH_MAX`. Each object is scanned once, so a cyclic value terminates.
  * @param {*} value - The patch value.
  * @returns {'key' | 'depth' | null} What was found, or null when the value is acceptable.
  */
-function findUnsafeValue(value) {
+export function findUnsafeValue(value) {
    if (!isObject(value)) {
       return null;
    }
@@ -437,7 +458,7 @@ function findUnsafeValue(value) {
          return 'depth';
       }
       for (const key of Object.keys(node)) {
-         if (UNSAFE_SEGMENTS.includes(key)) {
+         if (keyHasUnsafeSegment(key)) {
             return 'key';
          }
          if (isObject(node[key])) {

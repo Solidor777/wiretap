@@ -50,12 +50,22 @@ export class ScriptError extends Error {
     * Build an error that carries the code to ack.
     * @param {string} code - An unreserved code matching `/^[A-Z][A-Z0-9_]{0,63}$/`.
     * @param {string} message - The short failure text.
+    * @param {object} [details] - Optional structured validation failures.
+    * @param {{ path: string, message: string }[]} [details.failures] - The failures to ack; the bridge keeps the
+    * first 10 and bounds each text.
+    * @param {number} [details.failureCount] - The true number of failures when `failures` holds fewer.
     */
-   constructor(code, message) {
+   constructor(code, message, details = {}) {
       super(message);
       this.name = 'ScriptError';
       /** @type {string} The code acked to the agent. */
       this.code = code;
+      if (Array.isArray(details.failures)) {
+         /** @type {{ path: string, message: string }[] | undefined} The failures acked beside the message. */
+         this.failures = details.failures;
+         /** @type {number | undefined} The true failure total. */
+         this.failureCount = details.failureCount ?? details.failures.length;
+      }
    }
 }
 

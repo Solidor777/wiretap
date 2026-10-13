@@ -10,6 +10,7 @@ import {
    isModuleId,
    isModuleAllowed,
    isWiretapSettingKey,
+   normalizeSettingKey,
    resolveSettingKey,
    sanitizeGateState,
 } from '../../shared/gates.js';
@@ -287,6 +288,14 @@ describe('sanitizeGateState', () => {
       const result = sanitizeGateState(input);
       result.allowedPluginModules.push('b');
       expect(input.allowedPluginModules).toEqual(['a']);
+   });
+});
+
+describe('normalizeSettingKey', () => {
+   it('removes case, padding, invisible characters and compatibility forms', () => {
+      expect(normalizeSettingKey(' Core.Module​Configuration ')).toBe('core.moduleconfiguration');
+      expect(normalizeSettingKey('ｗiretap．x')).toBe('wiretap.x');
+      expect(normalizeSettingKey('a b	c')).toBe('abc');
    });
 });
 

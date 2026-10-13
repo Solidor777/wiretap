@@ -4,12 +4,14 @@
  */
 import { compileSchema } from '../../shared/schemaValidate.js';
 import { SCRIPT_API_VERSION, definitionBytes } from '../../shared/scripts.js';
-import { createActorDefinition } from '../../src/bridge/scripts/createActor.js';
 import {
+   createDocumentsDefinition,
+   deleteDocumentsDefinition,
    describeSchemaDefinition,
    getDocumentDefinition,
    listDocumentTypesDefinition,
    searchDocumentsDefinition,
+   updateDocumentsDefinition,
 } from '../../src/bridge/scripts/definitions.js';
 
 /**
@@ -50,13 +52,25 @@ export function registryPayload(scripts, overrides = {}) {
 }
 
 /**
- * Build the `create_actor` script exactly as the Foundry client ships it: a mutating api script whose result is an
- * acknowledgement within the 256-byte budget. A copy of the shipped definition, so the budget tests judge the real
+ * Build the `create_documents` script exactly as the Foundry client ships it: a mutating api script whose result is
+ * an acknowledgement within the batch budget. A copy of the shipped definition, so the budget tests judge the real
  * one.
  * @returns {object} The definition.
  */
-export function createActorScript() {
-   return structuredClone(createActorDefinition);
+export function createDocumentsScript() {
+   return structuredClone(createDocumentsDefinition);
+}
+
+/**
+ * Build `create_documents` arguments that create one Actor.
+ * @param {string} [name] - The actor name; defaults to `Bob`.
+ * @returns {{ documentName: string, data: string[] }} The arguments as an MCP client sends them.
+ */
+export function createDocumentsArgs(name = 'Bob') {
+   return {
+      documentName: 'Actor',
+      data: [JSON.stringify({ name, type: 'npc' })],
+   };
 }
 
 /**
@@ -66,11 +80,13 @@ export function createActorScript() {
  */
 export function shippedScripts() {
    return [
-      createActorDefinition,
       listDocumentTypesDefinition,
       getDocumentDefinition,
       searchDocumentsDefinition,
       describeSchemaDefinition,
+      createDocumentsDefinition,
+      updateDocumentsDefinition,
+      deleteDocumentsDefinition,
    ].map((definition) => structuredClone(definition));
 }
 

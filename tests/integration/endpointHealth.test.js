@@ -3,8 +3,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
-import { callCreateActor } from './mcpHttp.js';
-import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
+import { callCreateDocuments } from './mcpHttp.js';
+import { createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
@@ -128,7 +128,7 @@ describe('endpoint health over Socket.IO', () => {
       });
       await new Promise((resolve) => client.on('connect', resolve));
       await client.emitWithAck(BRIDGE_IDENTIFY, identify({ kind, userId: kind }));
-      await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript()]));
+      await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createDocumentsScript()]));
       return fake;
    }
 
@@ -196,7 +196,7 @@ describe('endpoint health over Socket.IO', () => {
       fakeTimers();
       agent.answer.invokes = false;
       agent.answer.pings = false;
-      const first = callCreateActor(mcpPort);
+      const first = callCreateDocuments(mcpPort);
       await until(() => agent.invokes.length === 1, 'the agent to receive the invocation');
       await vi.advanceTimersByTimeAsync(10_000);
       await until(() => agent.pings.length === 1, 'the agent to receive the ping');
@@ -205,7 +205,7 @@ describe('endpoint health over Socket.IO', () => {
       expect(timedOut.isError).toBe(true);
       expect(timedOut.content[0].text.startsWith(`${ENDPOINT_TIMEOUT}: `)).toBe(true);
       expect(timedOut.content[0].text).toContain('may still have applied');
-      const unavailable = await callCreateActor(mcpPort);
+      const unavailable = await callCreateDocuments(mcpPort);
       expect(unavailable.isError).toBe(true);
       expect(unavailable.content[0].text.startsWith(`${ENDPOINT_UNAVAILABLE}: `)).toBe(true);
       expect(agent.invokes).toHaveLength(1);

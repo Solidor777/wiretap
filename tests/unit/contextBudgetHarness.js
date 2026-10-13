@@ -250,60 +250,65 @@ function mockCompactView() {
 }
 
 /**
+ * Build synthetic acknowledgement rows of created or deleted documents.
+ * @param {number} count - How many rows.
+ * @returns {Array<{ uuid: string, name: string, type: string }>} The acknowledgement rows of a create call.
+ */
+function mockAckRows(count) {
+   return Array.from({ length: count }, (_, index) => ({
+      uuid: `Actor.MOCKACTOR${String(index).padStart(8, '0')}`,
+      name: `MOCK_ACTOR_${index}`,
+      type: 'npc',
+   }));
+}
+
+/**
+ * Build `create_documents` arguments that pass the sidecar's schema.
+ * @returns {{ documentName: string, data: string[] }} The tool arguments with JSON-text data.
+ */
+function mockCreateArguments() {
+   return {
+      documentName: 'Actor',
+      data: ['{"name":"MOCK_ACTOR_1","type":"npc"}'],
+   };
+}
+
+/**
  * The representative-result fixtures, keyed by tool name. Every listed tool needs an entry; the data is synthetic.
  * @type {Record<string, FixtureCase[]>}
  */
 export const FIXTURES = {
-   create_actor: [
+   create_documents: [
       {
-         label: 'ack of a created actor',
-         budget: 'ACK_MAX_BYTES',
+         label: 'ack of 50 created documents',
+         budget: 'ACK_BATCH_MAX_BYTES',
          run: ({ client, setGmAck }) => {
-            setGmAck(okAck({
-               uuid: 'Actor.MOCKACTOR0000001',
-               name: 'MOCK_ACTOR_1',
-               type: 'npc',
-            }));
+            setGmAck(okAck(mockAckRows(50)));
             return client.callTool({
-               name: 'create_actor',
-               arguments: { name: 'MOCK_ACTOR_1' },
+               name: 'create_documents',
+               arguments: mockCreateArguments(),
             });
          },
       },
       {
-         label: 'ack with every field at its 256-byte bound',
-         budget: 'ACK_MAX_BYTES',
-         run: ({ client, setGmAck }) => {
-            setGmAck(okAck({
-               uuid: `Actor.${'U'.repeat(250)}`,
-               name: 'N'.repeat(256),
-               type: 'T'.repeat(256),
-            }));
-            return client.callTool({
-               name: 'create_actor',
-               arguments: { name: 'MOCK_ACTOR_2' },
-            });
-         },
-      },
-      {
-         label: 'failure with more failures than the error budget lists',
+         label: 'failure with 30 validation failures',
          budget: 'ERROR_MAX_BYTES',
          run: ({ client, setGmAck }) => {
             setGmAck({
                ok: false,
                error: {
-                  code: 'OP_FAILED',
-                  message: 'MOCK_FAILURE',
-                  failures: Array.from({ length: 15 }, (_, index) => ({
-                     path: `MOCK_PATH_${index}`,
-                     message: 'MOCK_BAD_VALUE',
+                  code: 'VALIDATION_FAILED',
+                  message: 'Validation failed: 30 invalid fields in 1 of 1 item; nothing was written.',
+                  failures: Array.from({ length: 10 }, (_, index) => ({
+                     path: `[0].system.MOCK_FIELD_${index}`,
+                     message: 'MOCK_BAD_VALUE '.repeat(10),
                   })),
-                  failureCount: 15,
+                  failureCount: 30,
                },
             });
             return client.callTool({
-               name: 'create_actor',
-               arguments: { name: 'MOCK_ACTOR_4' },
+               name: 'create_documents',
+               arguments: mockCreateArguments(),
             });
          },
       },
@@ -319,8 +324,77 @@ export const FIXTURES = {
                },
             });
             return client.callTool({
-               name: 'create_actor',
-               arguments: { name: 'MOCK_ACTOR_3' },
+               name: 'create_documents',
+               arguments: mockCreateArguments(),
+            });
+         },
+      },
+   ],
+   update_documents: [
+      {
+         label: 'ack of 50 updated documents',
+         budget: 'ACK_BATCH_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(
+               okAck(
+                  Array.from({ length: 50 }, (_, index) => ({
+                     uuid: `Actor.MOCKACTOR${String(index).padStart(8, '0')}`,
+                     changed: [
+                        'system.hp',
+                        'name',
+                     ],
+                  })),
+               ),
+            );
+            return client.callTool({
+               name: 'update_documents',
+               arguments: {
+                  updates: [
+                     {
+                        uuid: 'Actor.MOCKACTOR00000000',
+                        path: 'name',
+                        value: '"MOCK_NAME"',
+                     },
+                  ],
+               },
+            });
+         },
+      },
+   ],
+   delete_documents: [
+      {
+         label: 'ack of 50 deleted documents',
+         budget: 'ACK_BATCH_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck(mockAckRows(50)));
+            return client.callTool({
+               name: 'delete_documents',
+               arguments: { uuids: ['Actor.MOCKACTOR00000000'] },
+            });
+         },
+      },
+      {
+         label: 'dry run preview of a cascade, cut to the default cap',
+         budget: 'RESULT_HARD_CAP_DEFAULT_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(
+               okAck({
+                  dryRun: true,
+                  rows: Array.from({ length: 70 }, (_, index) => [
+                     `Actor.MOCKACTOR00000000.Item.MOCKITEM${String(index).padStart(9, '0')}`,
+                     `MOCK_ITEM_${index}`,
+                     'weapon',
+                  ]),
+                  total: 603,
+                  cut: true,
+               }),
+            );
+            return client.callTool({
+               name: 'delete_documents',
+               arguments: {
+                  uuids: ['Actor.MOCKACTOR00000000'],
+                  dryRun: true,
+               },
             });
          },
       },
@@ -651,16 +725,16 @@ export function registryEntry(name, overrides = {}) {
 /**
  * Start the sidecar bridge with a fake GM client, an MCP server and a connected SDK client. The server lists the
  * built-in `read_handle`, the test-local helper tool, `extraTools`, and the scripts the fake GM client registers: the
- * `create_actor` script and those in `registry` before the session starts, and later ones through the returned
+ * shipped scripts and those in `registry` before the session starts, and later ones through the returned
  * `registerTools`.
  * @param {object} [options] - What to register.
  * @param {import('../../server/mcp.ts').ToolRegistration[]} [options.tools] - Tools registered after the helper tool.
  * @param {string} [options.instructions] - The server instructions text; the production text when absent.
- * @param {object[]} [options.registry] - Script definitions the fake GM client sends, beside `create_actor`, before
- * the SDK client connects.
+ * @param {object[]} [options.registry] - Script definitions the fake GM client sends beside the shipped scripts,
+ * before the SDK client connects.
  * @returns {Promise<{ client: Client, setGmAck: Function, registerTools: Function, nextToolListChange: Function,
  * close: Function }>} The client, the control for the fake GM client's answers, `registerTools(entries)` (sends a
- * registry of `create_actor` plus the entries and resolves with its ack, which counts `create_actor` too),
+ * registry of the shipped scripts plus the entries and resolves with its ack, which counts the shipped scripts too),
  * `nextToolListChange()` (resolves when the client receives its next
  * `notifications/tools/list_changed`, rejects after one second) and the teardown.
  */

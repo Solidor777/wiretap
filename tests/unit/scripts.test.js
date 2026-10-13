@@ -329,8 +329,8 @@ describe('validateScriptDefinition: name', () => {
       expect(outcome.reason).toContain('name');
    });
 
-   it('does not reserve create_actor', () => {
-      expect(shipped(script('create_actor')).ok).toBe(true);
+   it('does not reserve the names of the shipped write scripts', () => {
+      expect(shipped(script('create_documents')).ok).toBe(true);
    });
 });
 

@@ -49,7 +49,7 @@ describe('the core read tools over the bridge', () => {
       await harness.cleanup();
    });
 
-   it('lists list_document_types and get_document as read-only tools; get_document declares maxBytes', async () => {
+   it('lists the read tools as read-only and the write tools as mutating; get_document declares maxBytes', async () => {
       harness = createHarness();
       await harness.start();
       const gm = await harness.connectGm();
@@ -57,12 +57,14 @@ describe('the core read tools over the bridge', () => {
       /** @type {{ client: import('@modelcontextprotocol/sdk/client/index.js').Client }} The connected MCP client. */
       const { client } = await harness.connectClient();
       await expect.poll(() => harness.toolNames(client), { timeout: 1000 }).toEqual([
-         'create_actor',
+         'create_documents',
+         'delete_documents',
          'describe_schema',
          'get_document',
          'list_document_types',
          'read_handle',
          'search_documents',
+         'update_documents',
       ]);
       /** @type {{ tools: Array<{ name: string }> }} The tools the session lists. */
       const { tools } = await client.listTools();
@@ -73,6 +75,13 @@ describe('the core read tools over the bridge', () => {
          'search_documents',
       ]) {
          expect(tools.find((tool) => tool.name === name).annotations).toMatchObject({ readOnlyHint: true });
+      }
+      for (const name of [
+         'create_documents',
+         'delete_documents',
+         'update_documents',
+      ]) {
+         expect(tools.find((tool) => tool.name === name).annotations).toMatchObject({ readOnlyHint: false });
       }
       const get = tools.find((tool) => tool.name === 'get_document');
       expect(get.inputSchema.properties.maxBytes).toMatchObject({

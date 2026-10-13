@@ -331,12 +331,15 @@ describe('bridge invoke ack shape', () => {
       expect(ack).toHaveBeenCalledWith({ ok: true, result: { echoed: 'X' } });
    });
 
-   it('no longer answers the removed createActor op', async () => {
+   it('does not answer a tool name as an op', async () => {
       const socket = makeFakeSocket(true);
       wire(socket);
       const ack = vi.fn();
-      await socket.fire(BRIDGE_INVOKE, { op: 'createActor', params: { name: 'X' }, requestId: 'r4' }, ack);
-      expect(ack).toHaveBeenCalledWith({ ok: false, error: { code: OP_FAILED, message: "Unknown op 'createActor'." } });
+      await socket.fire(BRIDGE_INVOKE, { op: 'create_documents', params: { name: 'X' }, requestId: 'r4' }, ack);
+      expect(ack).toHaveBeenCalledWith({
+         ok: false,
+         error: { code: OP_FAILED, message: "Unknown op 'create_documents'." },
+      });
    });
 });
 

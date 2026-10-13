@@ -278,6 +278,24 @@ const EXPECTED = [
       'count',
       'hard',
    ],
+   [
+      'ACK_BATCH_MAX_BYTES',
+      4000,
+      'bytes',
+      'hard',
+   ],
+   [
+      'WRITE_DOCUMENTS_MAX',
+      50,
+      'count',
+      'hard',
+   ],
+   [
+      'WRITE_DATA_MAX_BYTES',
+      200000,
+      'bytes',
+      'hard',
+   ],
 ];
 
 describe('getBudget', () => {

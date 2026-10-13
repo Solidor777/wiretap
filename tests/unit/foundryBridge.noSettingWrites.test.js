@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { initFoundryBridge } from '~/bridge/foundryBridge.js';
-import { BRIDGE_INVOKE, OP_CALL_TOOL, OP_FAILED } from '$shared/protocol.js';
+import { BRIDGE_INVOKE, GATE_DENIED, OP_CALL_TOOL, OP_FAILED } from '$shared/protocol.js';
 import { registerShippedScripts } from '~/bridge/scripts/index.js';
 import { createScriptRegistry } from '~/bridge/scripts/registry.js';
+import { installWriteWorld } from './mockWriteWorld.js';
 
 /**
  * Build a fake Socket.IO socket whose handlers can be fired.
@@ -36,14 +37,6 @@ let writeSpy;
 beforeEach(() => {
    writeSpy = vi.fn();
    globalThis.CONST = { BASE_DOCUMENT_TYPE: 'base' };
-   globalThis.Actor = {
-      create: vi.fn(async (data) => ({
-         uuid: 'Actor.1',
-         id: '1',
-         name: data.name,
-         type: data.type,
-      })),
-   };
    globalThis.Setting = {
       create: writeSpy,
       updateDocuments: writeSpy,
@@ -54,12 +47,6 @@ beforeEach(() => {
          name: 'Gamemaster',
          isGM: true,
       },
-      documentTypes: {
-         Actor: [
-            'base',
-            'character',
-         ],
-      },
       settings: {
          get: () => 'human',
          set: writeSpy,
@@ -69,7 +56,8 @@ beforeEach(() => {
 
 afterEach(() => {
    delete globalThis.CONST;
-   delete globalThis.Actor;
+   delete globalThis.CONFIG;
+   delete globalThis.fromUuid;
    delete globalThis.Setting;
    delete globalThis.game;
 });
@@ -104,7 +92,10 @@ describe('bridge ops cannot write settings', () => {
       },
    );
 
-   it('passes only name and type from create_actor arguments to the world, never a setting key or value', async () => {
+   it('refuses a create_documents write of a wiretap Setting with the gate open, and writes nothing', async () => {
+      const world = installWriteWorld(vi.fn);
+      globalThis.game.settings.get = (module, key) => (key === 'allowSettingWrites' ? true : false);
+      globalThis.game.settings.set = writeSpy;
       const socket = makeFakeSocket();
       initFoundryBridge({ onSocket: (listener) => listener(socket) }, { scripts: shippedRegistry() });
       const ack = vi.fn();
@@ -113,28 +104,51 @@ describe('bridge ops cannot write settings', () => {
          {
             op: OP_CALL_TOOL,
             params: {
-               name: 'create_actor',
+               name: 'create_documents',
                arguments: {
-                  name: 'X',
-                  key: 'wiretap.allowMacroExecution',
-                  value: true,
+                  documentName: 'Setting',
+                  data: ['{"key":"wiretap.allowMacroExecution","value":"true"}'],
                },
             },
          },
          ack,
       );
-      expect(ack).toHaveBeenCalledWith({
-         ok: true,
-         result: {
-            uuid: 'Actor.1',
-            name: 'X',
-            type: 'character',
-         },
-      });
-      expect(globalThis.Actor.create).toHaveBeenCalledWith({
-         name: 'X',
-         type: 'character',
-      });
+      expect(ack.mock.calls[0][0].ok).toBe(false);
+      expect(ack.mock.calls[0][0].error.code).toBe(GATE_DENIED);
+      expect(world.classes.Setting.createDocuments).not.toHaveBeenCalled();
       expect(writeSpy).not.toHaveBeenCalled();
+   });
+
+   it('refuses an update_documents write that renames a Setting into the wiretap namespace', async () => {
+      const world = installWriteWorld(vi.fn);
+      globalThis.game.settings.get = (module, key) => (key === 'allowSettingWrites' ? true : false);
+      const setting = world.add('Setting', {
+         key: 'mock.setting',
+         value: '1',
+      });
+      const socket = makeFakeSocket();
+      initFoundryBridge({ onSocket: (listener) => listener(socket) }, { scripts: shippedRegistry() });
+      const ack = vi.fn();
+      await socket.fire(
+         BRIDGE_INVOKE,
+         {
+            op: OP_CALL_TOOL,
+            params: {
+               name: 'update_documents',
+               arguments: {
+                  updates: [
+                     {
+                        uuid: setting.uuid,
+                        path: 'key',
+                        value: '"wiretap.allowMacroExecution"',
+                     },
+                  ],
+               },
+            },
+         },
+         ack,
+      );
+      expect(ack.mock.calls[0][0].error.code).toBe(GATE_DENIED);
+      expect(setting.update).not.toHaveBeenCalled();
    });
 });

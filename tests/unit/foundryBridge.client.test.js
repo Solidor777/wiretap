@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { initFoundryBridge } from '~/bridge/foundryBridge.js';
-import { BRIDGE_INVOKE, OP_CALL_TOOL, OP_FAILED } from '$shared/protocol.js';
+import { BRIDGE_INVOKE, GATE_DENIED, OP_CALL_TOOL, OP_FAILED } from '$shared/protocol.js';
 import { registerShippedScripts } from '~/bridge/scripts/index.js';
 import { createScriptRegistry } from '~/bridge/scripts/registry.js';
+import { installWriteWorld } from './mockWriteWorld.js';
 
 /**
  * Build a fake Socket.IO socket whose handlers can be fired.
@@ -46,57 +47,68 @@ async function callShipped(params) {
    return ack.mock.calls[0][0];
 }
 
+/** @type {ReturnType<typeof installWriteWorld>} The mocked world. */
+let world;
+
+/** @type {Record<string, unknown>} Stored gate values keyed by gate name. */
+let gates;
+
 beforeEach(() => {
-   globalThis.CONST = { BASE_DOCUMENT_TYPE: 'base' };
-   globalThis.game = {
-      user: {
-         id: 'u1',
-         name: 'Gamemaster',
-         isGM: true,
-      },
-      documentTypes: {
-         Actor: [
-            'base',
-            'character',
-         ],
-      },
-      settings: { get: () => false },
+   world = installWriteWorld(vi.fn);
+   gates = {};
+   globalThis.game.user = {
+      id: 'u1',
+      name: 'Gamemaster',
+      isGM: true,
    };
+   globalThis.game.settings.get = (module, key) => gates[key];
 });
 
 afterEach(() => {
-   delete globalThis.CONST;
-   delete globalThis.game;
-   delete globalThis.Actor;
+   for (const name of [
+      'CONST',
+      'CONFIG',
+      'fromUuid',
+      'game',
+   ]) {
+      delete globalThis[name];
+   }
 });
 
-describe('create_actor through the client bridge', () => {
-   it('acks the created actor summary', async () => {
-      globalThis.Actor = {
-         create: async (data) => ({
-            uuid: 'Actor.1',
-            id: '1',
-            name: data.name,
-            type: data.type,
-         }),
-      };
-      expect(await callShipped({ name: 'create_actor', arguments: { name: 'Bob' } })).toEqual({
-         ok: true,
-         result: {
-            uuid: 'Actor.1',
-            name: 'Bob',
-            type: 'character',
+describe('the write scripts through the client bridge', () => {
+   it('acks the created document rows', async () => {
+      const ack = await callShipped({
+         name: 'create_documents',
+         arguments: {
+            documentName: 'Actor',
+            data: ['{"name":"Bob","type":"npc"}'],
          },
+      });
+      expect(ack).toEqual({
+         ok: true,
+         result: [
+            {
+               uuid: expect.stringMatching(/^Actor\./),
+               name: 'Bob',
+               type: 'npc',
+            },
+         ],
       });
    });
 
-   it('acks an Actor.create failure as OP_FAILED with the world message', async () => {
-      globalThis.Actor = {
-         create: async () => {
-            throw new Error('permission denied');
-         },
-      };
-      expect(await callShipped({ name: 'create_actor', arguments: { name: 'Bob' } })).toEqual({
+   it('acks a Foundry failure as OP_FAILED with the world message', async () => {
+      world.classes.Actor.createDocuments.mockImplementation(async () => {
+         throw new Error('permission denied');
+      });
+      expect(
+         await callShipped({
+            name: 'create_documents',
+            arguments: {
+               documentName: 'Actor',
+               data: ['{"name":"Bob","type":"npc"}'],
+            },
+         }),
+      ).toEqual({
          ok: false,
          error: {
             code: OP_FAILED,
@@ -105,12 +117,31 @@ describe('create_actor through the client bridge', () => {
       });
    });
 
-   it('acks a world with no concrete actor subtype as OP_FAILED', async () => {
-      globalThis.game.documentTypes = { Actor: ['base'] };
-      globalThis.Actor = { create: vi.fn() };
-      const ack = await callShipped({ name: 'create_actor', arguments: { name: 'Bob' } });
-      expect(ack.error.code).toBe(OP_FAILED);
-      expect(ack.error.message).toMatch(/No concrete Actor subtypes/);
-      expect(globalThis.Actor.create).not.toHaveBeenCalled();
+   it('acks a closed gate as GATE_DENIED and writes nothing', async () => {
+      const ack = await callShipped({
+         name: 'create_documents',
+         arguments: {
+            documentName: 'User',
+            data: ['{"name":"Bob"}'],
+         },
+      });
+      expect(ack.ok).toBe(false);
+      expect(ack.error.code).toBe(GATE_DENIED);
+      expect(world.calls).toEqual([]);
+   });
+
+   it('acks validation failures as VALIDATION_FAILED with at most 10 failures and the true count', async () => {
+      const invalid = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`system.f${index}`, 'bad']));
+      const ack = await callShipped({
+         name: 'create_documents',
+         arguments: {
+            documentName: 'Actor',
+            data: [JSON.stringify({ name: 'Bob', invalid })],
+         },
+      });
+      expect(ack.ok).toBe(false);
+      expect(ack.error.code).toBe('VALIDATION_FAILED');
+      expect(ack.error.failures).toHaveLength(10);
+      expect(ack.error.failureCount).toBe(30);
    });
 });

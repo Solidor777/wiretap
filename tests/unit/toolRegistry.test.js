@@ -67,8 +67,10 @@ describe('sanitizeRegistry: accepted tools', () => {
       expect(lines).toEqual([]);
    });
 
-   it('does not reserve create_actor: it is a script like any other', () => {
-      expect(run([entry({ name: 'create_actor' })]).outcome.tools.map((tool) => tool.name)).toEqual(['create_actor']);
+   it('does not reserve create_documents: it is a script like any other', () => {
+      expect(run([entry({ name: 'create_documents' })]).outcome.tools.map((tool) => tool.name)).toEqual([
+         'create_documents',
+      ]);
    });
 
    it('logs a description over the target as a warning and still accepts the tool', () => {

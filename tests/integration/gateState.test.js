@@ -4,7 +4,7 @@ import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
 import { mcpCall } from './mcpHttp.js';
-import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
+import { createDocumentsArgs, createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
 import { GATES, closedGateState } from '../../shared/gates.js';
 import {
    BRIDGE_GATE_STATE,
@@ -212,12 +212,12 @@ describe('gate state over Socket.IO', () => {
          BRIDGE_IDENTIFY,
          identify({ gateState: { allowMacroExecution: true, allowedPluginModules: ['secret-module-id'] } }),
       );
-      await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript()]));
+      await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createDocumentsScript()]));
       const call = await mcpCall(mcpPort, {
          jsonrpc: '2.0',
          id: 1,
          method: 'tools/call',
-         params: { name: 'create_actor', arguments: { name: 'Bob', type: 'npc' } },
+         params: { name: 'create_documents', arguments: createDocumentsArgs() },
       });
       const list = await mcpCall(mcpPort, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
       for (const text of [JSON.stringify(call), JSON.stringify(list)]) {

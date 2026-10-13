@@ -237,7 +237,7 @@ describe('callTool: context and result', () => {
          return 'ok';
       });
       await callTool({ name: 'echo', arguments: { text: 'x' } });
-      expect(typeof received.core.createActor).toBe('function');
+      expect(typeof received.core.createDocuments).toBe('function');
       expect(typeof received.shape.compact).toBe('function');
       expect(received.signal).toBeInstanceOf(AbortSignal);
       expect(received.signal.aborted).toBe(false);

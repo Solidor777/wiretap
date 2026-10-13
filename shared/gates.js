@@ -223,6 +223,16 @@ export function isModuleAllowed(gateState, moduleId) {
 }
 
 /**
+ * Reduce a Setting key to the form write rules compare: NFKC, then whitespace, control and format characters removed,
+ * then lowercased, so case, padding, zero-width characters and compatibility forms cannot hide a key.
+ * @param {string} key - The key of the world setting, in any case.
+ * @returns {string} The comparable form.
+ */
+export function normalizeSettingKey(key) {
+   return key.normalize('NFKC').replace(INVISIBLE_CHARACTERS, '').replace(WHITESPACE, '').toLowerCase();
+}
+
+/**
  * Decide whether a Setting key is in the Wiretap namespace. The key is normalized before comparing: NFKC, then
  * whitespace, control and format characters removed, then lowercased, so case, padding, zero-width characters and
  * compatibility forms (full-width letters, full-width dot) cannot hide it. Both the bare namespace and any
@@ -235,7 +245,7 @@ export function isWiretapSettingKey(key) {
       return false;
    }
    /** @type {string} The key reduced to its comparable form. */
-   const normal = key.normalize('NFKC').replace(INVISIBLE_CHARACTERS, '').replace(WHITESPACE, '').toLowerCase();
+   const normal = normalizeSettingKey(key);
    return normal === WIRETAP_NAMESPACE || normal.startsWith(`${WIRETAP_NAMESPACE}.`);
 }
 

@@ -9,7 +9,7 @@ import { createWiretapServer } from '../../server/server.ts';
 import { startMcpServer } from '../../server/mcp.ts';
 import { sanitizeRegistry } from '../../server/toolRegistry.ts';
 import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, PROTOCOL_VERSION } from '../../shared/protocol.js';
-import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
+import { createDocumentsArgs, createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
 
 /** @type {string} The op of the test-only tool; the fake client is the only party that knows it. */
 const OP_TEST_BIG = 'test:big-result';
@@ -397,8 +397,8 @@ describe('large results become handles', () => {
    });
 
    it('answers a registry tool failure that is not a BridgeError with the fixed text only', async () => {
-      /** @type {import('../../server/toolRegistry.ts').RegistryTool[]} The create_actor script as sanitized. */
-      const registered = sanitizeRegistry(registryPayload([createActorScript()]), () => undefined).tools;
+      /** @type {import('../../server/toolRegistry.ts').RegistryTool[]} The create_documents script as sanitized. */
+      const registered = sanitizeRegistry(registryPayload([createDocumentsScript()]), () => undefined).tools;
       const failing = startMcpServer(
          {
             invokeTool: async () => {
@@ -419,8 +419,8 @@ describe('large results become handles', () => {
             new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${failing.port()}/mcp`)),
          );
          const result = await failingClient.callTool({
-            name: 'create_actor',
-            arguments: { name: 'Bob' },
+            name: 'create_documents',
+            arguments: createDocumentsArgs(),
          });
          expect(result.isError).toBe(true);
          expect(result.content[0].text).toBe('Tool failed.');

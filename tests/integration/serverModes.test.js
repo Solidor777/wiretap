@@ -5,7 +5,7 @@ import os from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
 import { mcpCall } from './mcpHttp.js';
-import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
+import { createDocumentsArgs, createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
 import {
    TERMINAL_LAUNCH,
    TERMINAL_DATA,
@@ -96,11 +96,11 @@ function identifyPayload() {
 }
 
 /**
- * Poll the MCP endpoint until `create_actor` is routed to an identified GM and succeeds.
+ * Poll the MCP endpoint until `create_documents` is routed to an identified GM and succeeds.
  * @param {number} mcpPort - The loopback port of the MCP server under test.
  * @returns {Promise<object>} The successful JSON-RPC response.
  */
-function createActorWhenGmKnown(mcpPort) {
+function createDocumentsWhenGmKnown(mcpPort) {
    return poll(async () => {
       /** @type {object | undefined} The JSON-RPC response, or undefined while the endpoint is not accepting yet. */
       let response;
@@ -109,7 +109,7 @@ function createActorWhenGmKnown(mcpPort) {
             jsonrpc: '2.0',
             id: 1,
             method: 'tools/call',
-            params: { name: 'create_actor', arguments: { name: 'Bob', type: 'npc' } },
+            params: { name: 'create_documents', arguments: createDocumentsArgs() },
          });
       } catch {
          // The MCP listener may not be accepting connections yet; the poll retries.
@@ -237,8 +237,8 @@ describe('createWiretapServer modes', () => {
       client.emit(TERMINAL_LAUNCH, { command: 'node --version', cols: 80, rows: 24 });
       // Socket events are handled in order, so once the later identify has taken effect the launch was handled too.
       client.emit(BRIDGE_IDENTIFY, identifyPayload(), () => undefined);
-      client.emit(BRIDGE_REGISTRY, registryPayload([createActorScript()]), () => undefined);
-      await createActorWhenGmKnown(mcpPort);
+      client.emit(BRIDGE_REGISTRY, registryPayload([createDocumentsScript()]), () => undefined);
+      await createDocumentsWhenGmKnown(mcpPort);
       expect(seen).toEqual([]);
    });
 
@@ -252,11 +252,11 @@ describe('createWiretapServer modes', () => {
          ack({ ok: true, result: { uuid: 'Actor.abc', id: 'abc', name: request.params.name, type: 'npc' } });
       });
       expect(await client.emitWithAck(BRIDGE_IDENTIFY, identifyPayload())).toEqual({ ok: true });
-      expect(await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript()]))).toMatchObject({
+      expect(await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createDocumentsScript()]))).toMatchObject({
          ok: true,
       });
-      /** @type {object} The successful create_actor response. */
-      const response = await createActorWhenGmKnown(mcpPort);
+      /** @type {object} The successful create_documents response. */
+      const response = await createDocumentsWhenGmKnown(mcpPort);
       expect(response.result.isError).toBeFalsy();
       expect(response.result.content[0].text).toContain('Actor.abc');
    });

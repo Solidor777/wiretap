@@ -1118,6 +1118,47 @@ describe('groupWrites', () => {
          expect(byteLength(result.error.message)).toBeLessThanOrEqual(getBudget('PATH_ERROR_MAX_BYTES').value);
       });
 
+      it.each([
+         'toString',
+         'hasOwnProperty',
+         'valueOf',
+         'isPrototypeOf',
+         '__defineGetter__',
+      ])('refuses a value with an own key named %s, as parsePath refuses the segment', (key) => {
+         const result = groupWrites([{
+            path: 'flags.x',
+            value: withOwnKey(key, 1),
+         }], COLLECTIONS);
+         expect(result.ok).toBe(false);
+         expect(result.error.code).toBe('PATH_UNSAFE_VALUE');
+      });
+
+      it.each([
+         'a.__proto__.b',
+         'flags.constructor.prototype.x',
+         'x.toString',
+         '-=constructor',
+         'y.==hasOwnProperty',
+      ])('refuses a dotted or operator-prefixed key %s, which Foundry expands into nested objects', (key) => {
+         const result = groupWrites([{
+            path: 'flags.x',
+            value: withOwnKey(key, 1),
+         }], COLLECTIONS);
+         expect(result.ok).toBe(false);
+         expect(result.error.code).toBe('PATH_UNSAFE_VALUE');
+      });
+
+      it('refuses an Object.prototype key at a nested level', () => {
+         const nested = {
+            a: [{ b: withOwnKey('hasOwnProperty', 1) }],
+         };
+         const result = groupWrites([{
+            path: 'flags.x',
+            value: nested,
+         }], COLLECTIONS);
+         expect(result.error.code).toBe('PATH_UNSAFE_VALUE');
+      });
+
       it('finds the key nested in objects and in arrays', () => {
          const nested = {
             a: [
@@ -1163,7 +1204,7 @@ describe('groupWrites', () => {
          const value = {
             constructors: 1,
             my__proto__: 2,
-            toString: 3,
+            'a.constructors.b': 3,
          };
          expect(groupWrites([{
             path: 'flags.x',

@@ -214,7 +214,7 @@ describe('bridge:registry push', () => {
       expect(socket.registries).toHaveLength(1);
    });
 
-   it('does not emit while the socket reports itself disconnected, even before the disconnect event arrives', async () => {
+   it('does not emit while the socket reports itself disconnected, before the disconnect event', async () => {
       const socket = makeFakeSocket(true);
       wire(socket);
       acceptIdentify(socket);
@@ -368,6 +368,37 @@ describe('callTool op through the bridge', () => {
          code: OP_FAILED,
          message: 'plain failure',
       });
+   });
+
+   it('acks the validation failures of a ScriptError, at most 10 with the true count', async () => {
+      registry.register(script('invalid'), async () => {
+         throw new ScriptError('VALIDATION_FAILED', 'Data is invalid.', {
+            failures: Array.from({ length: 30 }, (_, index) => ({
+               path: `system.field${index}`,
+               message: 'x'.repeat(2000),
+            })),
+            failureCount: 30,
+         });
+      });
+      const ack = await invoke({ op: OP_CALL_TOOL, params: { name: 'invalid', arguments: { text: 'x' } } });
+      expect(ack.error.code).toBe('VALIDATION_FAILED');
+      expect(ack.error.failures).toHaveLength(10);
+      expect(ack.error.failureCount).toBe(30);
+      for (const failure of ack.error.failures) {
+         expect(new TextEncoder().encode(failure.message).length).toBeLessThanOrEqual(160);
+         expect(new TextEncoder().encode(failure.path).length).toBeLessThanOrEqual(160);
+      }
+   });
+
+   it('acks no failures key for a ScriptError that has none', async () => {
+      registry.register(script('coded'), async () => {
+         throw new ScriptError('BAD_THING', 'a bad thing', {});
+      });
+      const ack = await invoke({ op: OP_CALL_TOOL, params: { name: 'coded', arguments: { text: 'x' } } });
+      expect(Object.keys(ack.error).sort()).toEqual([
+         'code',
+         'message',
+      ]);
    });
 
    it('bounds the error message to 256 bytes', async () => {

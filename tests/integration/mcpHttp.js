@@ -94,21 +94,21 @@ export async function mcpCall(mcpPort, body) {
 }
 
 /**
- * Call the `create_actor` MCP tool inside the port's session.
+ * Call the `create_documents` MCP tool inside the port's session.
  * @param {number} mcpPort - The loopback port of the MCP server under test.
  * @returns {Promise<{ isError?: boolean, content: { text: string }[] }>} The tool result.
  */
-export async function callCreateActor(mcpPort) {
+export async function callCreateDocuments(mcpPort) {
    /** @type {{ result: any }} The JSON-RPC response. */
    const response = await mcpCall(mcpPort, {
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
       params: {
-         name: 'create_actor',
+         name: 'create_documents',
          arguments: {
-            name: 'Bob',
-            type: 'npc',
+            documentName: 'Actor',
+            data: ['{"name":"Bob","type":"npc"}'],
          },
       },
    });
@@ -192,4 +192,3 @@ export const INITIALIZE = {
       },
    },
 };
-

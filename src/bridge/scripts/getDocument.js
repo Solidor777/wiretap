@@ -8,20 +8,7 @@
 
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { keyPathsFor } from '~/bridge/scripts/keyFields.js';
-
-/**
- * Turn a shape refusal, `<code>: <message>`, into a script error that acks that code.
- * @param {string} text - The refusal text of `ctx.shape`.
- * @returns {ScriptError} The error.
- */
-function refusal(text) {
-   /** @type {number} Where the code ends. */
-   const split = text.indexOf(': ');
-   if (split > 0) {
-      return new ScriptError(text.slice(0, split), text.slice(split + 2));
-   }
-   return new ScriptError('PATH_INVALID', text);
-}
+import { shapeRefusal } from '~/bridge/scripts/writeArgs.js';
 
 /**
  * Refuse argument combinations that have no single meaning.
@@ -75,7 +62,7 @@ export async function getDocumentHandler(args, ctx) {
       /** @type {ReturnType<typeof ctx.shape.paths>} The slices, or the refusal. */
       const sliced = ctx.shape.paths(data, args.paths);
       if (!sliced.ok) {
-         throw refusal(sliced.error);
+         throw shapeRefusal(sliced.error);
       }
       return {
          values: sliced.values,
@@ -86,7 +73,7 @@ export async function getDocumentHandler(args, ctx) {
       /** @type {ReturnType<typeof ctx.shape.project>} The projection, or the refusal. */
       const projected = ctx.shape.project(data, args.fields);
       if (!projected.ok) {
-         throw refusal(projected.error);
+         throw shapeRefusal(projected.error);
       }
       return {
          fields: projected.value,
