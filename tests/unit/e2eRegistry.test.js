@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
    ALLOWED_DOCUMENT_NAMES,
    E2E_PREFIX,
+   E2E_SETTING_KEY_PREFIX,
    TEST_WORLD,
    assertSettled,
    censusPrefixed,
@@ -51,8 +52,11 @@ function idOf(number) {
  * @returns {object} The mock document.
  */
 function addDocument(documentName, number, overrides = {}) {
+   /** @type {string} The document id. */
    const id = idOf(number);
+   /** @type {string} The document uuid. */
    const uuid = `${documentName}.${id}`;
+   /** @type {Record<string, any>} The mock document. */
    const document = {
       id,
       uuid,
@@ -166,17 +170,17 @@ describe('entryProblem and recordProblem', () => {
          'a type that is not allowed',
          {
             ...entryOf('Actor', 1),
-            documentName: 'User',
-            uuid: `User.${idOf(1)}`,
+            documentName: 'Adventure',
+            uuid: `Adventure.${idOf(1)}`,
          },
          /allowed/,
       ],
       [
-         'a Combat',
+         'a FogExploration',
          {
             ...entryOf('Actor', 1),
-            documentName: 'Combat',
-            uuid: `Combat.${idOf(1)}`,
+            documentName: 'FogExploration',
+            uuid: `FogExploration.${idOf(1)}`,
          },
          /allowed/,
       ],
@@ -236,9 +240,33 @@ describe('entryProblem and recordProblem', () => {
    });
 
    it('refuses a record of another world, a non-list of entries and a bad entry', () => {
-      expect(recordProblem({ ...pendingOf([]), world: 'other-world' }, TEST_WORLD)).toMatch(/world/);
-      expect(recordProblem({ ...pendingOf([]), entries: {} }, TEST_WORLD)).toMatch(/entries/);
-      expect(recordProblem({ ...pendingOf([]), pending: 'yes' }, TEST_WORLD)).toMatch(/pending/);
+      expect(
+         recordProblem(
+            {
+               ...pendingOf([]),
+               world: 'other-world',
+            },
+            TEST_WORLD,
+         ),
+      ).toMatch(/world/);
+      expect(
+         recordProblem(
+            {
+               ...pendingOf([]),
+               entries: {},
+            },
+            TEST_WORLD,
+         ),
+      ).toMatch(/entries/);
+      expect(
+         recordProblem(
+            {
+               ...pendingOf([]),
+               pending: 'yes',
+            },
+            TEST_WORLD,
+         ),
+      ).toMatch(/pending/);
       expect(recordProblem(pendingOf([{}]), TEST_WORLD)).toMatch(/allowed/);
       expect(recordProblem(pendingOf([entryOf('Actor', 1)]), TEST_WORLD)).toBeNull();
    });
@@ -339,8 +367,8 @@ describe('teardownRecorded', () => {
          entryOf('Actor', 1),
          {
             ...entryOf('Actor', 2),
-            documentName: 'User',
-            uuid: `User.${idOf(2)}`,
+            documentName: 'Adventure',
+            uuid: `Adventure.${idOf(2)}`,
          },
       ]));
       await expect(teardownRecorded(page, { file })).rejects.toThrow(/allowed/);
@@ -403,6 +431,222 @@ describe('teardownRecorded', () => {
       addDocument('Item', 1, { parent: { id: 'MOCKPARENT' } });
       writeRaw(pendingOf([entryOf('Item', 1)]));
       await expect(teardownRecorded(page, { file })).rejects.toThrow(/not a world document/);
+      expect(deleted).toEqual([]);
+   });
+});
+
+describe('identity rules and deletion order', () => {
+   it('deletes the types that point at others before the ones they point at, and Folders last', async () => {
+      addDocument('Folder', 1);
+      addDocument('Actor', 2);
+      addDocument('Scene', 3);
+      addDocument('Combat', 4);
+      addDocument('ChatMessage', 5, {
+         name: undefined,
+         flavor: `${E2E_PREFIX}msg`,
+      });
+      addDocument('Setting', 6, {
+         name: undefined,
+         key: `${E2E_SETTING_KEY_PREFIX}one`,
+      });
+      writeRaw(pendingOf([
+         entryOf('Folder', 1),
+         entryOf('Actor', 2),
+         entryOf('Scene', 3),
+         entryOf('Combat', 4),
+         entryOf('ChatMessage', 5),
+         entryOf('Setting', 6),
+      ]));
+      await teardownRecorded(page, { file });
+      expect(deleted).toEqual([
+         `ChatMessage.${idOf(5)}`,
+         `Combat.${idOf(4)}`,
+         `Setting.${idOf(6)}`,
+         `Scene.${idOf(3)}`,
+         `Actor.${idOf(2)}`,
+         `Folder.${idOf(1)}`,
+      ]);
+   });
+
+   it('judges a chat message by its flavor and a setting by its key, never by name', async () => {
+      addDocument('ChatMessage', 1, {
+         name: `${E2E_PREFIX}in the name only`,
+         flavor: 'a real message',
+      });
+      addDocument('Setting', 2, {
+         name: `${E2E_PREFIX}in the name only`,
+         key: 'core.time',
+      });
+      addDocument('ChatMessage', 3, {
+         name: undefined,
+         flavor: `${E2E_PREFIX}mine`,
+      });
+      addDocument('Setting', 4, {
+         name: undefined,
+         key: `${E2E_SETTING_KEY_PREFIX}mine`,
+      });
+      expect((await sweepUnrecorded(page)).sort()).toEqual([
+         `ChatMessage ${E2E_PREFIX}mine`,
+         `Setting ${E2E_SETTING_KEY_PREFIX}mine`,
+      ]);
+      expect([...documents.keys()].sort()).toEqual([
+         `ChatMessage.${idOf(1)}`,
+         `Setting.${idOf(2)}`,
+      ]);
+      writeRaw(pendingOf([entryOf('ChatMessage', 1)]));
+      await expect(teardownRecorded(page, { file })).rejects.toThrow(/not named with the e2e prefix/);
+      writeRaw(pendingOf([entryOf('Setting', 2)]));
+      await expect(teardownRecorded(page, { file })).rejects.toThrow(/not named with the e2e prefix/);
+      expect(deleted).toHaveLength(2);
+   });
+
+   it('counts a prefixed chat message and setting as leftovers', async () => {
+      addDocument('ChatMessage', 1, {
+         name: undefined,
+         flavor: `${E2E_PREFIX}left`,
+      });
+      addDocument('Setting', 2, {
+         name: undefined,
+         key: `${E2E_SETTING_KEY_PREFIX}left`,
+      });
+      expect((await censusPrefixed(page)).sort()).toEqual([
+         `ChatMessage ${E2E_PREFIX}left`,
+         `Setting ${E2E_SETTING_KEY_PREFIX}left`,
+      ]);
+   });
+
+   it('never deletes the signed-in user or a game master, recorded or swept', async () => {
+      globalThis.game.user = { id: idOf(1) };
+      addDocument('User', 1, { isGM: true });
+      addDocument('User', 2, { isGM: true });
+      addDocument('User', 3, { isGM: false });
+      writeRaw(pendingOf([entryOf('User', 1)]));
+      await expect(teardownRecorded(page, { file })).rejects.toThrow(/signed-in user or a game master/);
+      writeRaw(pendingOf([entryOf('User', 2)]));
+      await expect(teardownRecorded(page, { file })).rejects.toThrow(/signed-in user or a game master/);
+      await expect(sweepUnrecorded(page)).rejects.toThrow(/refuses to delete: User/);
+      // Nothing is deleted, not even the account that is neither the signed-in user nor a game master.
+      expect(deleted).toEqual([]);
+      expect(documents.size).toBe(3);
+   });
+});
+
+describe('safety of the record, the sweep and the world guard', () => {
+   it('refuses to record over a corrupt, foreign or invalid earlier record and keeps it as it was', async () => {
+      for (const content of [
+         '{ not json',
+         JSON.stringify({
+            pending: true,
+            world: 'test-other',
+            entries: [entryOf('Actor', 1)],
+         }),
+         JSON.stringify({
+            pending: true,
+            world: TEST_WORLD,
+            entries: [{ documentName: 'Adventure' }],
+         }),
+      ]) {
+         fs.writeFileSync(file, content);
+         await expect(recordDocument(page, entryOf('Actor', 2), { file })).rejects.toThrow();
+         expect(fs.readFileSync(file, 'utf8')).toBe(content);
+      }
+   });
+
+   it('refuses to write a record of more than 1,000 entries', async () => {
+      /** @type {object[]} A running list at the entry limit. */
+      const entries = Array.from({ length: 1000 }, (_, index) => entryOf('Actor', index + 1));
+      writeRaw(pendingOf(entries));
+      /** @type {string} The running list as written before the refused call. */
+      const before = fs.readFileSync(file, 'utf8');
+      await expect(recordDocument(page, entryOf('Actor', 5000), { file })).rejects.toThrow(/1000/);
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+   });
+
+   it('re-tests the identity of each document right before deleting it', async () => {
+      /** @type {Record<string, any>} The document that is renamed between the inspection and the delete. */
+      const actor = addDocument('Actor', 1);
+      addDocument('Actor', 2);
+      writeRaw(pendingOf([
+         entryOf('Actor', 1),
+         entryOf('Actor', 2),
+      ]));
+      /** @type {number} The evaluate calls made so far. */
+      let calls = 0;
+      /** @type {{ evaluate: (fn: Function, arg?: unknown) => Promise<unknown> }} A page that renames the document. */
+      const racing = {
+         evaluate: async (fn, arg) => {
+            calls += 1;
+            // The inspection (call 2, after the world check) passed; the document is renamed before the delete runs.
+            if (calls === 3) {
+               actor.name = 'A real character';
+            }
+            return fn(arg);
+         },
+      };
+      await expect(teardownRecorded(racing, { file })).rejects.toThrow(/not named with the e2e prefix/);
+      expect(deleted).not.toContain(`Actor.${idOf(1)}`);
+   });
+
+   it('deletes nothing in a sweep that finds a violation, even for documents that are safe', async () => {
+      addDocument('Actor', 1);
+      addDocument('Item', 2, { pack: 'world.items' });
+      await expect(sweepUnrecorded(page)).rejects.toThrow(/refuses to delete/);
+      expect(deleted).toEqual([]);
+   });
+
+   it('refuses a world whose id does not start with test- unless it is named by the environment', async () => {
+      /** @type {string | undefined} The environment value to restore. */
+      const previous = process.env.WIRETAP_E2E_ALLOW_WORLD;
+      globalThis.game.world.id = 'live-campaign';
+      try {
+         delete process.env.WIRETAP_E2E_ALLOW_WORLD;
+         await expect(sweepUnrecorded(page, { world: 'live-campaign' })).rejects.toThrow(/test-/);
+         process.env.WIRETAP_E2E_ALLOW_WORLD = 'another-world';
+         await expect(sweepUnrecorded(page, { world: 'live-campaign' })).rejects.toThrow(/test-/);
+         process.env.WIRETAP_E2E_ALLOW_WORLD = 'live-campaign';
+         await expect(sweepUnrecorded(page, { world: 'live-campaign' })).resolves.toEqual([]);
+         globalThis.game.world.id = 'test-spare';
+         delete process.env.WIRETAP_E2E_ALLOW_WORLD;
+         await expect(sweepUnrecorded(page, { world: 'test-spare' })).resolves.toEqual([]);
+      } finally {
+         if (previous === undefined) {
+            delete process.env.WIRETAP_E2E_ALLOW_WORLD;
+         } else {
+            process.env.WIRETAP_E2E_ALLOW_WORLD = previous;
+         }
+      }
+   });
+
+   it('matches the setting key prefix at the start and with the same case only', async () => {
+      addDocument('Setting', 1, {
+         name: undefined,
+         key: `core.${E2E_SETTING_KEY_PREFIX}mid`,
+      });
+      addDocument('Setting', 2, {
+         name: undefined,
+         key: E2E_SETTING_KEY_PREFIX.toUpperCase() + 'upper',
+      });
+      addDocument('Setting', 3, {
+         name: undefined,
+         key: `${E2E_SETTING_KEY_PREFIX}real`,
+      });
+      expect(await sweepUnrecorded(page)).toEqual([`Setting ${E2E_SETTING_KEY_PREFIX}real`]);
+      expect(documents.size).toBe(2);
+      writeRaw(pendingOf([entryOf('Setting', 1)]));
+      await expect(teardownRecorded(page, { file })).rejects.toThrow(/not named with the e2e prefix/);
+      writeRaw(pendingOf([entryOf('Setting', 2)]));
+      await expect(teardownRecorded(page, { file })).rejects.toThrow(/not named with the e2e prefix/);
+   });
+
+   it('never deletes an assistant game master named with the prefix', async () => {
+      globalThis.game.user = { id: idOf(9) };
+      addDocument('User', 1, {
+         isGM: true,
+         role: 3,
+      });
+      writeRaw(pendingOf([entryOf('User', 1)]));
+      await expect(teardownRecorded(page, { file })).rejects.toThrow(/signed-in user or a game master/);
+      await expect(sweepUnrecorded(page)).rejects.toThrow(/refuses to delete: User/);
       expect(deleted).toEqual([]);
    });
 });

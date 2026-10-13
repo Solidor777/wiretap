@@ -545,3 +545,158 @@ describe('shape.ack', () => {
       expect(ack.x).toBeUndefined();
    });
 });
+
+describe('shape.compact: modified time', () => {
+   it('shows the modified time of the document stats in the header', () => {
+      const view = shape.compact({
+         ...mockActor({ shortNames: true }),
+         _stats: { modifiedTime: 1_760_000_000_000 },
+      });
+      expect(view.modified).toBe(1_760_000_000_000);
+   });
+
+   it('leaves the header field out when the stats hold no finite number', () => {
+      for (const stats of [
+         undefined,
+         { modifiedTime: null },
+         { modifiedTime: 'MOCK_TEXT' },
+         { modifiedTime: Number.NaN },
+      ]) {
+         const view = shape.compact({
+            ...mockActor({ items: 2 }),
+            _stats: stats,
+         });
+         expect(Object.hasOwn(view, 'modified')).toBe(false);
+      }
+   });
+
+   it('keeps the 2 KB bound with the modified time present and the data at its worst', () => {
+      const view = shape.compact({
+         ...mockActor({
+            items: 120,
+            nameLength: 18,
+         }),
+         _stats: { modifiedTime: 1_760_000_000_000 },
+      });
+      expect(bytes(view)).toBeLessThanOrEqual(getBudget('COMPACT_VIEW_MAX_BYTES').value);
+   });
+});
+
+describe('shape.compact: key paths', () => {
+   /**
+    * Build an actor export whose `system` holds titan-like nested leaves, a repeated leaf name and a text leaf.
+    * @returns {object} The export.
+    */
+   function mockKeyedActor() {
+      return {
+         uuid: 'Actor.MOCKACTOR0000002',
+         name: 'MOCK_Keyed',
+         type: 'npc',
+         system: {
+            resource: {
+               stamina: {
+                  value: 6,
+                  mod: { static: 0 },
+               },
+               resolve: { value: 1 },
+            },
+            skill: {
+               arcana: { baseValue: 2 },
+               stealth: { baseValue: 3 },
+            },
+            bio: { description: 'MOCK_TEXT' },
+            flag: true,
+         },
+      };
+   }
+
+   it('lists exactly the named system leaves, in the order named, with their full paths', () => {
+      const view = shape.compact(mockKeyedActor(), {
+         keyPaths: [
+            'skill.stealth.baseValue',
+            'resource.stamina.value',
+            'flag',
+         ],
+      });
+      expect(view.fields).toEqual({
+         'system.skill.stealth.baseValue': 3,
+         'system.resource.stamina.value': 6,
+         'system.flag': true,
+      });
+      expect(Object.keys(view.fields)).toEqual([
+         'system.skill.stealth.baseValue',
+         'system.resource.stamina.value',
+         'system.flag',
+      ]);
+   });
+
+   it('skips a path that is missing, is not a scalar or is unsafe, and never reads inherited members', () => {
+      const view = shape.compact(mockKeyedActor(), {
+         keyPaths: [
+            'resource.absent.value',
+            'resource.stamina',
+            'resource.stamina.value.deeper',
+            '__proto__.polluted',
+            'constructor.name',
+            'toString',
+            '',
+            'resource.resolve.value',
+         ],
+      });
+      expect(view.fields).toEqual({ 'system.resource.resolve.value': 1 });
+   });
+
+   it('takes at most 24 leaves and ignores keyPattern when keyPaths is given', () => {
+      const system = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [
+         `k${index}`,
+         index,
+      ]));
+      const view = shape.compact(
+         {
+            uuid: 'Actor.MOCKACTOR0000003',
+            name: 'MOCK_Many',
+            type: 'npc',
+            system: {
+               ...system,
+               value: 1,
+            },
+         },
+         {
+            keyPaths: Object.keys(system),
+            keyPattern: /^value$/,
+         },
+      );
+      expect(Object.keys(view.fields)).toHaveLength(24);
+      expect(view.fields['system.value']).toBeUndefined();
+   });
+
+   it('keeps the 2 KB bound for 24 long text paths', () => {
+      const system = Object.fromEntries(
+         Array.from({ length: 30 }, (_, index) => [
+            `${'n'.repeat(40)}${index}`,
+            'v'.repeat(500),
+         ]),
+      );
+      const view = shape.compact(
+         {
+            uuid: 'Actor.MOCKACTOR0000004',
+            name: 'MOCK_Wide',
+            type: 'npc',
+            system,
+         },
+         { keyPaths: Object.keys(system) },
+      );
+      expect(bytes(view)).toBeLessThanOrEqual(getBudget('COMPACT_VIEW_MAX_BYTES').value);
+   });
+
+   it('falls back to the key pattern when keyPaths is not a list', () => {
+      const view = shape.compact(mockKeyedActor(), {
+         keyPaths: 'flag',
+         keyPattern: /^value$/,
+      });
+      expect(view.fields).toEqual({
+         'system.resource.stamina.value': 6,
+         'system.resource.resolve.value': 1,
+      });
+   });
+});

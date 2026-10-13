@@ -17,7 +17,7 @@ import { createWiretapServer } from '../../server/server.ts';
 import { startMcpServer } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
 import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, BRIDGE_REGISTRY, PROTOCOL_VERSION } from '../../shared/protocol.js';
-import { createActorScript, registryPayload, script } from './scriptFixtures.js';
+import { registryPayload, script, shippedScripts } from './scriptFixtures.js';
 
 /**
  * @typedef {object} GmAck
@@ -164,6 +164,92 @@ function okAck(result) {
 }
 
 /**
+ * Build a synthetic `list_document_types` result shaped like a real system's: 14 world classes, 20 embedded classes
+ * and subtypes for the typed classes.
+ * @returns {object} The result.
+ */
+function mockDocumentTypes() {
+   return {
+      system: 'mock-system',
+      world: [
+         'Actor',
+         'Cards',
+         'ChatMessage',
+         'Combat',
+         'FogExploration',
+         'Folder',
+         'Item',
+         'JournalEntry',
+         'Macro',
+         'Playlist',
+         'RollTable',
+         'Scene',
+         'Setting',
+         'User',
+      ],
+      embedded: [
+         'ActiveEffect',
+         'ActorDelta',
+         'AmbientLight',
+         'AmbientSound',
+         'Card',
+         'Combatant',
+         'CombatantGroup',
+         'Drawing',
+         'Item',
+         'JournalEntryCategory',
+         'JournalEntryPage',
+         'Note',
+         'PlaylistSound',
+         'Region',
+         'RegionBehavior',
+         'Level',
+         'TableResult',
+         'Tile',
+         'Token',
+         'Wall',
+      ],
+      packOnly: ['Adventure'],
+      subtypes: {
+         Actor: [
+            'player',
+            'npc',
+         ],
+         Item: Array.from({ length: 7 }, (_, index) => `mock_item_${index}`),
+         ChatMessage: Array.from({ length: 26 }, (_, index) => `mockMessageReport${index}`),
+         RegionBehavior: Array.from({ length: 12 }, (_, index) => `mockBehavior${index}`),
+      },
+   };
+}
+
+/**
+ * Build a synthetic compact view of an actor near its bound: 8 key leaves and 40 embedded item tuples.
+ * @returns {object} A view shaped like `ctx.shape.compact` output.
+ */
+function mockCompactView() {
+   return {
+      uuid: 'Actor.MOCKACTOR0000001',
+      name: 'MOCK_ACTOR',
+      type: 'player',
+      modified: 1760000000000,
+      fields: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+         `system.mock.g${index}.value`,
+         index,
+      ])),
+      embedded: {
+         items: {
+            total: 120,
+            rows: Array.from({ length: 40 }, (_, index) => [
+               `MOCKITEM${String(index).padStart(8, '0')}`,
+               `MOCK_I${index}`,
+               'weapon',
+            ]),
+         },
+      },
+   };
+}
+
+/**
  * The representative-result fixtures, keyed by tool name. Every listed tool needs an entry; the data is synthetic.
  * @type {Record<string, FixtureCase[]>}
  */
@@ -235,6 +321,250 @@ export const FIXTURES = {
             return client.callTool({
                name: 'create_actor',
                arguments: { name: 'MOCK_ACTOR_3' },
+            });
+         },
+      },
+   ],
+   list_document_types: [
+      {
+         label: 'document classes with the subtypes of a typical system',
+         budget: 'DOCUMENT_TYPES_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck(mockDocumentTypes()));
+            return client.callTool({
+               name: 'list_document_types',
+               arguments: {},
+            });
+         },
+      },
+   ],
+   get_document: [
+      {
+         label: 'compact view of an actor with 40 embedded item tuples',
+         budget: 'COMPACT_VIEW_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck(mockCompactView()));
+            return client.callTool({
+               name: 'get_document',
+               arguments: { uuid: 'Actor.MOCKACTOR0000001' },
+            });
+         },
+      },
+      {
+         label: 'unchanged ack',
+         budget: 'ACK_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({ unchanged: true }));
+            return client.callTool({
+               name: 'get_document',
+               arguments: {
+                  uuid: 'Actor.MOCKACTOR0000001',
+                  ifModifiedSince: 1760000000000,
+               },
+            });
+         },
+      },
+      {
+         label: 'ten-path slice of an actor',
+         budget: 'PROJECTION_BYTES_PER_10_FIELDS',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               values: Object.fromEntries(Array.from({ length: 10 }, (_, index) => [
+                  `system.attribute.mock${index}.baseValue`,
+                  index,
+               ])),
+               missing: [],
+            }));
+            return client.callTool({
+               name: 'get_document',
+               arguments: {
+                  uuid: 'Actor.MOCKACTOR0000001',
+                  paths: ['system.attribute'],
+               },
+            });
+         },
+      },
+      {
+         label: 'full export over the default cap becomes a handle',
+         budget: 'ACK_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck(makeBigDocument()));
+            return client.callTool({
+               name: 'get_document',
+               arguments: {
+                  uuid: 'Actor.MOCKACTOR0000001',
+                  mode: 'full',
+               },
+            });
+         },
+      },
+      {
+         label: 'full export of 12 KB with the largest per-call cap stays inline',
+         budget: 'RESULT_HARD_CAP_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               uuid: 'Actor.MOCKACTOR0000001',
+               name: 'MOCK_ACTOR',
+               notes: 'n'.repeat(12000),
+            }));
+            return client.callTool({
+               name: 'get_document',
+               arguments: {
+                  uuid: 'Actor.MOCKACTOR0000001',
+                  mode: 'full',
+                  maxBytes: getBudget('RESULT_HARD_CAP_MAX_BYTES').value,
+               },
+            });
+         },
+      },
+      {
+         label: 'document not found',
+         budget: 'ERROR_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck({
+               ok: false,
+               error: {
+                  code: 'DOC_NOT_FOUND',
+                  message: `No document 'Actor.MOCKACTOR0000009'.`,
+               },
+            });
+            return client.callTool({
+               name: 'get_document',
+               arguments: { uuid: 'Actor.MOCKACTOR0000009' },
+            });
+         },
+      },
+   ],
+   search_documents: [
+      {
+         label: 'page of 20 rows with a cursor',
+         budget: 'SEARCH_PAGE_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               rows: Array.from({ length: 20 }, (_, index) => [
+                  `Compendium.mock.items.Item.MOCKITEM${String(index).padStart(8, '0')}`,
+                  `MOCK_ITEM_${String(index).padStart(3, '0')}_${'x'.repeat(20)}`,
+                  'weapon',
+               ]),
+               total: 113,
+               nextCursor: 'W' + 'c'.repeat(120),
+            }));
+            return client.callTool({
+               name: 'search_documents',
+               arguments: { documentName: 'Item' },
+            });
+         },
+      },
+      {
+         label: 'empty page',
+         budget: 'ACK_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               rows: [],
+               total: 0,
+            }));
+            return client.callTool({
+               name: 'search_documents',
+               arguments: {
+                  documentName: 'Item',
+                  query: 'none',
+               },
+            });
+         },
+      },
+      {
+         label: 'invalid cursor',
+         budget: 'ERROR_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck({
+               ok: false,
+               error: {
+                  code: 'CURSOR_INVALID',
+                  message: 'The cursor is not valid; search again without it.',
+               },
+            });
+            return client.callTool({
+               name: 'search_documents',
+               arguments: {
+                  documentName: 'Item',
+                  cursor: 'MOCK',
+               },
+            });
+         },
+      },
+   ],
+   describe_schema: [
+      {
+         label: 'blank example of 5 KB with the outlines',
+         budget: 'DESCRIBE_SCHEMA_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               documentName: 'Actor',
+               subtype: 'mock',
+               example: { notes: 'n'.repeat(5000) },
+               outline: Array.from({ length: 30 }, (_, index) => [
+                  `field${index}`,
+                  'StringField',
+               ]),
+               systemOutline: Array.from({ length: 12 }, (_, index) => [
+                  `system${index}`,
+                  'SchemaField',
+               ]),
+            }));
+            return client.callTool({
+               name: 'describe_schema',
+               arguments: {
+                  documentName: 'Actor',
+                  subtype: 'mock',
+               },
+            });
+         },
+      },
+      {
+         label: 'path with constraints',
+         budget: 'DESCRIBE_SCHEMA_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               documentName: 'Actor',
+               subtype: 'mock',
+               path: 'system.attribute',
+               example: { body: { baseValue: 1 } },
+               schema: {
+                  class: 'SchemaField',
+                  fields: { body: {
+                     class: 'NumberField',
+                     integer: true,
+                     min: 0,
+                     max: 99,
+                  } },
+               },
+            }));
+            return client.callTool({
+               name: 'describe_schema',
+               arguments: {
+                  documentName: 'Actor',
+                  path: 'system.attribute',
+               },
+            });
+         },
+      },
+      {
+         label: 'path not found',
+         budget: 'ERROR_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck({
+               ok: false,
+               error: {
+                  code: 'PATH_NOT_FOUND',
+                  message: `There is no field 'nope' here.`,
+               },
+            });
+            return client.callTool({
+               name: 'describe_schema',
+               arguments: {
+                  documentName: 'Actor',
+                  path: 'nope',
+               },
             });
          },
       },
@@ -326,8 +656,8 @@ export function registryEntry(name, overrides = {}) {
  * @param {object} [options] - What to register.
  * @param {import('../../server/mcp.ts').ToolRegistration[]} [options.tools] - Tools registered after the helper tool.
  * @param {string} [options.instructions] - The server instructions text; the production text when absent.
- * @param {object[]} [options.registry] - Script definitions the fake GM client sends, beside `create_actor`, before the
- * SDK client connects.
+ * @param {object[]} [options.registry] - Script definitions the fake GM client sends, beside `create_actor`, before
+ * the SDK client connects.
  * @returns {Promise<{ client: Client, setGmAck: Function, registerTools: Function, nextToolListChange: Function,
  * close: Function }>} The client, the control for the fake GM client's answers, `registerTools(entries)` (sends a
  * registry of `create_actor` plus the entries and resolves with its ack, which counts `create_actor` too),
@@ -373,7 +703,10 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
          kind: 'human',
          dom: true,
       });
-      await gm.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript(), ...(registry ?? [])]));
+      await gm.emitWithAck(BRIDGE_REGISTRY, registryPayload([
+         ...shippedScripts(),
+         ...(registry ?? []),
+      ]));
       /** @type {ReturnType<typeof startMcpServer>} The MCP server under test. */
       const mcp = startMcpServer(server.bridge, 0, {
          tools: [
@@ -409,7 +742,10 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
          },
          registerTools: (entries) => gm.emitWithAck(
             BRIDGE_REGISTRY,
-            registryPayload([createActorScript(), ...entries]),
+            registryPayload([
+               ...shippedScripts(),
+               ...entries,
+            ]),
          ),
          nextToolListChange: () => new Promise((resolve, reject) => {
             waiters.push(resolve);
@@ -518,6 +854,7 @@ export async function collectReport({
    };
    /** @type {(budgetName: string, actual: number, subject: string, what: string) => void} Breach recorder. */
    const breach = makeBreachRecorder(report.failures, report.warnings);
+   /** @type {{ tools: Array<{ name: string }> }} The tools the session lists. */
    const { tools } = await client.listTools();
    for (const tool of tools) {
       /** @type {string} The label of this tool in messages. */

@@ -5,6 +5,12 @@
 import { compileSchema } from '../../shared/schemaValidate.js';
 import { SCRIPT_API_VERSION, definitionBytes } from '../../shared/scripts.js';
 import { createActorDefinition } from '../../src/bridge/scripts/createActor.js';
+import {
+   describeSchemaDefinition,
+   getDocumentDefinition,
+   listDocumentTypesDefinition,
+   searchDocumentsDefinition,
+} from '../../src/bridge/scripts/definitions.js';
 
 /**
  * Build a valid shipped script definition; fields in `overrides` replace the defaults.
@@ -45,11 +51,27 @@ export function registryPayload(scripts, overrides = {}) {
 
 /**
  * Build the `create_actor` script exactly as the Foundry client ships it: a mutating api script whose result is an
- * acknowledgement within the 256-byte budget. A copy of the shipped definition, so the budget tests judge the real one.
+ * acknowledgement within the 256-byte budget. A copy of the shipped definition, so the budget tests judge the real
+ * one.
  * @returns {object} The definition.
  */
 export function createActorScript() {
    return structuredClone(createActorDefinition);
+}
+
+/**
+ * Build every shipped script exactly as the Foundry client ships it. Copies of the shipped definitions, so the budget
+ * tests judge the real ones.
+ * @returns {object[]} The definitions, in the shipped order.
+ */
+export function shippedScripts() {
+   return [
+      createActorDefinition,
+      listDocumentTypesDefinition,
+      getDocumentDefinition,
+      searchDocumentsDefinition,
+      describeSchemaDefinition,
+   ].map((definition) => structuredClone(definition));
 }
 
 /**

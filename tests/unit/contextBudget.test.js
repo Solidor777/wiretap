@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { WIRETAP_INSTRUCTIONS } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
 import { RESERVED_SCRIPT_NAMES } from '../../shared/scripts.js';
+import { shippedScripts } from './scriptFixtures.js';
 import {
    FIXTURES,
    HELPER_TOOL_NAME,
@@ -20,11 +21,14 @@ import {
 } from './contextBudgetHarness.js';
 
 /**
- * A skills directory that does not exist, so a test of the tool-count boundary is not also a test of the shipped skill's
- * tool mentions (the default-root tests below check those against the real tool list).
+ * A skills directory that does not exist, so a test of the tool-count boundary is not also a test of the shipped
+ * skill's tool mentions (the default-root tests below check those against the real tool list).
  * @type {string}
  */
 const NO_SKILLS_ROOT = path.join(import.meta.dirname, '..', '..', 'test', 'tmp', 'no-such-skills');
+
+/** @type {number} The scripts the fake GM client registers: every shipped script. */
+const SHIPPED_COUNT = shippedScripts().length;
 
 /** @type {number} Counter that makes each scratch skills root unique within this process. */
 let scratchCounter = 0;
@@ -106,12 +110,18 @@ describe('context budgets of the real MCP server', () => {
          console.warn(`context budget warning | ${warning}`);
       }
       expect(report.failures).toEqual([]);
-      expect(report.listing.map((tool) => tool.name).sort()).toEqual([
-         'create_actor',
-         HELPER_TOOL_NAME,
-         'read_handle',
-      ]);
-      expect(report.totals.count).toBe(2);
+      expect(report.listing.map((tool) => tool.name).sort()).toEqual(
+         [
+            'create_actor',
+            'describe_schema',
+            'get_document',
+            HELPER_TOOL_NAME,
+            'list_document_types',
+            'read_handle',
+            'search_documents',
+         ].sort(),
+      );
+      expect(report.totals.count).toBe(1 + SHIPPED_COUNT);
       expect(report.helperTotals.count).toBe(1);
       expect(report.fixtureRuns.length).toBeGreaterThanOrEqual(8);
    });
@@ -143,6 +153,7 @@ describe('context budgets of the real MCP server', () => {
          arguments: {},
       });
       expect(textBytes(big)).toBeLessThanOrEqual(getBudget('ACK_MAX_BYTES').value);
+      /** @type {{ handle: string }} The handle of the stored result. */
       const { handle } = JSON.parse(big.content[0].text);
       for (const offset of [
          0,
@@ -292,7 +303,7 @@ describe('context budgets of the real MCP server', () => {
             fixtures[name] = trivialFixture(name);
             return makeTool(name, 'd'.repeat(240), makeShape(3, 60));
          });
-         const report = await reportWith(extra, fixtures);
+         const report = await reportWith(extra, fixtures, NO_SKILLS_ROOT);
          expect(report.failures).toHaveLength(1);
          expect(report.failures[0]).toMatch(
             /^tool list: total definition size is \d+ bytes, at most 16000 bytes \(ALL_DEFINITIONS_MAX_BYTES\)$/,
@@ -383,7 +394,7 @@ describe('context budgets of the real MCP server', () => {
          const report = await reportOn({ registry_one: registryFixture('registry_one') });
          expect(report.failures).toEqual([]);
          expect(report.listing.map((tool) => tool.name)).toContain('registry_one');
-         expect(report.totals.count).toBe(3);
+         expect(report.totals.count).toBe(2 + SHIPPED_COUNT);
          expect(report.fixtureRuns.filter((run) => run.tool === 'registry_one')).toHaveLength(2);
       });
 
@@ -395,17 +406,17 @@ describe('context budgets of the real MCP server', () => {
 
       it('counts a tool registered after the session started once the client has been told', async () => {
          harness = await startHarness();
-         expect((await reportOn({})).totals.count).toBe(2);
+         expect((await reportOn({})).totals.count).toBe(1 + SHIPPED_COUNT);
          const changed = harness.nextToolListChange();
          expect(await harness.registerTools([registryEntry('registry_late')])).toEqual({
             ok: true,
-            accepted: 2,
+            accepted: SHIPPED_COUNT + 1,
             refused: 0,
          });
          await changed;
          const without = await reportOn({});
          expect(without.failures).toEqual(['tool "registry_late": no representative-result fixture']);
-         expect(without.totals.count).toBe(3);
+         expect(without.totals.count).toBe(2 + SHIPPED_COUNT);
          const report = await reportOn({ registry_late: registryFixture('registry_late') });
          expect(report.failures).toEqual([]);
       });
@@ -448,7 +459,7 @@ describe('context budgets of the real MCP server', () => {
          await changed;
          const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
          expect(ack.accepted).toBe(room);
-         expect(ack.refused).toBe(40 + 1 - room);
+         expect(ack.refused).toBe(40 + SHIPPED_COUNT - room);
          /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of all 40 tools. */
          const fixtures = Object.fromEntries(names.map((name) => [
             name,
@@ -483,10 +494,10 @@ describe('context budgets of the real MCP server', () => {
          ]);
          expect(ack).toEqual({
             ok: true,
-            accepted: 1,
+            accepted: SHIPPED_COUNT,
             refused: 3,
          });
-         expect((await reportOn({})).totals.count).toBe(2);
+         expect((await reportOn({})).totals.count).toBe(1 + SHIPPED_COUNT);
       });
    });
 

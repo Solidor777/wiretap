@@ -93,6 +93,18 @@ const EXPECTED = [
       'hard',
    ],
    [
+      'DOCUMENT_TYPES_MAX_BYTES',
+      3000,
+      'bytes',
+      'hard',
+   ],
+   [
+      'DESCRIBE_SCHEMA_MAX_BYTES',
+      8000,
+      'bytes',
+      'hard',
+   ],
+   [
       'PROJECTION_BYTES_PER_10_FIELDS',
       1000,
       'bytes',
@@ -113,6 +125,42 @@ const EXPECTED = [
    [
       'SEARCH_MAX_LIMIT',
       100,
+      'count',
+      'hard',
+   ],
+   [
+      'SEARCH_SCAN_MAX',
+      2000,
+      'count',
+      'hard',
+   ],
+   [
+      'SEARCH_EXPORT_MAX',
+      300,
+      'count',
+      'hard',
+   ],
+   [
+      'SEARCH_BATCH_SIZE',
+      25,
+      'count',
+      'hard',
+   ],
+   [
+      'SEARCH_FIELD_PATH_MAX_BYTES',
+      64,
+      'bytes',
+      'hard',
+   ],
+   [
+      'SEARCH_INDEX_FIELDS_MAX',
+      5,
+      'count',
+      'hard',
+   ],
+   [
+      'SEARCH_INDEX_SEGMENTS_MAX',
+      3,
       'count',
       'hard',
    ],
@@ -211,7 +259,8 @@ const EXPECTED = [
       16,
       'count',
       'hard',
-   ],   [
+   ],
+   [
       'SCHEMA_ARRAY_ITEMS_MAX',
       1000,
       'count',
