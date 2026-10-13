@@ -38,7 +38,12 @@ deleted and the run fails. After the teardown a sweep deletes (through the same 
 the prefix that no running list recorded, and the run fails when it finds one. A census then counts prefixed documents,
 every combat and every token whose actor no longer resolves; each test and the global teardown fail on a non-empty
 census, and the global setup removes what a crashed run left. The suite refuses to run these steps in any world but
-`FOUNDRY_WORLD` (default `test-titan`).
+`FOUNDRY_WORLD` (default `test-titan`), and refuses any world whose id does not start with `test-` unless
+`WIRETAP_E2E_ALLOW_WORLD=<exact world id>` is set. A recorded teardown tests each document again immediately before it
+deletes it, and a sweep that finds a prefixed document it must not delete deletes nothing. Risk: the sweep deletes every
+world document whose name starts with `Wiretap E2E ` (a chat message's `flavor`, a setting's key prefix `wiretap-e2e.`),
+including one a person made by hand in the test world; keep the prefix out of real documents. A running list that cannot
+be read, belongs to another world or holds more than 1,000 entries is never replaced: the run fails instead.
 
 ## Running the sidecar
 
@@ -120,6 +125,51 @@ method `405`.
   argument, is listed with `readOnlyHint` false, and returns the JSON ack `{uuid, name, type}` (a name over about 80
   bytes is shortened in it). A tool
   added during a `claude` session was deferred (found through `ToolSearch`) and callable in the same session.
+- **Reading documents.** `list_document_types` returns the world's document classes (`world`, `embedded`, `packOnly`)
+  and the subtypes of each (at most 3,000 bytes; the longest subtype lists are left out and named in `omitted` when
+  they do not fit). `get_document` reads a world, embedded (`parentUuid`) or compendium (`pack`) document by `uuid`, or
+  by `documentName` and `id`. The default result is a compact view of at most 2,000 bytes: `uuid`, `name`, `type`,
+  `modified` (the document's `_stats.modifiedTime`), up to 24 `system` leaves and `[id, name, type]` rows of the
+  embedded documents (40 rows at most, with each collection's total). The leaves come from a reviewed per-subtype list
+  for the `titan` system (`src/bridge/scripts/keyFields.json`) and from a default key-name pattern for any other. `fields`
+  returns a nested projection, `paths` (20 at most) returns slices such as `system.resource` or `items.*.name` keyed by
+  `_id` with the unresolved paths in `missing`, `derived: true` reads the prepared data for those two, `mode: "full"`
+  returns the whole export (`toCompendium` with ids, sort and ownership kept, plus `uuid`), `ifModifiedSince` returns
+  `{"unchanged":true}` when the document is not newer, and `maxBytes` (128 to 16,000) raises the inline limit; a result
+  over the limit is a handle. A client acks a result up to 900,000 bytes. What is never returned: the password fields
+  of a `User` (removed from every export; a path to one is listed in `missing`), a `Setting` in the `wiretap.`
+  namespace, the core settings that hold credentials (`core.rtcWorldSettings`, the WebRTC TURN user and password) and a
+  `Setting` whose key names a secret (each refused with `DOC_EXCLUDED`), and every key named like a secret
+  (`password`, `passphrase`, `secret`, `token`, `apiKey`, `credential`, `privateKey`, in any case) inside a `Setting`
+  value or any `flags` object (dropped, so a path into one is listed in `missing`). The match is by name only: a secret
+  under another name stays readable and an ordinary name that contains one of those words is dropped. Core schema fields
+  and system data are not scanned. Settings of other modules are otherwise readable. Other error codes: `DOC_NOT_FOUND`,
+  `DOC_UNREADABLE` (the export failed), `PATH_NOT_FOUND`, `PATH_EXCLUDED`, `PATH_EMBEDDED`, `PATH_FREE_FORM`,
+  `PATH_UNSAFE_SEGMENT`, `PATH_INVALID`, `PATH_LIMIT`.
+- **Searching and schemas.** `search_documents` needs `documentName` and searches the world, the embedded documents of
+  a `parentUuid`, or a compendium `pack` (through its index: only the filter and field paths are read and no document
+  is loaded). `type` and `query` (a name substring) narrow it, up to 5 `filters` (`path=value`; the scalar at a dotted
+  path, as text, must equal the value; more than 5 are refused with `ARGS_INVALID`) narrow it further, and `fields`
+  (paths of at most 64 bytes) adds scalar values to each row. A page is at most 4,000 bytes of `[uuid, name, type]` rows
+  (20 by default, `limit` up to 100; a lone row whose fields overflow the page is shortened to its first three entries)
+  with `total` (and `fieldsDropped: true` when it did) and, when more follow, `nextCursor` (at most 512 characters);
+  rows are ordered by name then uuid and the cursor names a position, so documents added or removed between pages do not shift it (a cursor that is not one the search issued is
+  `CURSOR_INVALID`). The work of one call is bounded: name, subtype and folder are read from the live document and
+  cost no export, a call examines at most 2,000 candidates after its cursor and exports at most 300 documents (for a
+  filter on another path), yields to the event loop every 25 candidates and stops with `SEARCH_ABORTED` when the call
+  times out. A call that stops at a cap reports `cut: true` and `scanned` and returns a `nextCursor` that resumes; `total`
+  counts the matches among the candidates examined from the cursor on. A compendium search asks the pack index for at
+  most 5 distinct paths of at most 3 segments, never a whole `system`, `items`, `effects` or `flags` subtree; the index is
+  shared state, so the fields a search asks for stay in the pack's index for the session (Foundry's `getIndex`), and a
+  path with a segment named like a secret is refused with `PATH_EXCLUDED` because an index entry is raw source data. The
+  work of a search is not free: ordering keys for the whole class are built and sorted on every call (O(N log N)), and a
+  compendium `getIndex` cannot be aborted, so one batch can finish after the call timed out.
+  `Setting` documents in the `wiretap.` namespace never appear, and a filter or field on a `User` password path is
+  refused with `PATH_EXCLUDED`. `describe_schema` takes `documentName`, an optional `subtype`
+  and an optional `path`. Without a path it returns a blank example (the canonical export of a document built in
+  memory) and a one-level outline of the schema; with one it returns the example subtree and the field's constraints
+  (choices, min, max, integer, required, nullable, blank). Free-form fields are marked and embedded collections are
+  named by document class instead of expanded. A result is at most 8,000 bytes.
 - **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
   alone does not count). At most 32 sessions are held; an `initialize` beyond that is refused with `503` and a
   `Retry-After` header and no held session is ended, so one client cannot push another's session out. The idle sweep (one
@@ -134,7 +184,9 @@ method `405`.
 ## Wiretap skill for Claude Code
 
 `skills/wiretap/SKILL.md` is a short user-facing skill that tells an agent which Wiretap tools exist
-(`mcp__wiretap__create_actor`, `mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
+(`mcp__wiretap__list_document_types`, `mcp__wiretap__get_document`, `mcp__wiretap__search_documents`,
+`mcp__wiretap__describe_schema`, `mcp__wiretap__create_actor`,
+`mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
 copy the `skills/wiretap` directory into the `.claude/skills/` directory of the project that runs `claude` (a skill for
 one project), or into `~/.claude/skills/` (a skill for every project), so that the file is
 `.claude/skills/wiretap/SKILL.md`, then start a new `claude` session. A symbolic link to the directory works the same

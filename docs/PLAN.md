@@ -531,9 +531,26 @@ nothing when a client must build the payload anyway.
   true, clearSort: false, clearOwnership: false})` plus `uuid`. The defaults would drop `_id`, `sort`, `ownership` and
   `author` (READ `client-document.mjs:1113-1134`). Optionally prepared values are added under a separate `derived`
   key.
-- **Default reads** return the compact view: `uuid`, `name`, `type`, a per-type key-field list, and embedded documents
-  as `[id, name, type]` tuples (first 40 plus a total count). `fields` returns a projection, `paths` path slices
-  (§2.8), both of the canonical form.
+- **Default reads** return the compact view: `uuid`, `name`, `type`, `modified` (`_stats.modifiedTime`, the clock of
+  `ifModifiedSince`), a per-type key-field list, and embedded documents as `[id, name, type]` tuples (first 40 plus a
+  total count). `fields` returns a projection, `paths` path slices (§2.8), both of the canonical form.
+- **Exclusions and redaction** apply in the one export function, so every read path (compact, `fields`, `paths`, full,
+  search rows and filters, `describe_schema` examples) inherits them: a `Setting` in the `wiretap.` namespace, in the
+  credential denylist (`core.rtcWorldSettings`: `client/av/settings.mjs:97-102` defines the TURN `username` and
+  `password`, `:162-167` registers the world setting; the other core settings registered in `client/` hold interface,
+  canvas, sheet and keybinding preferences) or with a key that names a secret is `DOC_EXCLUDED`. Every key matching
+  `/pass(word|phrase)?|secret|token|api[-_]?key|credential|private[-_]?key/i` is dropped from a `Setting` `value` (JSON
+  text) and from every `flags` object of the export, to depth 24 and 50,000 nodes per walk (the setting value and the
+  rest of the export have separate budgets; a list is cut at the first member beyond a bound, so kept indexes never
+  move; what lies beyond is dropped). A string inside that data which itself holds JSON (an object, a list or a string
+  of JSON) is parsed and redacted with the same bounds, up to 4 levels of nesting (each level doubles the escaping); text that is not JSON is left as it
+  is. A pack index path is never asked for when one of its segments matches the pattern (`PATH_EXCLUDED`), because index
+  entries are raw source data. The
+  `User` password fields are removed. Limitations: name-only matching (a secret under another name is exposed; `bypass`,
+  `passive` or `tokenId` inside flags or a setting value are dropped); core schema fields and `system` data are not
+  scanned because core names such as `prototypeToken` match the pattern; the setting-key test is narrower (it omits a bare
+  `token`, which would refuse `core.tokenAutoRotate`); settings of other modules are readable. Owner decisions are in
+  `docs/TODO.md`.
 - **Create** takes the canonical shape.
 - **Replace** = `fromImport` → `collection.fromCompendium` → strip `preserveOnImport` → `update(data, {diff: false,
   recursive: false})` **with hooks** (D13). Input may be a handle.
@@ -911,8 +928,99 @@ returns `system.attributes`-style slices and `items.*.name` keyed by `_id` on a 
 compact ≤ 2 KB per document for every titan subtype in e2e (hard); a `paths` or full read above the hard cap returns a
 handle; `describe_schema` without `path` within the 8 KB default cap for every titan document type and subtype (E8:
 the blank Actor export alone is 4.85 KB, so the outline has ≈ 3 KB); a titan full actor read (5.7–12.5 KB, E9)
-returns a handle at the default cap and inline with `maxBytes: 16384`. **Risks:** schema output size (E8: an
+returns a handle at the default cap and inline with `maxBytes: 16000` (1 KB = 1,000 bytes). **Risks:** schema output size (E8: an
 unscoped Actor walk is 19.9 KB, which is why constraints need `path`).
+
+**As built, phase A (2026-10-13; `list_document_types` and `get_document`; `search_documents` and `describe_schema`
+follow):**
+
+- `src/bridge/scripts/canonical.js` holds the canonical export (`exportDocument`: §4.4 options, `uuid` added, `Set` to
+  array) and `resolveDocument` (uuid, world id, `pack`, `parentUuid`). The exclusions apply there: a `Setting` whose key
+  starts with `wiretap.` (any case) or has no text key is `DOC_EXCLUDED`; `password` and `passwordSalt` are removed from
+  a `User` export, source and derived, so a path to one is in `missing`. `ctx.core.readDocument` is the one entry the
+  scripts use; `search_documents` must read through it.
+- `get_document` arguments: `uuid`, or `documentName` and `id` with `parentUuid` or `pack`; `mode` (`compact` default,
+  `full`), `fields`, `paths` (both up to 20), `derived`, `ifModifiedSince`, `maxBytes` (128 to 16,000, declared so the
+  enforcer receives it). `paths`, `fields` and `mode: "full"` are mutually exclusive; `derived` needs `paths` or
+  `fields` and reads `toObject(false)`. The result budget is 16,000 B; the sidecar enforcer makes handles.
+- `ctx.shape.compact` gained `keyPaths` (exact dotted paths below `system`, in order) and a `modified` header from
+  `_stats.modifiedTime`; both count inside the 2,000-byte bound. The key-field lists are paths, not key names: a titan
+  Actor holds 44 `baseValue` leaves (MEASURED on the blank export), so a key-name pattern fills the 24 leaves with skill
+  rows. The lists exist for the `titan` system only (`docs/experiments/2026-10-m4-keyfields.md`, `docs/TODO.md`).
+- `list_document_types` returns `{ system, world, embedded, packOnly?, subtypes, omitted? }` within the new
+  `DOCUMENT_TYPES_MAX_BYTES` (3,000) budget. Definitions are in `src/bridge/scripts/definitions.js` (relative imports
+  only, so the `tsx`-run context measurement can load them): `get_document` 682 B, `list_document_types` 243 B listed.
+- Measured on titan: compact views 60 to 1,191 B, `list_document_types` 1,522 B (`tests/e2e/readTools.spec.js`).
+
+**As built, phase B (2026-10-13; `search_documents` and `describe_schema`):**
+
+- `search.js`: candidates from the world collection, `parent.getEmbeddedCollection` or `pack.getIndex({ fields })` (only
+  the filter and field paths; no document loaded; `Setting` and `User` refused with a pack). Live documents pass
+  `canonical.unreadable()` and filters and fields read `exportDocument`; a filter or field on a User password path is
+  `PATH_EXCLUDED`. Filters are `path=value` strings (<= 5, equality on the scalar as text) because the schema subset has no
+  mixed-type value. Order: name cut to 40 B, then uuid; the cursor encodes that key, so it is a position and not an
+  offset. Rows are cut from the end to fit `SEARCH_PAGE_MAX_BYTES`. `maxBytes` is not declared (the page budget is the
+  tool's cap). See the review fixes below for the work bounds.
+- `schemaWalk.js` and `schemaDescribe.js`: the walker reads class names along the prototype chain (free-form: ObjectField,
+  AnyField, JSONField, TypedObjectField, TypedSchemaField; referenced by document name: collections, embedded documents,
+  foreign keys; TypeDataField resolved by subtype), bounded by depth 3, 150 nodes and a cycle guard. Without `path` the
+  result is the blank export (built in memory, canonical export) plus one-level outlines; with `path` the blank subtree
+  plus the constraints of the field. `DESCRIBE_SCHEMA_MAX_BYTES` (8,000) is held by cutting the example, then the
+  outlines, and by re-walking a path at a smaller depth.
+- Measured on titan (`tests/e2e/searchSchema.spec.js`): 105 `describe_schema` calls (every class, its default subtype and
+  every subtype), the largest 5,784 B; blank examples exist for every class except `ActorDelta` and `TableResult`. Listed
+  definitions: `search_documents` 687 B, `describe_schema` 382 B (measured with `definitionBytes` after the review fixes
+  below); the six tools list 3,223 B in all (the earlier 3,268 B minus the 45 B `search_documents` shrank; derived, not
+  re-measured as a total; limits: 800 B each, 16,000 B, 30 tools).
+
+**As built, review fixes (2026-10-13):**
+
+- Secrets: see §4.4 (credential denylist, key-name redaction, limitations). The redaction sits in the one export
+  function, so it covers every read path; unit tests use `MOCK_` values and e2e writes real `Setting` documents
+  (`tests/e2e/readTools.spec.js`).
+- `search_documents` work bounds (`shared/budgets.js`: `SEARCH_SCAN_MAX` 2,000, `SEARCH_EXPORT_MAX` 300,
+  `SEARCH_BATCH_SIZE` 25): every readable document gets its ordering key from its live name (cheap), the candidates after
+  the cursor are examined in that order, `name`, `type` and `folder` filters, the `type` argument and `query` read the live
+  document, and a document is exported only for a filter on another path or for a page row with `fields` (once per
+  document). The result is `{ rows, total, cut?, scanned?, nextCursor? }`: `total` counts the matches among the
+  candidates examined from the cursor on, `cut` and `scanned` appear when a cap stopped the call, and `nextCursor` then
+  resumes after the last candidate examined. The loop yields with a `MessageChannel` message (timers are clamped to 4 ms
+  once nested) every 25 candidates and throws `SEARCH_ABORTED` when `ctx.signal` aborted, which the 8 s timeout sets.
+  Unit tests count `toCompendium` calls over 4,500 and 1,000 synthetic actors.
+- More than 5 filters are `ARGS_INVALID` in the engine as well as the schema. Field paths are limited to
+  `SEARCH_FIELD_PATH_MAX_BYTES` (64) because rows echo them as keys, and a lone row whose values still overflow the
+  page degrades to `[uuid, name, type]`. `maxBytes` is no longer declared by `search_documents`; the SDK strips it.
+- Compendium searches ask `getIndex` for at most `SEARCH_INDEX_FIELDS_MAX` (5) distinct paths of at most
+  `SEARCH_INDEX_SEGMENTS_MAX` (3) segments, never a whole `system`, `items`, `effects`, `flags`, `pages`, `results`,
+  `prototypeToken` or `ownership` subtree. Side effect (READ `compendium-collection.mjs:334-367`): `getIndex` merges the
+  requested fields into the pack's one index and records them as indexed for the session, so they stay for every later
+  consumer; the bounds keep that growth small.
+- `describe_schema`: a step below a list takes an integer index or `*` (else `PATH_NOT_FOUND`; a list without an element
+  field is also `PATH_NOT_FOUND`); a path result cuts the example first and keeps the schema depth; a blank example
+  that cannot be built is logged once through `ctx.log` (the registry's log sink; bounded and sanitized) and the
+  result keeps `example: null`.
+- `search_documents` cost and abort: the ordering keys of the whole class are built and sorted on every call, which is
+  O(N log N) and uncapped (it yields every 25 documents); the scan after it is capped. The scan continues past `limit`
+  matches until a cap or the end because `total` counts what it examined. A compendium `getIndex` is not abortable. The
+  cursor is the base64url of the key text (name cut to 40 B, one NUL, uuid), at most 512 characters. A two-segment index
+  path may still pull a whole `system.<x>` object into the shared index (whether it is an object is not known from the
+  path). A row that lost its `fields` to fit the page sets `fieldsDropped: true` on the result.
+- Error codes of the read tools: `ARGS_INVALID`, `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `DOC_UNREADABLE`, `PATH_NOT_FOUND`,
+  `PATH_EXCLUDED`, `PATH_EMBEDDED`, `PATH_FREE_FORM`, `PATH_UNSAFE_SEGMENT`, `PATH_INVALID`, `PATH_LIMIT`,
+  `CURSOR_INVALID`, `SEARCH_ABORTED`.
+- e2e coverage of acceptance (`tests/e2e/everyType.spec.js`): in the titan world every class of
+  `CONST.ALL_DOCUMENT_TYPES` and every subtype is created as a recorded `Wiretap E2E ` document except what the spec
+  lists: `Adventure` (compendium only) and `FogExploration` (no name field to carry the prefix) are never created, and
+  `Folder.ActiveEffect` and `Folder.Adventure` are not attempted because creating one leaves a folder the world cannot
+  delete (MEASURED: the client errors in `Folders#_onModifyContents`, and the server's `Folder#_preDelete` throws for a
+  type without a world collection). 98 documents in 32 of 34 classes were created (embedded documents under recorded
+  parents), each read in the compact view (largest 1,148 B, limit 2,000), and `list_document_types` equals
+  `ALL_DOCUMENT_TYPES`. The registry (`tests/e2e/registryCore.js`) now holds `ChatMessage` (identified by `flavor`),
+  `Combat`, `Setting` (key prefix `wiretap-e2e.`), `User` (never the signed-in user or a game master) and deletes in the
+  order ChatMessage, Combat, Setting, User, Scene, Playlist, RollTable, JournalEntry, Macro, Cards, Actor, Item,
+  Folder; embedded documents are never recorded because they go with their parent. The core credential setting
+  itself is not created by e2e (a sweep could not tell a test copy from a real one); the denylist is covered by unit
+  tests and the secret-key rule by real `Setting` documents.
 
 ### M5 — Core write tools
 

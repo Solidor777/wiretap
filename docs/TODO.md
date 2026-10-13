@@ -76,17 +76,41 @@
 - [ ] The executing client's own gate check is covered by unit tests only: through the sidecar a closed gate is denied
       by the sidecar's snapshot before anything is sent (e2e `scripts.spec.js` shows that path). An e2e that reaches the
       client check needs a way to hold the sidecar's snapshot stale, for example a test-only observer command
-- [ ] Compact view: `ctx.shape.compact` uses a generic default key-name pattern; the per-subtype key-field lists and
-      the compact view of Foundry documents (a canonical export) belong to docs/PLAN.md M4. With 16-character ids and
-      18-character names 40 tuples do not fit the 2 KB budget (35 fit in the fixture, asserted by
-      `tests/unit/scriptShape.test.js`), so the byte budget trims them
+- [ ] Compact view: the per-subtype key-field lists (`src/bridge/scripts/keyFields.json`) exist for the `titan` system
+      only; a document of any other system is shown with the default key-name pattern of `ctx.shape`. Generate and review
+      lists for other systems with `tests/e2e/keyFields.measure.spec.js` (it reads the live world; run it per system), or
+      derive them at run time by the same rules. With 16-character ids and 18-character names 40 tuples do not fit the
+      2 KB budget (35 fit in the fixture, asserted by `tests/unit/scriptShape.test.js`), so the byte budget trims them
+- [ ] owner: decide whether non-core Settings are readable at all. Today every Setting outside the `wiretap.` namespace
+      and the credential denylist is returned with secret-named keys dropped from its value (docs/PLAN.md section 4.4),
+      so another module's setting that stores a secret under a name the pattern does not match is exposed. Options: a
+      setting allowlist, or refusing all module settings by default
+- [ ] owner: decide whether ChatMessage whispers and blind rolls are readable. A GM client reads every message, so
+      `get_document` and `search_documents` return whispers addressed to other users and blind rolls; there is no
+      per-message visibility rule
+- [ ] `search_documents` still builds an ordering key for every readable document of the class on each call (a world
+      with tens of thousands of ChatMessages pays that cost per page, with yields) before the scan cap applies, and
+      `total` is only a count over the candidates examined. Add a persistent name index or a streaming order if a world
+      needs it; a compendium search reads the index only
+- [ ] Folders of type `ActiveEffect` and `Adventure` cannot be deleted through Foundry (client error in
+      `Folders#_onModifyContents`, server error in `Folder#_preDelete`); e2e does not create them. If an agent
+      creates one, only retyping it (`folder.update({ type: 'Item' })`) lets it be deleted. Consider refusing them in
+      `create_documents` (M5)
+- [ ] `describe_schema` blank examples are missing for `ActorDelta` and `TableResult` in the titan world (their blank
+      construction fails without a parent or more data; MEASURED by `tests/e2e/searchSchema.spec.js`); the result then
+      has `example: null` and an `exampleNote`. Add minimal data for them if agents need an example
+- [ ] `describe_schema` was exercised against the titan system and the core classes only; the walker on other systems'
+      custom field classes is unverified (an unknown class is reported as a leaf with its class name)
+- [ ] `get_document` with `mode: "full"` fails with `RESULT_TOO_LARGE` when the client result is over 900,000 bytes (a
+      scene with thousands of placeables). The agent reads such a document with `paths`; chunked full reads are not built
 
-- [ ] e2e registry (docs/PLAN.md section 4.8): the running list records world documents only. Add `parent`, `packId`
-      and `sceneId` fields and embedded-first teardown ordering (tokens, then other embedded documents, then world
-      documents, folders, world compendia) with the first flow that creates an embedded document or a compendium; also
-      the TITAN safety net's chat messages since the run start and the E2E users' broken hotbar entries, and the
-      restore of world settings other than the risk gates. The sweep and census cover prefixed world documents,
-      combats and orphan tokens (`tests/e2e/registryCore.js`)
+- [ ] e2e registry (docs/PLAN.md section 4.8): the running list records world documents only and embedded documents are
+      removed with their recorded parent. Add `parent`, `packId` and `sceneId` fields with the first flow that must
+      create an embedded document under a document it did not create, or a compendium; also the TITAN safety net's chat
+      messages since the run start and the E2E users' broken hotbar entries, and the restore of world settings other
+      than the risk gates. The sweep and census cover prefixed world documents of the types in
+      `ALLOWED_DOCUMENT_NAMES` (ChatMessage by `flavor`, Setting by key prefix), combats and orphan tokens
+      (`tests/e2e/registryCore.js`)
 
 ## Carried-over cleanups
 

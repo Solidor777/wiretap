@@ -20,4 +20,4 @@ the current code (the `wiretap-*` skills under `.claude/skills/` describe the cu
 | [`CLOSED_BUGS.md`](CLOSED_BUGS.md) | Fixed bugs with their cause, fix and measurements. |
 | [`specs/`](specs/) | Design specs, one per feature (dated `YYYY-MM-DD-wiretap-<topic>-design.md`); the source for the matching plan. |
 | [`plans/`](plans/) | Step-by-step implementation plans written from the specs (dated `YYYY-MM-DD-wiretap-<topic>.md`). |
-| [`experiments/`](experiments/) | Measured results of experiments and live checks: `2026-10-m0-results.md` (M0, Foundry behaviour), `2026-10-m3-results.md` (M3, live MCP sessions with `claude`). |
+| [`experiments/`](experiments/) | Measured results of experiments and live checks: `2026-10-m0-results.md` (M0, Foundry behaviour), `2026-10-m3-results.md` (M3, live MCP sessions with `claude`), `2026-10-m4-keyfields.md` (M4, provenance of the compact-view key-field lists). |

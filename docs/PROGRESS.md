@@ -18,10 +18,11 @@ document, so none are stated here; the count at the time this file was written i
 | M2 Risk-gate options | Done | 2026-10-11 | `718b5b4`, `b38193d`, `4f1fcba`, `efdae9b` (protocol version 3) | gate table in `shared/gates.js`; PLAN.md section 4.6 |
 | M3 Stateful MCP sessions | Done | 2026-10-12 to 2026-10-13 | `0de73da` (sessions, registry, HTTP hardening), `1030fdb` (build output to `dist/`), `36f2b59` (skills, results, rules) | [`experiments/2026-10-m3-results.md`](experiments/2026-10-m3-results.md) (live check run 2026-10-12) |
 | M14 Script runtime and the discovery layer | Done | 2026-10-13 | `8786fdd`, `a6a9d6c`, `43b7e57`, `f7fac20` | [`PLAN.md`](PLAN.md) section 4.5 as-built note; client runtime in `src/bridge/scripts/`; user-facing skill `skills/wiretap/SKILL.md` |
+| M4 Core read tools | Done | 2026-10-13 | uncommitted at time of writing | [`PLAN.md`](PLAN.md) M4 as-built notes (phases A and B); [`experiments/2026-10-m4-keyfields.md`](experiments/2026-10-m4-keyfields.md); `list_document_types`, `get_document`, `search_documents`, `describe_schema` in `src/bridge/scripts/` |
 
-Current suite (MEASURED 2026-10-13, `npm test`): 63 test files passed, 1678 tests passed, 1 skipped (1679).
+Current suite (MEASURED 2026-10-13, `npm test`): 70 test files passed, 1823 tests passed, 1 skipped (1824). Headless e2e: 31 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless `WIRETAP_MEASURE_KEYFIELDS=1`).
 
-Next milestone in the order of PLAN.md section 5: M4.
+Next milestone in the order of PLAN.md section 5: M5.
 
 ## M0 status and deviations
 
