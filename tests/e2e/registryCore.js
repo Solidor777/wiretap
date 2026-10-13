@@ -15,21 +15,46 @@ export const E2E_PREFIX = 'Wiretap E2E ';
 export const TEST_WORLD = process.env.FOUNDRY_WORLD || 'test-titan';
 
 /**
- * The world document types a flow may create and the teardown or sweep may delete. Folders come last so their contents
- * are removed first. Every type here is a top-level world collection holding documents named by `name`.
+ * The world document types a flow may create and the teardown or sweep may delete, in deletion order: documents that
+ * point at others (chat messages, combats, settings, accounts, scenes whose tokens name actors) come first, and
+ * Folders come last so their contents are removed first. Every type here is a top-level world collection; embedded
+ * documents are never recorded because they are deleted with their parent.
  * @type {readonly string[]}
  */
 export const ALLOWED_DOCUMENT_NAMES = Object.freeze([
-   'Actor',
-   'Item',
+   'ChatMessage',
+   'Combat',
+   'Setting',
+   'User',
    'Scene',
+   'Playlist',
+   'RollTable',
    'JournalEntry',
    'Macro',
-   'RollTable',
-   'Playlist',
    'Cards',
+   'Actor',
+   'Item',
    'Folder',
 ]);
+
+/** @type {string} The key prefix of every Setting document an e2e flow creates; a Setting has no name. */
+export const E2E_SETTING_KEY_PREFIX = 'wiretap-e2e.';
+
+/**
+ * The field that carries the e2e prefix, by document type; a type not listed carries it in `name`. A chat message has
+ * no name, so its `flavor` carries it; a setting has no name, so its `key` carries the setting prefix.
+ * @type {Readonly<Record<string, { field: string, prefix: string }>>}
+ */
+export const IDENTITY_RULES = Object.freeze({
+   ChatMessage: {
+      field: 'flavor',
+      prefix: E2E_PREFIX,
+   },
+   Setting: {
+      field: 'key',
+      prefix: E2E_SETTING_KEY_PREFIX,
+   },
+});
 
 /** @type {RegExp} A Foundry document id: 16 alphanumeric characters. */
 const ID_PATTERN = /^[A-Za-z0-9]{16}$/;
@@ -42,6 +67,11 @@ const CREATED_BY_MAX_CHARS = 64;
 
 /** @type {number} The most leftovers or violations a failure message lists. */
 const REPORT_MAX = 10;
+
+/**
+ * @typedef {Record<string, { field: string, prefix: string }>} IdentityRules
+ * The field that must start with a prefix for a document of a type to count as an e2e document.
+ */
 
 /**
  * @typedef {object} RegistryEntry
@@ -182,6 +212,14 @@ function readValidRecord(file, world) {
  * @returns {Promise<string>} The world id.
  */
 export async function assertTestWorld(page, world = TEST_WORLD) {
+   // The registry deletes by name prefix, so it only runs in a world that is marked as a test world by its id, or that
+   // the environment names exactly. A human-made document named with the prefix in such a world is deleted.
+   if (!world.startsWith('test-') && process.env.WIRETAP_E2E_ALLOW_WORLD !== world) {
+      throw new Error(
+         `e2e registry refuses world '${world}': its id must start with 'test-' ` +
+            'or WIRETAP_E2E_ALLOW_WORLD must name it.',
+      );
+   }
    /** @type {string} The id of the world the page is in. */
    const actual = await page.evaluate(() => game.world.id);
    if (actual !== world) {
@@ -217,11 +255,15 @@ export async function recordDocument(page, entry, { file = DEFAULT_RECORD_FILE, 
       throw new Error(`e2e registry refuses to record a document: ${problem}.`);
    }
    await assertTestWorld(page, world);
-   /** @type {unknown} The record so far. */
-   const previous = readRecord(file);
-   /** @type {RegistryEntry[]} Earlier entries of the same world that are still pending. */
-   const kept =
-      previous !== null && recordProblem(previous, world) === null && previous.pending ? previous.entries : [];
+   // An earlier record that cannot be read, belongs to another world or is invalid may hold pending entries: it is
+   // never replaced, so the failure surfaces instead of the entries being forgotten.
+   /** @type {RegistryRecord | null} The earlier record, validated. */
+   const previous = readValidRecord(file, world);
+   /** @type {RegistryEntry[]} Earlier entries that are still pending. */
+   const kept = previous !== null && previous.pending ? previous.entries : [];
+   if (kept.length + 1 > ENTRIES_MAX) {
+      throw new Error(`e2e registry refuses to record more than ${ENTRIES_MAX} documents in one running list.`);
+   }
    writeRecord(file, {
       pending: true,
       world,
@@ -235,10 +277,11 @@ export async function recordDocument(page, entry, { file = DEFAULT_RECORD_FILE, 
 /**
  * Check, in the page, that every recorded document is still one the teardown may delete, without deleting anything.
  * Runs in the browser: it reads only its argument and the Foundry globals.
- * @param {{ entries: RegistryEntry[], prefix: string }} input - The recorded entries and the e2e name prefix.
+ * @param {{ entries: RegistryEntry[], prefix: string, rules: IdentityRules }} input
+ * - The recorded entries, the e2e name prefix and the identity rules of the types that do not carry it in `name`.
  * @returns {Promise<string[]>} One line per document that must not be deleted; empty when all are safe.
  */
-async function inspectRecorded({ entries, prefix }) {
+async function inspectRecorded({ entries, prefix, rules }) {
    /** @type {string[]} The violations found. */
    const violations = [];
    for (const entry of entries) {
@@ -253,8 +296,17 @@ async function inspectRecorded({ entries, prefix }) {
          violations.push(`${entry.uuid} is in a compendium`);
       } else if (document.parent) {
          violations.push(`${entry.uuid} is not a world document`);
-      } else if (typeof document.name !== 'string' || !document.name.startsWith(prefix)) {
-         violations.push(`${entry.uuid} is not named with the e2e prefix`);
+      } else if (document.documentName === 'User' && (document.id === game.user.id || document.isGM)) {
+         violations.push(`${entry.uuid} is the signed-in user or a game master`);
+      } else {
+         /** @type {{ field: string, prefix: string }} The field that must carry the e2e prefix. */
+         const rule = rules[entry.documentName] ?? {
+            field: 'name',
+            prefix,
+         };
+         if (typeof document[rule.field] !== 'string' || !document[rule.field].startsWith(rule.prefix)) {
+            violations.push(`${entry.uuid} is not named with the e2e prefix`);
+         }
       }
    }
    return violations;
@@ -263,18 +315,37 @@ async function inspectRecorded({ entries, prefix }) {
 /**
  * Delete the recorded documents, in the page, through `document.delete()`. Runs in the browser; every entry was
  * inspected first.
- * @param {{ entries: RegistryEntry[], order: string[] }} input - The recorded entries and the type deletion order.
+ * @param {{ entries: RegistryEntry[], order: string[], prefix: string, rules: IdentityRules }} input - The recorded
+ * entries, the type deletion order, the e2e name prefix and the identity rules.
  * @returns {Promise<void>} Resolves once the documents are gone.
+ * @throws {Error} When a document no longer passes the identity test just before its deletion.
  */
-async function deleteRecorded({ entries, order }) {
+async function deleteRecorded({ entries, order, prefix, rules }) {
    /** @type {RegistryEntry[]} The entries sorted so that each type is deleted in its place in the order. */
    const sorted = [...entries].sort((a, b) => order.indexOf(a.documentName) - order.indexOf(b.documentName));
    for (const entry of sorted) {
       /** @type {any} The resolved document, or null when it no longer exists. */
       const document = await fromUuid(entry.uuid);
-      if (document) {
-         await document.delete();
+      if (!document) {
+         continue;
       }
+      // The same test as the inspection, repeated for this document immediately before it is deleted.
+      /** @type {{ field: string, prefix: string }} The field that must carry the e2e prefix. */
+      const rule = rules[entry.documentName] ?? {
+         field: 'name',
+         prefix,
+      };
+      if (
+         document.documentName !== entry.documentName ||
+         document.pack ||
+         document.parent ||
+         typeof document[rule.field] !== 'string' ||
+         !document[rule.field].startsWith(rule.prefix) ||
+         (entry.documentName === 'User' && (document.id === game.user.id || document.isGM))
+      ) {
+         throw new Error(`${entry.uuid} is not named with the e2e prefix or is no longer a deletable world document.`);
+      }
+      await document.delete();
    }
 }
 
@@ -298,6 +369,7 @@ export async function teardownRecorded(page, { file = DEFAULT_RECORD_FILE, world
    const violations = await page.evaluate(inspectRecorded, {
       entries: record.entries,
       prefix: E2E_PREFIX,
+      rules: IDENTITY_RULES,
    });
    if (violations.length > 0) {
       throw new Error(`e2e registry refuses to delete: ${listed(violations)}. Nothing was deleted.`);
@@ -305,6 +377,8 @@ export async function teardownRecorded(page, { file = DEFAULT_RECORD_FILE, world
    await page.evaluate(deleteRecorded, {
       entries: record.entries,
       order: [...ALLOWED_DOCUMENT_NAMES],
+      prefix: E2E_PREFIX,
+      rules: IDENTITY_RULES,
    });
    writeRecord(file, {
       ...record,
@@ -317,27 +391,49 @@ export async function teardownRecorded(page, { file = DEFAULT_RECORD_FILE, world
  * Find and delete, in the page, the world documents named with the e2e prefix. Runs in the browser. A candidate is
  * deleted only when it is a world document of an allowed type; anything else named with the prefix is reported as a
  * violation and left alone.
- * @param {{ prefix: string, order: string[] }} input - The e2e name prefix and the allowed types in deletion order.
+ * @param {{ prefix: string, order: string[], rules: IdentityRules }} input - The e2e name
+ * prefix, the allowed types in deletion order and the identity rules of the types that do not carry it in `name`.
  * @returns {Promise<{ swept: string[], violations: string[] }>} The documents deleted and the ones left alone.
  */
-async function sweepPrefixed({ prefix, order }) {
+async function sweepPrefixed({ prefix, order, rules }) {
    /** @type {string[]} The documents deleted. */
    const swept = [];
    /** @type {string[]} The documents named with the prefix that were not deleted. */
    const violations = [];
+   /** @type {Array<{ document: any, line: string }>} The documents to delete, in deletion order. */
+   const doomed = [];
    for (const documentName of order) {
       /** @type {any} The world collection of this type, or undefined when the world has none. */
       const collection = game.collections.get(documentName);
+      /** @type {{ field: string, prefix: string }} The field that must carry the e2e prefix. */
+      const rule = rules[documentName] ?? {
+         field: 'name',
+         prefix,
+      };
       for (const document of [...(collection ?? [])]) {
-         if (typeof document.name !== 'string' || !document.name.startsWith(prefix)) {
+         if (typeof document[rule.field] !== 'string' || !document[rule.field].startsWith(rule.prefix)) {
             continue;
          }
-         if (document.documentName !== documentName || document.pack || document.parent) {
+         if (
+            document.documentName !== documentName ||
+            document.pack ||
+            document.parent ||
+            (documentName === 'User' && (document.id === game.user.id || document.isGM))
+         ) {
             violations.push(`${documentName} ${document.uuid}`);
             continue;
          }
+         doomed.push({
+            document,
+            line: `${documentName} ${document[rule.field]}`,
+         });
+      }
+   }
+   // Nothing is deleted when any document named with the prefix must not be.
+   if (violations.length === 0) {
+      for (const { document, line } of doomed) {
          await document.delete();
-         swept.push(`${documentName} ${document.name}`);
+         swept.push(line);
       }
    }
    return {
@@ -361,6 +457,7 @@ export async function sweepUnrecorded(page, { world = TEST_WORLD } = {}) {
    const outcome = await page.evaluate(sweepPrefixed, {
       prefix: E2E_PREFIX,
       order: [...ALLOWED_DOCUMENT_NAMES],
+      rules: IDENTITY_RULES,
    });
    if (outcome.violations.length > 0) {
       throw new Error(`e2e sweep refuses to delete: ${listed(outcome.violations)}.`);
@@ -370,16 +467,22 @@ export async function sweepUnrecorded(page, { world = TEST_WORLD } = {}) {
 
 /**
  * List, in the page, what the census counts. Runs in the browser.
- * @param {{ prefix: string, order: string[] }} input - The e2e name prefix and the world document types to scan.
+ * @param {{ prefix: string, order: string[], rules: IdentityRules }} input - The e2e name
+ * prefix, the world document types to scan and the identity rules of the types that do not carry it in `name`.
  * @returns {string[]} One line per leftover.
  */
-function countLeftovers({ prefix, order }) {
+function countLeftovers({ prefix, order, rules }) {
    /** @type {string[]} The leftovers found. */
    const found = [];
    for (const documentName of order) {
+      /** @type {{ field: string, prefix: string }} The field that must carry the e2e prefix. */
+      const rule = rules[documentName] ?? {
+         field: 'name',
+         prefix,
+      };
       for (const document of game.collections.get(documentName) ?? []) {
-         if (typeof document.name === 'string' && document.name.startsWith(prefix)) {
-            found.push(`${documentName} ${document.name}`);
+         if (typeof document[rule.field] === 'string' && document[rule.field].startsWith(rule.prefix)) {
+            found.push(`${documentName} ${document[rule.field]}`);
          }
       }
    }
@@ -409,6 +512,7 @@ export async function censusPrefixed(page, { world = TEST_WORLD } = {}) {
    return page.evaluate(countLeftovers, {
       prefix: E2E_PREFIX,
       order: [...ALLOWED_DOCUMENT_NAMES],
+      rules: IDENTITY_RULES,
    });
 }
 
