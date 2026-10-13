@@ -12,7 +12,7 @@ import {
    ENDPOINT_UNAVAILABLE,
    NOT_GM,
    NO_ENDPOINT,
-   OP_CREATE_ACTOR,
+   OP_CALL_TOOL,
    OP_FAILED,
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
@@ -92,7 +92,7 @@ describe('createFoundryBridge identify', () => {
       const acks = [];
       fire(BRIDGE_IDENTIFY, identify(), (ack) => acks.push(ack));
       expect(acks).toEqual([{ ok: true }]);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({});
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).resolves.toEqual({});
    });
 
    it('registers before acking (a call made inside the ack callback is routed)', async () => {
@@ -102,7 +102,7 @@ describe('createFoundryBridge identify', () => {
       /** @type {Promise<unknown>} The invocation started from inside the ack. */
       let invoked;
       fire(BRIDGE_IDENTIFY, identify(), () => {
-         invoked = bridge.invoke(OP_CREATE_ACTOR, {});
+         invoked = bridge.invoke(OP_CALL_TOOL, {});
       });
       await expect(invoked).resolves.toEqual({ uuid: 'Actor.x' });
    });
@@ -116,7 +116,7 @@ describe('createFoundryBridge identify', () => {
       expect(acks[0].ok).toBe(false);
       expect(acks[0].error.code).toBe(PROTOCOL_MISMATCH);
       expect(lines.some((line) => line.startsWith('Wiretap sidecar | refused identify'))).toBe(true);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
    });
 
    it('refuses a non-GM with NOT_GM and does not register', async () => {
@@ -127,7 +127,7 @@ describe('createFoundryBridge identify', () => {
       fire(BRIDGE_IDENTIFY, identify({ isGM: false }), (ack) => acks.push(ack));
       expect(acks[0]).toMatchObject({ ok: false, error: { code: NOT_GM } });
       expect(lines.some((line) => line.startsWith('Wiretap sidecar | refused identify'))).toBe(true);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
    });
 
    it('tolerates an identify with no ack callback', () => {
@@ -144,7 +144,7 @@ describe('createFoundryBridge identify', () => {
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
       fire(BRIDGE_IDENTIFY, identify({ isGM: false }), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
    });
 
    it('refuses an identify beyond the endpoint limit with ENDPOINT_LIMIT', async () => {
@@ -214,7 +214,7 @@ describe('createFoundryBridge identify', () => {
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
       fire('disconnect');
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
    });
 });
 
@@ -224,10 +224,10 @@ describe('createFoundryBridge invoke', () => {
       const { socket, fire, emitted } = makeSocket('a', () => ({ ok: true, result: { uuid: 'Actor.x' } }));
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, { name: 'Bob' })).resolves.toEqual({ uuid: 'Actor.x' });
+      await expect(bridge.invoke(OP_CALL_TOOL, { name: 'Bob' })).resolves.toEqual({ uuid: 'Actor.x' });
       expect(emitted[0].event).toBe(BRIDGE_INVOKE);
       expect(emitted[0].payload).toEqual({
-         op: OP_CREATE_ACTOR,
+         op: OP_CALL_TOOL,
          params: { name: 'Bob' },
          requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
       });
@@ -238,7 +238,7 @@ describe('createFoundryBridge invoke', () => {
       const { socket, fire } = makeSocket('a', () => ({ ok: false, error: { message: 'Unknown actor type' } }));
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({
          code: OP_FAILED,
          message: 'Unknown actor type',
       });
@@ -249,7 +249,7 @@ describe('createFoundryBridge invoke', () => {
       const { socket, fire } = makeSocket('a', () => 'timeout');
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
    });
 
    it('keeps servicing invocations when one of several endpoints disconnects', async () => {
@@ -261,7 +261,7 @@ describe('createFoundryBridge invoke', () => {
       first.fire(BRIDGE_IDENTIFY, identify({ userId: 'u1' }), () => undefined);
       second.fire(BRIDGE_IDENTIFY, identify({ userId: 'u2' }), () => undefined);
       first.fire('disconnect');
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ uuid: 'Actor.second' });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).resolves.toEqual({ uuid: 'Actor.second' });
    });
 
    it('logs the same requestId the endpoint receives', async () => {
@@ -269,7 +269,7 @@ describe('createFoundryBridge invoke', () => {
       const { socket, fire, emitted } = makeSocket('a', () => ({ ok: true, result: {} }));
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
-      await bridge.invoke(OP_CREATE_ACTOR, {});
+      await bridge.invoke(OP_CALL_TOOL, {});
       expect(lines.some((line) => line.includes(emitted[0].payload.requestId))).toBe(true);
    });
 
@@ -285,12 +285,12 @@ describe('createFoundryBridge invoke', () => {
       });
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify({ kind: 'human' }), () => undefined);
-      const pending = bridge.invoke(OP_CREATE_ACTOR, {});
+      const pending = bridge.invoke(OP_CALL_TOOL, {});
       fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
       complete({ ok: true, result: { uuid: 'Actor.late' } });
       await expect(pending).resolves.toEqual({ uuid: 'Actor.late' });
       socket.timeout = makeSocket('b', () => ({ ok: true, result: { uuid: 'Actor.next' } })).socket.timeout;
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).resolves.toEqual({
+      await expect(bridge.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' })).resolves.toEqual({
          uuid: 'Actor.next',
       });
    });
@@ -300,7 +300,7 @@ describe('createFoundryBridge invoke', () => {
       const { socket, fire } = makeSocket('a', () => 'hang');
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
-      const pending = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const pending = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       fire('disconnect');
       await expect(pending).resolves.toMatchObject({ code: ENDPOINT_GONE });
       expect(lines.some((line) => line.includes('disconnected'))).toBe(true);
@@ -311,7 +311,7 @@ describe('createFoundryBridge invoke', () => {
       const { socket, fire } = makeSocket('a', () => 'throw');
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
       expect(lines.some((line) => line.includes('write after end'))).toBe(true);
    });
 
@@ -328,7 +328,7 @@ describe('createFoundryBridge invoke', () => {
          fire(BRIDGE_IDENTIFY, identify(), () => undefined);
          /** @type {unknown} The settled outcome of the invoke, once it settles. */
          let outcome;
-         const pending = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => {
+         const pending = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => {
             outcome = error;
          });
          expect(emitted[0].timeoutMs).toBe(10_000);
@@ -350,7 +350,7 @@ describe('createFoundryBridge invoke', () => {
       const { socket, fire } = makeSocket('a', () => ack);
       bridge.handleConnection(socket);
       fire(BRIDGE_IDENTIFY, identify(), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: OP_FAILED });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: OP_FAILED });
    });
 
    it('routes to the agent endpoint first and honours the endpoint override without fallback', async () => {
@@ -360,12 +360,12 @@ describe('createFoundryBridge invoke', () => {
       bridge.handleConnection(human.socket);
       bridge.handleConnection(agent.socket);
       human.fire(BRIDGE_IDENTIFY, identify({ kind: 'human' }), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).rejects.toMatchObject({
+      await expect(bridge.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' })).rejects.toMatchObject({
          code: NO_ENDPOINT,
       });
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ who: 'agent' });
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'human' })).resolves.toEqual({ who: 'human' });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).resolves.toEqual({ who: 'agent' });
+      await expect(bridge.invoke(OP_CALL_TOOL, {}, { endpoint: 'human' })).resolves.toEqual({ who: 'human' });
    });
 });
 
@@ -408,13 +408,13 @@ describe('createFoundryBridge endpoint health', () => {
       const agent = makeSocket('a', () => 'timer');
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(await first).toMatchObject({ code: ENDPOINT_TIMEOUT });
       const pings = agent.emitted.filter((entry) => entry.event === BRIDGE_PING);
       expect(pings).toHaveLength(1);
       expect(pings[0].timeoutMs).toBe(1_000);
-      const second = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const second = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(await second).toMatchObject({ code: ENDPOINT_TIMEOUT });
       expect(count(agent.emitted, BRIDGE_INVOKE)).toBe(2);
@@ -432,11 +432,11 @@ describe('createFoundryBridge endpoint health', () => {
       bridge.handleConnection(human.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent', userId: 'ua' }), () => undefined);
       human.fire(BRIDGE_IDENTIFY, identify({ kind: 'human', userId: 'uh' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(10_000);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(await first).toMatchObject({ code: ENDPOINT_TIMEOUT });
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ who: 'human' });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).resolves.toEqual({ who: 'human' });
       expect(count(agent.emitted, BRIDGE_INVOKE)).toBe(1);
    });
 
@@ -449,10 +449,10 @@ describe('createFoundryBridge endpoint health', () => {
       );
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(11_000);
       await first;
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
    });
 
    it('restores an unresponsive endpoint when a later 5 second probe is acked', async () => {
@@ -466,14 +466,14 @@ describe('createFoundryBridge endpoint health', () => {
       );
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(11_000);
       await first;
       expect(vi.getTimerCount()).toBe(1);
       state.answer = true;
       await vi.advanceTimersByTimeAsync(5_000);
       expect(vi.getTimerCount()).toBe(0);
-      const second = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const second = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(await second).toMatchObject({ code: ENDPOINT_TIMEOUT });
       expect(count(agent.emitted, BRIDGE_INVOKE)).toBe(2);
@@ -488,7 +488,7 @@ describe('createFoundryBridge endpoint health', () => {
       );
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(11_000);
       await first;
       expect(vi.getTimerCount()).toBe(1);
@@ -505,7 +505,7 @@ describe('createFoundryBridge endpoint health', () => {
       );
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(11_000);
       await first;
       bridge.dispose();
@@ -524,10 +524,10 @@ describe('createFoundryBridge endpoint health', () => {
       );
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(10_000);
       await first;
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
    });
 
    it('keeps an unresponsive endpoint skipped, with one probe, when its socket identifies again', async () => {
@@ -541,16 +541,16 @@ describe('createFoundryBridge endpoint health', () => {
       );
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(11_000);
       await first;
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
+      await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
       expect(vi.getTimerCount()).toBe(1);
       state.answer = true;
       await vi.advanceTimersByTimeAsync(5_000);
       expect(vi.getTimerCount()).toBe(0);
-      const second = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const second = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(await second).toMatchObject({ code: ENDPOINT_TIMEOUT });
    });
@@ -564,7 +564,7 @@ describe('createFoundryBridge endpoint health', () => {
       );
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(11_000);
       await first;
       expect(vi.getTimerCount()).toBe(1);
@@ -586,7 +586,7 @@ describe('createFoundryBridge endpoint health', () => {
       );
       bridge.handleConnection(agent.socket);
       agent.fire(BRIDGE_IDENTIFY, identify({ kind: 'agent' }), () => undefined);
-      const first = bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await vi.advanceTimersByTimeAsync(11_000);
       await first;
       // 11 probes fire at 5 s intervals inside the same 60 s window as the first failed ping.

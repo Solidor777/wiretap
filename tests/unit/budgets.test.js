@@ -21,6 +21,12 @@ const EXPECTED = [
       'hard',
    ],
    [
+      'SCRIPT_VERSION_MAX_CHARS',
+      32,
+      'chars',
+      'hard',
+   ],
+   [
       'DEFINITION_MAX_BYTES',
       800,
       'bytes',
@@ -203,6 +209,23 @@ const EXPECTED = [
    [
       'PATH_SEGMENTS_MAX',
       16,
+      'count',
+      'hard',
+   ],   [
+      'SCHEMA_ARRAY_ITEMS_MAX',
+      1000,
+      'count',
+      'hard',
+   ],
+   [
+      'REGISTRY_PUSHES_PER_SECOND_MAX',
+      2,
+      'count',
+      'hard',
+   ],
+   [
+      'SCRIPT_CONCURRENCY_MAX',
+      8,
       'count',
       'hard',
    ],

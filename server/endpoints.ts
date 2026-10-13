@@ -92,8 +92,9 @@ export interface EndpointRegistry {
    setHealth: (socketId: string, health: EndpointHealth) => void;
    // Replaces a registered socket's gate snapshot (already sanitized); ignored for an unregistered socket.
    setGateState: (socketId: string, gateState: GateState) => void;
-   // Finds the earliest-registered healthy endpoint of a kind.
-   firstOfKind: (kind: EndpointKind) => Endpoint | undefined;
+   // Finds the earliest-registered healthy endpoint of a kind; with `dom: true` only endpoints that identified as able
+   // to run DOM scripts qualify.
+   firstOfKind: (kind: EndpointKind, options?: { dom?: boolean }) => Endpoint | undefined;
    // Replaces a registered socket's tools (already sanitized); ignored for an unregistered socket.
    setTools: (socketId: string, tools: RegistryTool[]) => void;
    // Calls the listener after every change that can alter which endpoint a call reaches or which tools it lists:
@@ -157,6 +158,11 @@ export interface RouterDeps {
 // An agent runner's own browser serves agent calls ahead of a person's tab, so an agent session never competes with
 // the person for the tab they are using. This is the only place the order is defined; README.md documents it.
 export const ROUTE_ORDER: readonly EndpointKind[] = ['agent', 'human'];
+
+// The endpoint kinds a script that `requires` the DOM routes to by default: only the agent endpoint, because a person's
+// tab is where they are working and a DOM script (opening sheets, measuring layout) would disturb it. A session that
+// restricts its endpoint kind (`?endpoint=human`) overrides this and is then routed to that kind alone.
+export const DOM_ROUTE_ORDER: readonly EndpointKind[] = ['agent'];
 
 // Milliseconds between probes of an unresponsive endpoint: restores a recovered tab within seconds while a stuck tab
 // receives at most 12 pings a minute.
@@ -381,10 +387,14 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       /**
        * Find the earliest-registered healthy endpoint of a kind.
        * @param {EndpointKind} kind - The endpoint kind.
-       * @returns {Endpoint | undefined} The endpoint, or undefined when no healthy endpoint of the kind is registered.
+       * @param {{ dom?: boolean }} [options] - `dom: true` skips endpoints that cannot run DOM scripts.
+       * @returns {Endpoint | undefined} The endpoint, or undefined when no healthy matching endpoint is registered.
        */
-      firstOfKind(kind: EndpointKind): Endpoint | undefined {
-         return [...endpoints.values()].find((endpoint) => endpoint.kind === kind && endpoint.health === 'healthy');
+      firstOfKind(kind: EndpointKind, options: { dom?: boolean } = {}): Endpoint | undefined {
+         return [...endpoints.values()].find(
+            (endpoint) =>
+               endpoint.kind === kind && endpoint.health === 'healthy' && (options.dom !== true || endpoint.dom),
+         );
       },
 
       /**
@@ -416,9 +426,9 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
 }
 
 /**
- * Validate a `bridge:identify` payload: protocol version 3, well-formed fields within the size limits (`userId` at
- * most 64 bytes, `userName` at most 128 bytes), and a GM user. The optional `gateState` is sanitized, never refused:
- * an absent or invalid value yields the all-closed snapshot.
+ * Validate a `bridge:identify` payload: the current protocol version, well-formed fields within the size limits
+ * (`userId` at most 64 bytes, `userName` at most 128 bytes), and a GM user. The optional `gateState` is sanitized,
+ * never refused: an absent or invalid value yields the all-closed snapshot.
  * @param {unknown} payload - The payload received from the socket.
  * @returns {IdentifyResult} The identity to register, or the refusal (PROTOCOL_MISMATCH for a wrong version, a
  *          malformed field or an over-long field, NOT_GM for a non-GM user).
@@ -562,9 +572,26 @@ export function formatBridgeError(error: BridgeError): string {
 /**
  * Build the NO_ENDPOINT error for a request.
  * @param {EndpointKind} [kind] - The restricted kind when the call carried an `endpoint` override.
+ * @param {boolean} [dom] - Whether the call needs a DOM-capable endpoint; the message then names the DOM requirement
+ *        and the kind that was looked for (the agent kind unless the session restricted it).
  * @returns {BridgeError} The error, its message bounded to 256 bytes.
  */
-function noEndpoint(kind?: EndpointKind): BridgeError {
+function noEndpoint(kind?: EndpointKind, dom: boolean = false): BridgeError {
+   if (dom) {
+      // The kind the DOM script was routed to.
+      const wanted: EndpointKind = kind ?? 'agent';
+      return new BridgeError(
+         NO_ENDPOINT,
+         truncateUtf8(
+            `No DOM-capable '${wanted}' GM endpoint is connected: ${
+               wanted === 'agent'
+                  ? 'enable an agent, or restrict this session to a human tab with ?endpoint=human'
+                  : 'open a GM tab in Foundry with Wiretap enabled'
+            }.`,
+            MAX_NO_ENDPOINT_BYTES,
+         ),
+      );
+   }
    const message: string =
       kind === undefined
          ? 'No Foundry GM endpoint is connected: open a GM tab in Foundry with Wiretap enabled, or enable an agent.'
@@ -715,16 +742,22 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
    // pick for display only.
    /**
     * Choose the endpoint a call with these options would reach: the first healthy endpoint of the first eligible
-    * kind.
+    * kind. A call that needs the DOM considers the agent kind only (unless restricted) and only DOM-capable endpoints.
     * @param {InvokeOptions} options - `endpoint` restricts the choice to one kind with no fallback.
+    * @param {boolean} [dom] - Whether the call needs a DOM-capable endpoint.
     * @returns {{ endpoint: Endpoint | undefined, kinds: readonly EndpointKind[] }} The endpoint (undefined when none
     *          is healthy) and the eligible kinds.
     */
-   function pick(options: InvokeOptions): { endpoint: Endpoint | undefined; kinds: readonly EndpointKind[] } {
-      const kinds: readonly EndpointKind[] = options.endpoint === undefined ? ROUTE_ORDER : [options.endpoint];
+   function pick(
+      options: InvokeOptions,
+      dom: boolean = false,
+   ): { endpoint: Endpoint | undefined; kinds: readonly EndpointKind[] } {
+      // The kinds to try: the restricted kind alone, else the route order of this kind of call.
+      const kinds: readonly EndpointKind[] =
+         options.endpoint === undefined ? (dom ? DOM_ROUTE_ORDER : ROUTE_ORDER) : [options.endpoint];
       let endpoint: Endpoint | undefined;
       for (const kind of kinds) {
-         endpoint = registry.firstOfKind(kind);
+         endpoint = registry.firstOfKind(kind, { dom });
          if (endpoint) {
             break;
          }
@@ -749,11 +782,16 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       options: InvokeOptions,
       listed?: RegistryTool,
    ): Promise<{ result: unknown; tool?: RegistryTool }> {
-      const { endpoint, kinds } = pick(options);
+      // Whether the call is a registry tool call for a script that needs the DOM.
+      const dom: boolean = listed?.requires === 'dom';
+      const { endpoint, kinds } = pick(options, dom);
       if (!endpoint) {
-         // No healthy endpoint of an eligible kind: unresponsive ones that are still connected make it UNAVAILABLE.
-         const stuck: boolean = registry.list().some((candidate) => kinds.includes(candidate.kind));
-         throw stuck ? endpointUnavailable(options.endpoint) : noEndpoint(options.endpoint);
+         // No healthy matching endpoint of an eligible kind: unresponsive ones that are still connected and could have
+         // served the call make it UNAVAILABLE.
+         const stuck: boolean = registry
+            .list()
+            .some((candidate) => kinds.includes(candidate.kind) && (!dom || candidate.dom));
+         throw stuck ? endpointUnavailable(options.endpoint) : noEndpoint(options.endpoint, dom);
       }
       // The gate to judge: the picked endpoint's own declaration of the tool for a registry tool call.
       let requireGate: RequiredGate | undefined = options.requireGate;
@@ -769,6 +807,13 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
             throw new BridgeError(
                GATE_DENIED,
                'The endpoint declares a different gate for this tool than the one listed; list the tools again.',
+            );
+         }
+         if (declared.requires !== listed.requires || declared.mutates !== listed.mutates) {
+            // The caller routed on the listed requirements and told the client the listed read-only hint.
+            throw new BridgeError(
+               TOOL_GONE,
+               'The endpoint now declares different requirements for this tool; list the tools again.',
             );
          }
          if (declared.schemaSignature !== listed.schemaSignature) {

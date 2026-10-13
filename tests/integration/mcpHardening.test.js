@@ -8,6 +8,7 @@ import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/typ
 import { INITIALIZE, raw } from './mcpHttp.js';
 import { createHarness, entry, rawSocket } from './mcpHarness.js';
 import { sanitizeRegistry } from '../../server/toolRegistry.ts';
+import { registryPayload } from '../unit/scriptFixtures.js';
 import { GATE_DENIED, TOOL_GONE } from '../../shared/protocol.js';
 
 /**
@@ -97,7 +98,7 @@ describe('MCP HTTP hardening and session robustness', () => {
          });
          expect(res.status).toBe(413);
          expect(harness.mcp().sessions()).toBe(1);
-         expect(await harness.toolNames(client)).toContain('create_actor');
+         expect(await harness.toolNames(client)).toContain('read_handle');
       });
 
       it('refuses a chunked body that grows past the limit with 413', async () => {
@@ -336,10 +337,7 @@ describe('MCP HTTP hardening and session robustness', () => {
          });
          await gm.register([entry('boom')]);
          await expect.poll(() => harness.mcp().sessions(), { timeout: 1000 }).toBe(1);
-         expect(await harness.toolNames(agent.client)).toEqual([
-            'create_actor',
-            'read_handle',
-         ]);
+         expect(await harness.toolNames(agent.client)).toEqual(['read_handle']);
          await expect(human.client.listTools()).rejects.toThrow();
          const line = harness.logs().find((text) => text.includes('tool sync failed, ending it'));
          expect(line).toBeDefined();
@@ -375,7 +373,6 @@ describe('MCP HTTP hardening and session robustness', () => {
          /** @type {number} How many times the bridge was asked for tools. */
          let asked = 0;
          return {
-            invoke: async () => 'unused',
             invokeTool: async () => ({
                result: 'unused',
                tool,
@@ -390,18 +387,17 @@ describe('MCP HTTP hardening and session robustness', () => {
       }
 
       it('lists a tool registered between creating a session and holding it', async () => {
-         const [tool] = sanitizeRegistry([entry('late_tool')], () => undefined).tools;
+         const [tool] = sanitizeRegistry(registryPayload([entry('late_tool')]), () => undefined).tools;
          await harness.start({ bridge: lateBridge(tool) });
          const { client } = await harness.connectClient();
          expect(await harness.toolNames(client)).toEqual([
-            'create_actor',
             'late_tool',
             'read_handle',
          ]);
       });
 
       it('fails the initialize and ends the session when the sync right after holding it throws', async () => {
-         const [tool] = sanitizeRegistry([entry('late_tool')], () => undefined).tools;
+         const [tool] = sanitizeRegistry(registryPayload([entry('late_tool')]), () => undefined).tools;
          await harness.start({ bridge: lateBridge(tool) });
          const original = McpServer.prototype.registerTool;
          vi.spyOn(McpServer.prototype, 'registerTool').mockImplementation(function (name, ...rest) {
@@ -527,7 +523,7 @@ describe('MCP HTTP hardening and session robustness', () => {
       it('applies the budget the picked endpoint declares, not the listed one', async () => {
          await harness.start({ sessions: STALE });
          const human = await harness.connectGm({ kind: 'human' });
-         await human.register([entry('reader', { budgetBytes: 16_000 })]);
+         await human.register([entry('reader', { result: { budgetBytes: 16_000 } })]);
          const { client } = await harness.connectClient();
          expect(await harness.toolNames(client)).toContain('reader');
          const agent = await harness.connectGm({
@@ -537,7 +533,7 @@ describe('MCP HTTP hardening and session robustness', () => {
                result: 'q'.repeat(300),
             }),
          });
-         await agent.register([entry('reader', { budgetBytes: 50 })]);
+         await agent.register([entry('reader', { result: { budgetBytes: 50 } })]);
          const result = await client.callTool({
             name: 'reader',
             arguments: { text: 'go' },

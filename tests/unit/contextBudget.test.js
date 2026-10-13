@@ -6,6 +6,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { z } from 'zod';
 import { WIRETAP_INSTRUCTIONS } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
+import { RESERVED_SCRIPT_NAMES } from '../../shared/scripts.js';
 import {
    FIXTURES,
    HELPER_TOOL_NAME,
@@ -17,6 +18,13 @@ import {
    textBytes,
    trivialFixture,
 } from './contextBudgetHarness.js';
+
+/**
+ * A skills directory that does not exist, so a test of the tool-count boundary is not also a test of the shipped skill's
+ * tool mentions (the default-root tests below check those against the real tool list).
+ * @type {string}
+ */
+const NO_SKILLS_ROOT = path.join(import.meta.dirname, '..', '..', 'test', 'tmp', 'no-such-skills');
 
 /** @type {number} Counter that makes each scratch skills root unique within this process. */
 let scratchCounter = 0;
@@ -235,10 +243,11 @@ describe('context budgets of the real MCP server', () => {
       });
 
       it('fails a 31st tool', async () => {
-         /** @type {number} The tools the module ships, which the helper tool does not add to. */
-         const shipped = (await reportWith([])).totals.count;
-         await harness.close();
-         harness = undefined;
+         /**
+          * @type {number} The tools the sidecar itself lists. Fillers fill the fixed-name room, so no registry script
+          * (create_actor included) is listed beside them.
+          */
+         const shipped = RESERVED_SCRIPT_NAMES.length;
          /** @type {number} Fillers that bring the counted tools to one over the maximum. */
          const fillers = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - shipped + 1;
          /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of the fillers. */
@@ -248,16 +257,17 @@ describe('context budgets of the real MCP server', () => {
             fixtures[name] = trivialFixture(name);
             return makeTool(name, 'Short.');
          });
-         const report = await reportWith(extra, fixtures);
+         const report = await reportWith(extra, fixtures, NO_SKILLS_ROOT);
          expect(report.totals.count).toBe(31);
          expect(report.failures).toEqual(['tool list: tool count is 31, at most 30 (ALWAYS_LISTED_TOOLS_MAX)']);
       });
 
       it('does not count the helper tool toward the tool count, but counts the tools under test', async () => {
-         /** @type {number} The tools the module ships. */
-         const shipped = (await reportWith([])).totals.count;
-         await harness.close();
-         harness = undefined;
+         /**
+          * @type {number} The tools the sidecar itself lists. Fillers fill the fixed-name room, so no registry script
+          * (create_actor included) is listed beside them.
+          */
+         const shipped = RESERVED_SCRIPT_NAMES.length;
          /** @type {number} Fillers that bring the counted tools exactly to the maximum. */
          const fillers = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - shipped;
          /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of the fillers. */
@@ -267,7 +277,7 @@ describe('context budgets of the real MCP server', () => {
             fixtures[name] = trivialFixture(name);
             return makeTool(name, 'Short.');
          });
-         const report = await reportWith(extra, fixtures);
+         const report = await reportWith(extra, fixtures, NO_SKILLS_ROOT);
          expect(report.listing).toHaveLength(31);
          expect(report.totals.count).toBe(30);
          expect(report.helperTotals.count).toBe(1);
@@ -389,7 +399,7 @@ describe('context budgets of the real MCP server', () => {
          const changed = harness.nextToolListChange();
          expect(await harness.registerTools([registryEntry('registry_late')])).toEqual({
             ok: true,
-            accepted: 1,
+            accepted: 2,
             refused: 0,
          });
          await changed;
@@ -403,7 +413,7 @@ describe('context budgets of the real MCP server', () => {
       it('fails a late tool whose result is over its budget', async () => {
          harness = await startHarness();
          const changed = harness.nextToolListChange();
-         await harness.registerTools([registryEntry('registry_late', { budgetBytes: 2000 })]);
+         await harness.registerTools([registryEntry('registry_late', { result: { budgetBytes: 2000 } })]);
          await changed;
          const report = await reportOn({
             registry_late: [
@@ -436,9 +446,9 @@ describe('context budgets of the real MCP server', () => {
          const changed = harness.nextToolListChange();
          const ack = await harness.registerTools(names.map((name) => registryEntry(name)));
          await changed;
-         const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - 2;
+         const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
          expect(ack.accepted).toBe(room);
-         expect(ack.refused).toBe(40 - room);
+         expect(ack.refused).toBe(40 + 1 - room);
          /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of all 40 tools. */
          const fixtures = Object.fromEntries(names.map((name) => [
             name,
@@ -473,7 +483,7 @@ describe('context budgets of the real MCP server', () => {
          ]);
          expect(ack).toEqual({
             ok: true,
-            accepted: 0,
+            accepted: 1,
             refused: 3,
          });
          expect((await reportOn({})).totals.count).toBe(2);
@@ -489,10 +499,7 @@ describe('context budgets of the real MCP server', () => {
          expect(instructions.length).toBeLessThanOrEqual(getBudget('INSTRUCTIONS_MAX_CHARS').value);
          /** @type {string[]} The tools the instructions point to. */
          const mentioned = findToolMentions(instructions);
-         expect(mentioned).toEqual([
-            'create_actor',
-            'read_handle',
-         ]);
+         expect(mentioned).toEqual(['read_handle']);
          /** @type {string[]} The tools the server lists. */
          const listed = (await harness.client.listTools()).tools.map((tool) => tool.name);
          for (const name of mentioned) {

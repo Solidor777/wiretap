@@ -17,6 +17,7 @@ import { createWiretapServer } from '../../server/server.ts';
 import { startMcpServer } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
 import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, BRIDGE_REGISTRY, PROTOCOL_VERSION } from '../../shared/protocol.js';
+import { createActorScript, registryPayload, script } from './scriptFixtures.js';
 
 /**
  * @typedef {object} GmAck
@@ -301,34 +302,36 @@ export const FIXTURES = {
 };
 
 /**
- * Build the registry entry of a synthetic tool a fake GM client registers through `bridge:registry`.
+ * Build the script definition of a synthetic tool a fake GM client registers through `bridge:registry`.
  * @param {string} name - The tool name.
  * @param {object} [overrides] - Fields replacing the defaults.
- * @returns {object} An entry a fake GM client can send in a registry event.
+ * @returns {object} A definition a fake GM client can send in a registry event.
  */
 export function registryEntry(name, overrides = {}) {
-   return {
-      name,
+   return script(name, {
       description: `Synthetic registry tool ${name}.`,
       inputSchema: {
          type: 'object',
          properties: { text: { type: 'string' } },
       },
       ...overrides,
-   };
+   });
 }
 
 /**
  * Start the sidecar bridge with a fake GM client, an MCP server and a connected SDK client. The server lists the
- * built-in tools, the test-local helper tool, `extraTools`, and the tools the fake GM client registers: those in
- * `registry` before the session starts, and later ones through the returned `registerTools`.
+ * built-in `read_handle`, the test-local helper tool, `extraTools`, and the scripts the fake GM client registers: the
+ * `create_actor` script and those in `registry` before the session starts, and later ones through the returned
+ * `registerTools`.
  * @param {object} [options] - What to register.
  * @param {import('../../server/mcp.ts').ToolRegistration[]} [options.tools] - Tools registered after the helper tool.
  * @param {string} [options.instructions] - The server instructions text; the production text when absent.
- * @param {object[]} [options.registry] - Registry entries the fake GM client sends before the SDK client connects.
+ * @param {object[]} [options.registry] - Script definitions the fake GM client sends, beside `create_actor`, before the
+ * SDK client connects.
  * @returns {Promise<{ client: Client, setGmAck: Function, registerTools: Function, nextToolListChange: Function,
  * close: Function }>} The client, the control for the fake GM client's answers, `registerTools(entries)` (sends a
- * registry and resolves with its ack), `nextToolListChange()` (resolves when the client receives its next
+ * registry of `create_actor` plus the entries and resolves with its ack, which counts `create_actor` too),
+ * `nextToolListChange()` (resolves when the client receives its next
  * `notifications/tools/list_changed`, rejects after one second) and the teardown.
  */
 export async function startHarness({ tools = [], instructions, registry } = {}) {
@@ -370,9 +373,7 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
          kind: 'human',
          dom: true,
       });
-      if (registry !== undefined) {
-         await gm.emitWithAck(BRIDGE_REGISTRY, registry);
-      }
+      await gm.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript(), ...(registry ?? [])]));
       /** @type {ReturnType<typeof startMcpServer>} The MCP server under test. */
       const mcp = startMcpServer(server.bridge, 0, {
          tools: [
@@ -406,7 +407,10 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
          setGmAck: (ack) => {
             gmAck = ack;
          },
-         registerTools: (entries) => gm.emitWithAck(BRIDGE_REGISTRY, entries),
+         registerTools: (entries) => gm.emitWithAck(
+            BRIDGE_REGISTRY,
+            registryPayload([createActorScript(), ...entries]),
+         ),
          nextToolListChange: () => new Promise((resolve, reject) => {
             waiters.push(resolve);
             setTimeout(() => reject(new Error('no tools/list_changed within 1000 ms')), 1000).unref();

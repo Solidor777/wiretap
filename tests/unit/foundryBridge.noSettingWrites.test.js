@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { initFoundryBridge } from '~/bridge/foundryBridge.js';
-import { BRIDGE_INVOKE, OP_CREATE_ACTOR, OP_FAILED } from '$shared/protocol.js';
+import { BRIDGE_INVOKE, OP_CALL_TOOL, OP_FAILED } from '$shared/protocol.js';
+import { registerShippedScripts } from '~/bridge/scripts/index.js';
+import { createScriptRegistry } from '~/bridge/scripts/registry.js';
 
 /**
  * Build a fake Socket.IO socket whose handlers can be fired.
@@ -16,6 +18,16 @@ function makeFakeSocket() {
       emit() {},
       fire: (event, ...args) => Promise.all((handlers[event] ?? []).map((fn) => fn(...args))),
    };
+}
+
+/**
+ * Build a script registry that holds the shipped scripts.
+ * @returns {ReturnType<typeof createScriptRegistry>} A registry the shipped scripts registered on.
+ */
+function shippedRegistry() {
+   const registry = createScriptRegistry({ log: () => {} });
+   registerShippedScripts(registry);
+   return registry;
 }
 
 /** @type {import('vitest').Mock} Spy on every settings write the fake game could perform. */
@@ -74,7 +86,7 @@ describe('bridge ops cannot write settings', () => {
       'acks the op %s as unknown and writes nothing',
       async (op) => {
          const socket = makeFakeSocket();
-         initFoundryBridge({ onSocket: (listener) => listener(socket) });
+         initFoundryBridge({ onSocket: (listener) => listener(socket) }, { scripts: shippedRegistry() });
          const ack = vi.fn();
          await socket.fire(
             BRIDGE_INVOKE,
@@ -92,22 +104,33 @@ describe('bridge ops cannot write settings', () => {
       },
    );
 
-   it('passes only name and type from create_actor params to the world, never a setting key or value', async () => {
+   it('passes only name and type from create_actor arguments to the world, never a setting key or value', async () => {
       const socket = makeFakeSocket();
-      initFoundryBridge({ onSocket: (listener) => listener(socket) });
+      initFoundryBridge({ onSocket: (listener) => listener(socket) }, { scripts: shippedRegistry() });
       const ack = vi.fn();
       await socket.fire(
          BRIDGE_INVOKE,
          {
-            op: OP_CREATE_ACTOR,
+            op: OP_CALL_TOOL,
             params: {
-               name: 'X',
-               key: 'wiretap.allowMacroExecution',
-               value: true,
+               name: 'create_actor',
+               arguments: {
+                  name: 'X',
+                  key: 'wiretap.allowMacroExecution',
+                  value: true,
+               },
             },
          },
          ack,
       );
+      expect(ack).toHaveBeenCalledWith({
+         ok: true,
+         result: {
+            uuid: 'Actor.1',
+            name: 'X',
+            type: 'character',
+         },
+      });
       expect(globalThis.Actor.create).toHaveBeenCalledWith({
          name: 'X',
          type: 'character',

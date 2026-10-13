@@ -9,6 +9,7 @@ import {
    NOT_GM,
    OP_FAILED,
 } from '../shared/protocol.js';
+import { getBudget } from '../shared/budgets.js';
 import { closedGateState, sanitizeGateState, type GateState } from '../shared/gates.js';
 import {
    EndpointGoneError,
@@ -61,6 +62,21 @@ const HEALTH_LOG_WINDOW_MS: number = 60_000;
 
 // Maximum endpoint-health log lines inside one window, across all endpoints.
 const HEALTH_LOG_LIMIT: number = 10;
+
+// Length of the window in which one socket may push at most `REGISTRY_PUSHES_PER_SECOND_MAX` registries, in ms.
+const REGISTRY_PUSH_WINDOW_MS: number = 1000;
+
+/** The push-rate state of one socket's `bridge:registry` events. */
+interface RegistryPushState {
+   // When the current window began, in the bridge clock's milliseconds.
+   windowStart: number;
+   // Registries applied in the current window.
+   applied: number;
+   // The latest registry received past the limit, applied when the window ends.
+   deferred?: { payload: unknown; ack: unknown };
+   // The timer that applies the deferred registry.
+   timer?: ReturnType<typeof setTimeout>;
+}
 
 /** The injectable collaborators of the bridge. */
 export interface FoundryBridgeOptions {
@@ -225,8 +241,9 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    }
 
    /**
-    * Apply a `bridge:registry` payload to a registered endpoint and ack the outcome. A payload that is not an array,
-    * or one whose processing throws, clears the endpoint's tools (fail closed) and acks OP_FAILED.
+    * Apply a `bridge:registry` payload (`{ apiVersion, scripts }`) to a registered endpoint and ack the outcome. A
+    * payload that is not a registry object of the current api version, or one whose processing throws, clears the
+    * endpoint's tools (fail closed) and acks OP_FAILED.
     * @param {Socket} socket - The sending socket.
     * @param {unknown} payload - The untrusted payload.
     * @param {unknown} ack - The ack callback, if any.
@@ -277,6 +294,88 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       }
    }
 
+   // The push-rate state of each socket that has pushed a registry, keyed by socket id.
+   const pushStates: Map<string, RegistryPushState> = new Map();
+
+   /**
+    * Cancel a socket's deferred registry and forget its push-rate state.
+    * @param {string} socketId - The socket id.
+    * @returns {void}
+    */
+   function forgetPushState(socketId: string): void {
+      const state: RegistryPushState | undefined = pushStates.get(socketId);
+      if (state?.timer !== undefined) {
+         clearTimeout(state.timer);
+      }
+      pushStates.delete(socketId);
+   }
+
+   /**
+    * Apply a `bridge:registry` push subject to the per-socket rate limit. Up to `REGISTRY_PUSHES_PER_SECOND_MAX`
+    * pushes per window apply at once; a later push replaces the deferred one (the replaced push is acked
+    * `{ ok: true, coalesced: true }`) and the latest is applied when the window ends. A push from a socket that is not
+    * a registered endpoint is refused by `applyRegistry` at once and never deferred. The limit bounds the conversion
+    * work a hostile endpoint can cause, since each applied push re-validates the whole registry.
+    * @param {Socket} socket - The sending socket.
+    * @param {unknown} payload - The untrusted payload.
+    * @param {unknown} ack - The ack callback, if any.
+    * @returns {void}
+    */
+   function pushRegistry(socket: Socket, payload: unknown, ack: unknown): void {
+      if (registry.get(socket.id) === undefined) {
+         applyRegistry(socket, payload, ack);
+         return;
+      }
+      // The current time on the bridge clock.
+      const at: number = now();
+      let state: RegistryPushState | undefined = pushStates.get(socket.id);
+      if (state === undefined) {
+         state = {
+            windowStart: at,
+            applied: 0,
+         };
+         pushStates.set(socket.id, state);
+      }
+      if (at - state.windowStart >= REGISTRY_PUSH_WINDOW_MS && state.deferred === undefined) {
+         state.windowStart = at;
+         state.applied = 0;
+      }
+      if (state.applied < getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value && state.deferred === undefined) {
+         state.applied += 1;
+         applyRegistry(socket, payload, ack);
+         return;
+      }
+      if (state.deferred !== undefined) {
+         reply(state.deferred.ack, {
+            ok: true,
+            coalesced: true,
+         });
+      }
+      state.deferred = {
+         payload,
+         ack,
+      };
+      if (state.timer === undefined) {
+         // The state object this timer applies; the timer is cleared before the state is dropped.
+         const owner: RegistryPushState = state;
+         state.timer = setTimeout(
+            () => {
+               owner.timer = undefined;
+               // The registry that waited out the window.
+               const waiting: { payload: unknown; ack: unknown } | undefined = owner.deferred;
+               owner.deferred = undefined;
+               owner.windowStart = now();
+               owner.applied = 1;
+               if (waiting !== undefined && sockets.has(socket.id)) {
+                  applyRegistry(socket, waiting.payload, waiting.ack);
+               }
+            },
+            Math.max(0, state.windowStart + REGISTRY_PUSH_WINDOW_MS - at),
+         );
+         state.timer.unref?.();
+      }
+   }
+
    /**
     * Drop a socket's endpoint and stop its health probe.
     * @param {string} socketId - The socket id.
@@ -285,6 +384,7 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    function dropEndpoint(socketId: string): void {
       registry.remove(socketId);
       router.forget(socketId);
+      forgetPushState(socketId);
    }
 
    return {
@@ -293,7 +393,7 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
        * registration), apply a registered endpoint's `bridge:gateState` snapshot (sanitized; a non-registered socket
        * is refused with NOT_GM, logged through a throttle, and changes nothing), and on disconnect drop the endpoint,
        * stop its health probe and fail its pending invocations with ENDPOINT_GONE. Also applies a registered
-       * endpoint's `bridge:registry` tool list (sanitized and bounded; any other socket is refused with NOT_GM).
+       * endpoint's `bridge:registry` script list (validated and bounded; any other socket is refused with NOT_GM).
        * @param {Socket} socket - The connected Socket.IO socket.
        * @returns {void}
        */
@@ -370,7 +470,7 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
             }
          });
          socket.on(BRIDGE_REGISTRY, (payload: unknown, ack?: unknown) => {
-            applyRegistry(socket, payload, ack);
+            pushRegistry(socket, payload, ack);
          });
          socket.on('disconnect', () => {
             dropEndpoint(socket.id);
@@ -397,6 +497,9 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
        * @returns {void}
        */
       dispose(): void {
+         for (const socketId of [...pushStates.keys()]) {
+            forgetPushState(socketId);
+         }
          router.dispose();
       },
    };

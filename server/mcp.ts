@@ -4,17 +4,12 @@ import type net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z, type ZodRawShape } from 'zod';
 import { getBudget } from '../shared/budgets.js';
-import { ENDPOINT_KINDS, OP_CALL_TOOL, OP_CREATE_ACTOR, OP_FAILED } from '../shared/protocol.js';
-import {
-   BridgeError,
-   formatBridgeError,
-   type EndpointKind,
-   type InvokeOptions,
-   type Router,
-} from './endpoints.ts';
+import { ENDPOINT_KINDS } from '../shared/protocol.js';
+import { RESERVED_SCRIPT_NAMES } from '../shared/scripts.js';
+import { type EndpointKind, type InvokeOptions, type Router } from './endpoints.ts';
 import { createHandleStore, type HandleStore, type SliceResult } from './handles.ts';
 import {
    LIST_CHANGED_MAX_WAIT_MS,
@@ -30,12 +25,10 @@ import {
 import { describeCause } from './logText.ts';
 import { isMcpHostAllowed, isOriginAllowed } from './origins.ts';
 import { failureResult, withResultBudget, type ResultBudgetOptions, type ToolHandler } from './resultBudget.ts';
-import { RESERVED_TOOL_NAMES, type RegistryTool } from './toolRegistry.ts';
-import { truncateUtf8 } from './utf8.ts';
+import { type RegistryTool } from './toolRegistry.ts';
 
 /** The slice of the Foundry bridge the MCP layer needs. */
 interface FoundryBridge {
-   invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
    // Runs a registry tool on the picked endpoint, resolving it by name there (see `Router.invokeTool`).
    invokeTool: Router['invokeTool'];
    // The tools the endpoint a call with the same `endpoint` option would reach has registered.
@@ -46,12 +39,13 @@ interface FoundryBridge {
 
 // The server `instructions` every session receives at initialize: a short orientation, not documentation. Constraint:
 // at most `INSTRUCTIONS_MAX_CHARS` characters, and every `mcp__wiretap__<tool>` it names must be a tool the server
-// lists (the context-budget test checks both). It names no skill: none ships yet.
+// lists (the context-budget test checks both), so it names only the built-in `read_handle`. It names no skill: none
+// ships yet.
 export const WIRETAP_INSTRUCTIONS: string =
    'Wiretap connects this session to the live Foundry VTT world through a GM browser. ' +
-   'mcp__wiretap__create_actor creates an actor. A result over the size cap comes back as a handle: page it with ' +
-   'mcp__wiretap__read_handle (offset and length, or paths into the stored JSON). Tools can appear or vanish while ' +
-   'the session runs (the server sends tools/list_changed); they are the scripts the GM client registers.';
+   'A result over the size cap comes back as a handle: page it with mcp__wiretap__read_handle (offset and length, ' +
+   'or paths into the stored JSON). Every other tool is a script the GM client registers; tools can appear or ' +
+   'vanish while the session runs (the server sends tools/list_changed).';
 
 /** A tool the server registers behind the result enforcer. */
 export interface ToolRegistration {
@@ -134,13 +128,6 @@ interface ReadHandleArgs {
    maxBytes?: number;
 }
 
-/** The validated, bounded description of a created actor. */
-interface CreateActorResult {
-   uuid: string;
-   name: string;
-   type: string;
-}
-
 // Largest `maxBytes` a `read_handle` call may declare, in bytes.
 const READ_HANDLE_MAX_BYTES: number = getBudget('RESULT_HARD_CAP_MAX_BYTES').value;
 
@@ -171,89 +158,6 @@ const MCP_SOCKET_IDLE_MS: number = 30_000;
 // Most bytes read and discarded from a refused request's body before its connection is closed. Reading the rest lets
 // the client receive the refusal; closing with unread data would reset the connection and hide it.
 const MCP_DRAIN_MAX_BYTES: number = 8 * 1024 * 1024;
-
-// Maximum UTF-8 byte length of each string of a `create_actor` result returned to the caller.
-const MAX_RESULT_STRING_BYTES: number = 256;
-
-/**
- * Validate the result an endpoint acked for `create_actor`: an object whose `uuid`, `name` and `type` are strings.
- * Each string is bounded to 256 bytes so a hostile endpoint cannot flood the tool text.
- * @param {unknown} result - The raw ack result.
- * @returns {CreateActorResult} The bounded result.
- * @throws {BridgeError} OP_FAILED with a short message when the result has any other shape.
- */
-function parseCreateActorResult(result: unknown): CreateActorResult {
-   if (typeof result !== 'object' || result === null || Array.isArray(result)) {
-      throw new BridgeError(OP_FAILED, 'Foundry returned an invalid actor result.');
-   }
-   // The untrusted result viewed as a field map; each field is type-checked before use.
-   const fields: Record<string, unknown> = result as Record<string, unknown>;
-   if (typeof fields.uuid !== 'string' || typeof fields.name !== 'string' || typeof fields.type !== 'string') {
-      throw new BridgeError(OP_FAILED, 'Foundry returned an invalid actor result.');
-   }
-   return {
-      uuid: truncateUtf8(fields.uuid, MAX_RESULT_STRING_BYTES),
-      name: truncateUtf8(fields.name, MAX_RESULT_STRING_BYTES),
-      type: truncateUtf8(fields.type, MAX_RESULT_STRING_BYTES),
-   };
-}
-
-/**
- * Render a thrown value as tool-result text: a BridgeError as `<code>: <message>` (plus a truncated-failures suffix),
- * any other value as its message.
- * @param {unknown} err - The thrown value.
- * @returns {string} The text.
- */
-function describeError(err: unknown): string {
-   if (err instanceof BridgeError) {
-      return formatBridgeError(err);
-   }
-   return err instanceof Error ? err.message : String(err);
-}
-
-/**
- * Build the `create_actor` tool handler bound to a Foundry bridge. Pure of any HTTP/transport concern,
- * so it is unit-testable in isolation.
- * @param {FoundryBridge} bridge - The Foundry bridge whose router executes the operation on a GM endpoint.
- * @returns {Function} An async handler mapping tool args to an MCP tool result.
- */
-export function makeCreateActorHandler(
-   bridge: FoundryBridge,
-): (args: { name: string; type?: string }) => Promise<CallToolResult> {
-   return async ({ name, type }) => {
-      try {
-         const result: CreateActorResult = parseCreateActorResult(
-            await bridge.invoke(OP_CREATE_ACTOR, {
-               name,
-               type,
-            }),
-         );
-         return {
-            content: [
-               {
-                  type: 'text',
-                  text: `Created actor "${result.name}" (${result.type}) — ${result.uuid}`,
-               },
-            ],
-         };
-      } catch (err) {
-         if (!(err instanceof BridgeError)) {
-            // Only a BridgeError carries text meant for the caller; the result enforcer answers anything else with a
-            // fixed message and logs the cause.
-            throw err;
-         }
-         return {
-            content: [
-               {
-                  type: 'text',
-                  text: describeError(err),
-               },
-            ],
-            isError: true,
-         };
-      }
-   };
-}
 
 /**
  * Build the `read_handle` tool handler: a window of a stored result, optionally after resolving document paths over
@@ -442,24 +346,6 @@ function buildServer(
    );
    // The tools to register: the built-in ones, then the caller's.
    const tools: ToolRegistration[] = [
-      {
-         name: 'create_actor',
-         description:
-            'Create an Actor in the live Foundry world. Returns the created actor uuid. ' +
-            "If 'type' is omitted it defaults to the world's first concrete actor subtype.",
-         inputSchema: {
-            name: z.string().describe('The actor name.'),
-            type: z
-               .string()
-               .optional()
-               .describe(
-                  "The actor subtype, e.g. 'character' or 'npc'. Defaults to the world's first concrete subtype.",
-               ),
-         },
-         handler: makeCreateActorHandler(bridge),
-         // A write answers with an acknowledgement; anything larger becomes a handle.
-         budgetBytes: getBudget('ACK_MAX_BYTES').value,
-      },
       {
          name: 'read_handle',
          description: 'Read a slice of a stored large result: optional document paths, then offset and length.',
@@ -741,7 +627,7 @@ export function startMcpServer(
    const log: (line: string) => void = settings.log ?? ((line) => console.log(line));
    // The names of the tools every session has, which a registered tool may not reuse.
    const fixedNames: Set<string> = new Set([
-      ...RESERVED_TOOL_NAMES,
+      ...RESERVED_SCRIPT_NAMES,
       ...extraTools.map((tool) => tool.name),
    ]);
    // Registry tools a session can list beside the fixed ones without exceeding the always-listed budget.
@@ -805,6 +691,9 @@ export function startMcpServer(
                {
                   description: tool.description,
                   inputSchema: tool.shape,
+                  // A script that does not mutate is read-only. `destructiveHint` is left to the protocol default
+                  // (destructive) because nothing the client declares says a mutating script is not.
+                  annotations: { readOnlyHint: !tool.mutates },
                },
                makeRegistryToolHandler(bridge, tool, session.endpoint, {
                   store,

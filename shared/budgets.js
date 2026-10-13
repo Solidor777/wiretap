@@ -72,6 +72,8 @@ export const BUDGETS = table([
    budget('CORE_TOOL_NAME_MAX_CHARS', 32, 'chars', BUDGET_SEVERITY.HARD),
    // Plugin and agent-saved tool name length. Module ids are outside Wiretap's control, so the limit is looser.
    budget('PLUGIN_TOOL_NAME_MAX_CHARS', 64, 'chars', BUDGET_SEVERITY.HARD),
+   // Script `version` string length (a semver-like string).
+   budget('SCRIPT_VERSION_MAX_CHARS', 32, 'chars', BUDGET_SEVERITY.HARD),
    // Serialized `{name, description, inputSchema}` of one tool.
    budget('DEFINITION_MAX_BYTES', 800, 'bytes', BUDGET_SEVERITY.HARD),
    // Description length above which a warning is reported; descriptions are paid for on every load.
@@ -135,6 +137,14 @@ export const BUDGETS = table([
    budget('PATH_BYTES_MAX', 512, 'bytes', BUDGET_SEVERITY.HARD),
    // Segments in one path.
    budget('PATH_SEGMENTS_MAX', 16, 'count', BUDGET_SEVERITY.HARD),
+   // Largest `maxItems` a script argument schema may declare; every array schema must declare one, so an argument
+   // array is bounded by the schema.
+   budget('SCHEMA_ARRAY_ITEMS_MAX', 1000, 'count', BUDGET_SEVERITY.HARD),
+   // Most `bridge:registry` pushes the sidecar applies per second from one socket; later pushes in the same second are
+   // coalesced and the latest payload is applied when the second ends.
+   budget('REGISTRY_PUSHES_PER_SECOND_MAX', 2, 'count', BUDGET_SEVERITY.HARD),
+   // Most script executions one client runs at once; a call beyond it is answered with a short busy error.
+   budget('SCRIPT_CONCURRENCY_MAX', 8, 'count', BUDGET_SEVERITY.HARD),
 ]);
 
 /**

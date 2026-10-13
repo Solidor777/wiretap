@@ -4,13 +4,15 @@ import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
 import { callCreateActor } from './mcpHttp.js';
+import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
    BRIDGE_PING,
+   BRIDGE_REGISTRY,
    ENDPOINT_TIMEOUT,
    ENDPOINT_UNAVAILABLE,
-   OP_CREATE_ACTOR,
+   OP_CALL_TOOL,
    PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
 
@@ -126,6 +128,7 @@ describe('endpoint health over Socket.IO', () => {
       });
       await new Promise((resolve) => client.on('connect', resolve));
       await client.emitWithAck(BRIDGE_IDENTIFY, identify({ kind, userId: kind }));
+      await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript()]));
       return fake;
    }
 
@@ -143,13 +146,13 @@ describe('endpoint health over Socket.IO', () => {
       const agent = await connectFake(port, 'agent');
       fakeTimers();
       agent.answer.invokes = false;
-      const first = server.bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = server.bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await until(() => agent.invokes.length === 1, 'the agent to receive the invocation');
       await vi.advanceTimersByTimeAsync(10_000);
       await until(() => agent.pings.length === 1, 'the agent to receive the ping');
       expect(await first).toMatchObject({ code: ENDPOINT_TIMEOUT });
       agent.answer.invokes = true;
-      await expect(server.bridge.invoke(OP_CREATE_ACTOR, {})).resolves.toMatchObject({ uuid: 'Actor.agent' });
+      await expect(server.bridge.invoke(OP_CALL_TOOL, {})).resolves.toMatchObject({ uuid: 'Actor.agent' });
       expect(agent.invokes).toHaveLength(2);
       expect(human.invokes).toEqual([]);
    });
@@ -161,13 +164,13 @@ describe('endpoint health over Socket.IO', () => {
       fakeTimers();
       agent.answer.invokes = false;
       agent.answer.pings = false;
-      const first = server.bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = server.bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await until(() => agent.invokes.length === 1, 'the agent to receive the invocation');
       await vi.advanceTimersByTimeAsync(10_000);
       await until(() => agent.pings.length === 1, 'the agent to receive the ping');
       await vi.advanceTimersByTimeAsync(1_000);
       expect(await first).toMatchObject({ code: ENDPOINT_TIMEOUT });
-      await expect(server.bridge.invoke(OP_CREATE_ACTOR, {})).resolves.toMatchObject({ uuid: 'Actor.human' });
+      await expect(server.bridge.invoke(OP_CALL_TOOL, {})).resolves.toMatchObject({ uuid: 'Actor.human' });
       expect(agent.invokes).toHaveLength(1);
       expect(human.invokes).toHaveLength(1);
       agent.answer.invokes = true;
@@ -182,7 +185,7 @@ describe('endpoint health over Socket.IO', () => {
       let routedTo;
       while (routedTo !== 'Actor.agent') {
          expect(Date.now()).toBeLessThan(deadline);
-         routedTo = (await server.bridge.invoke(OP_CREATE_ACTOR, {})).uuid;
+         routedTo = (await server.bridge.invoke(OP_CALL_TOOL, {})).uuid;
       }
       expect(routedTo).toBe('Actor.agent');
    });
@@ -214,7 +217,7 @@ describe('endpoint health over Socket.IO', () => {
       fakeTimers();
       agent.answer.invokes = false;
       agent.answer.pings = false;
-      const first = server.bridge.invoke(OP_CREATE_ACTOR, {}).catch((error) => error);
+      const first = server.bridge.invoke(OP_CALL_TOOL, {}).catch((error) => error);
       await until(() => agent.invokes.length === 1, 'the agent to receive the invocation');
       await vi.advanceTimersByTimeAsync(10_000);
       await until(() => agent.pings.length === 1, 'the agent to receive the ping');

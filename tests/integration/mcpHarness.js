@@ -10,6 +10,7 @@ import { createWiretapServer } from '../../server/server.ts';
 import { createHandleStore } from '../../server/handles.ts';
 import { startMcpServer } from '../../server/mcp.ts';
 import { freePort } from './mcpHttp.js';
+import { registryPayload, script } from '../unit/scriptFixtures.js';
 import {
    BRIDGE_GATE_STATE,
    BRIDGE_IDENTIFY,
@@ -19,22 +20,16 @@ import {
 } from '../../shared/protocol.js';
 
 /**
- * Build a valid registry entry.
+ * Build a valid script definition.
  * @param {string} name - The tool name.
  * @param {object} [overrides] - Fields replacing the defaults.
- * @returns {object} A registry entry that passes every budget.
+ * @returns {object} A script definition that passes every budget.
  */
 export function entry(name, overrides = {}) {
-   return {
-      name,
+   return script(name, {
       description: `The ${name} tool.`,
-      inputSchema: {
-         type: 'object',
-         properties: { text: { type: 'string' } },
-         required: ['text'],
-      },
       ...overrides,
-   };
+   });
 }
 
 /**
@@ -132,10 +127,13 @@ export function createHarness() {
        * @param {object} [options] - Settings.
        * @param {string} [options.kind] - The endpoint kind.
        * @param {(request: object) => object} [options.answer] - Builds the ack of an invocation.
+       * @param {boolean} [options.dom] - Whether the endpoint identifies as DOM-capable.
        * @returns {Promise<{ socket: ReturnType<typeof ioClient>, invokes: object[], register: Function,
-       * pushGates: Function }>} The client, its received invocations and emit helpers.
+       * registerRaw: Function, pushGates: Function }>} The client, its received invocations and emit helpers:
+       * `register(scripts)` sends the definitions in a registry payload, `registerRaw(payload)` sends exactly what it
+       * is given.
        */
-      async connectGm({ kind = 'human', answer = () => ({ ok: true, result: 'done' }) } = {}) {
+      async connectGm({ kind = 'human', dom = true, answer = () => ({ ok: true, result: 'done' }) } = {}) {
          const socket = ioClient(`http://127.0.0.1:${server.io.httpServer.address().port}`);
          gms.push(socket);
          /** @type {object[]} The invocations this client received. */
@@ -151,12 +149,13 @@ export function createHarness() {
             userName: 'GM',
             isGM: true,
             kind,
-            dom: true,
+            dom,
          });
          return {
             socket,
             invokes,
-            register: (payload) => socket.emitWithAck(BRIDGE_REGISTRY, payload),
+            register: (scripts) => socket.emitWithAck(BRIDGE_REGISTRY, registryPayload(scripts)),
+            registerRaw: (payload) => socket.emitWithAck(BRIDGE_REGISTRY, payload),
             pushGates: (state) => socket.emitWithAck(BRIDGE_GATE_STATE, state),
          };
       },

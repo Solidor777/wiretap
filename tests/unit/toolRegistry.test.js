@@ -2,32 +2,29 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { getBudget } from '../../shared/budgets.js';
-import { RESERVED_TOOL_NAMES, jsonSchemaToZodShape, sanitizeRegistry } from '../../server/toolRegistry.ts';
+import { compileSchema } from '../../shared/schemaValidate.js';
+import { RESERVED_SCRIPT_NAMES, SCRIPT_API_VERSION, definitionBytes } from '../../shared/scripts.js';
+import { jsonSchemaToZodShape, sanitizeRegistry } from '../../server/toolRegistry.ts';
+import { paddedSchema, registryPayload, script } from './scriptFixtures.js';
 
 /**
- * Build a valid registry entry; fields in `overrides` replace the defaults.
- * @param {object} [overrides] - Fields to set on the entry.
- * @returns {object} A registry entry that passes every budget.
+ * Build a valid script definition named `mock_tool`; fields in `overrides` replace the defaults.
+ * @param {object} [overrides] - Fields to set on the definition.
+ * @returns {object} A definition that passes every budget.
  */
 function entry(overrides = {}) {
-   return {
-      name: 'mock_tool',
+   return script('mock_tool', {
       description: 'A synthetic tool.',
-      inputSchema: {
-         type: 'object',
-         properties: { text: { type: 'string' } },
-         required: ['text'],
-      },
       ...overrides,
-   };
+   });
 }
 
 /**
- * Sanitize a payload and collect the log lines.
- * @param {unknown} payload - The registry payload.
+ * Sanitize a payload as received and collect the log lines.
+ * @param {unknown} payload - The registry payload exactly as the socket delivered it.
  * @returns {{ outcome: ReturnType<typeof sanitizeRegistry>, lines: string[] }} The outcome and the log lines.
  */
-function run(payload) {
+function runRaw(payload) {
    /** @type {string[]} The log lines written during the call. */
    const lines = [];
    return {
@@ -36,22 +33,53 @@ function run(payload) {
    };
 }
 
+/**
+ * Sanitize a list of script definitions sent in a well-formed registry payload and collect the log lines.
+ * @param {unknown[]} scripts - The definitions.
+ * @returns {{ outcome: ReturnType<typeof sanitizeRegistry>, lines: string[] }} The outcome and the log lines.
+ */
+function run(scripts) {
+   return runRaw(registryPayload(scripts));
+}
+
 describe('sanitizeRegistry: accepted tools', () => {
    it('accepts a valid tool and keeps only the known fields', () => {
       const { outcome, lines } = run([entry({
          extra: 'ignored',
-         budgetBytes: 4000,
+         result: { budgetBytes: 4000 },
+         mutates: true,
+         requires: 'dom',
+         gate: 'allowUserWrites',
       })]);
       expect(outcome.ok).toBe(true);
       expect(outcome.refused).toBe(0);
       expect(outcome.tools).toHaveLength(1);
       const [tool] = outcome.tools;
       expect(tool.name).toBe('mock_tool');
+      expect(tool.version).toBe('1.0.0');
       expect(tool.description).toBe('A synthetic tool.');
       expect(tool.budgetBytes).toBe(4000);
+      expect(tool.requires).toBe('dom');
+      expect(tool.mutates).toBe(true);
+      expect(tool.gate).toEqual({ gate: 'allowUserWrites' });
       expect(Object.keys(tool.shape)).toEqual(['text']);
       expect(tool).not.toHaveProperty('extra');
       expect(lines).toEqual([]);
+   });
+
+   it('does not reserve create_actor: it is a script like any other', () => {
+      expect(run([entry({ name: 'create_actor' })]).outcome.tools.map((tool) => tool.name)).toEqual(['create_actor']);
+   });
+
+   it('logs a description over the target as a warning and still accepts the tool', () => {
+      const { outcome, lines } = run([entry({
+         description: 'd'.repeat(getBudget('DESCRIPTION_TARGET_CHARS').value + 1),
+         inputSchema: { type: 'object' },
+      })]);
+      expect(outcome.tools).toHaveLength(1);
+      expect(outcome.refused).toBe(0);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('registry warning for tool "mock_tool"');
    });
 
    it('accepts an empty registry, which clears the tools', () => {
@@ -91,11 +119,27 @@ describe('sanitizeRegistry: accepted tools', () => {
 });
 
 describe('sanitizeRegistry: refused tools', () => {
-   it('refuses a payload that is not an array without throwing', () => {
-      for (const payload of [undefined, null, 'x', 7, {}, { tools: [] }]) {
-         const { outcome } = run(payload);
+   it('refuses a payload that is not a registry object without throwing', () => {
+      for (const payload of [
+         undefined,
+         null,
+         'x',
+         7,
+         {},
+         { tools: [] },
+         [entry()],
+         { scripts: [entry()] },
+         registryPayload([entry()], { apiVersion: SCRIPT_API_VERSION + 1 }),
+         registryPayload({}),
+      ]) {
+         const { outcome } = runRaw(payload);
          expect(outcome.ok).toBe(false);
+         expect(typeof outcome.reason).toBe('string');
       }
+   });
+
+   it('names the shape a plain array of definitions should have', () => {
+      expect(runRaw([entry()]).outcome.reason).toContain('apiVersion');
    });
 
    it.each([
@@ -140,11 +184,6 @@ describe('sanitizeRegistry: refused tools', () => {
          'reserved',
       ],
       [
-         'a built-in tool name',
-         { name: 'create_actor' },
-         'reserved',
-      ],
-      [
          'the read_handle name',
          { name: 'read_handle' },
          'reserved',
@@ -180,24 +219,64 @@ describe('sanitizeRegistry: refused tools', () => {
          'inputSchema',
       ],
       [
+         'a missing result budget',
+         { result: {} },
+         'budgetBytes',
+      ],
+      [
          'a zero byte budget',
-         { budgetBytes: 0 },
+         { result: { budgetBytes: 0 } },
          'budgetBytes',
       ],
       [
          'a fractional byte budget',
-         { budgetBytes: 1.5 },
+         { result: { budgetBytes: 1.5 } },
          'budgetBytes',
       ],
       [
          'a string byte budget',
-         { budgetBytes: '500' },
+         { result: { budgetBytes: '500' } },
          'budgetBytes',
       ],
       [
          'a byte budget over the per-call maximum',
-         { budgetBytes: 16001 },
+         { result: { budgetBytes: 16001 } },
          'budgetBytes',
+      ],
+      [
+         'a missing version',
+         { version: undefined },
+         'version',
+      ],
+      [
+         'a malformed version',
+         { version: 'one' },
+         'version',
+      ],
+      [
+         'a missing mutates',
+         { mutates: undefined },
+         'mutates',
+      ],
+      [
+         'a mutates that is not a boolean',
+         { mutates: 'false' },
+         'mutates',
+      ],
+      [
+         'a missing requires',
+         { requires: undefined },
+         'requires',
+      ],
+      [
+         'an unknown requires',
+         { requires: 'browser' },
+         'requires',
+      ],
+      [
+         'requires none, which only the sidecar runs',
+         { requires: 'none' },
+         'sidecar',
       ],
       [
          'an unknown gate',
@@ -210,24 +289,13 @@ describe('sanitizeRegistry: refused tools', () => {
          'gate',
       ],
       [
-         'a plugin gate without a module id',
+         'the plugin module list as a gate',
          { gate: 'allowedPluginModules' },
-         'moduleId',
+         'gate',
       ],
       [
-         'a plugin gate with a malformed module id',
-         {
-            gate: 'allowedPluginModules',
-            moduleId: 'Bad Module',
-         },
-         'moduleId',
-      ],
-      [
-         'a module id on a boolean gate',
-         {
-            gate: 'allowUserWrites',
-            moduleId: 'some-module',
-         },
+         'a module id on a shipped script',
+         { moduleId: 'some-module' },
          'moduleId',
       ],
    ])('refuses %s and logs the reason', (_label, overrides, word) => {
@@ -279,11 +347,25 @@ describe('sanitizeRegistry: refused tools', () => {
       expect(outcome.refused).toBe(1);
    });
 
-   it('counts reserved names as the built-in tools', () => {
-      expect([...RESERVED_TOOL_NAMES].sort()).toEqual([
-         'create_actor',
-         'read_handle',
+   it('refuses the names the sidecar registers itself', () => {
+      for (const name of RESERVED_SCRIPT_NAMES) {
+         const { outcome, lines } = run([entry({ name })]);
+         expect(outcome.tools).toEqual([]);
+         expect(lines[0]).toContain('reserved');
+      }
+   });
+
+   it('refuses a plugin or agent script registered through the shipped route', () => {
+      const { outcome, lines } = run([
+         entry({
+            name: 'my-module__tool',
+            moduleId: 'my-module',
+         }),
+         entry({ name: 'x'.repeat(40) }),
       ]);
+      expect(outcome.tools).toEqual([]);
+      expect(outcome.refused).toBe(2);
+      expect(lines).toHaveLength(2);
    });
 
    it('replaces control characters and cuts a hostile name in the log line', () => {
@@ -348,9 +430,33 @@ describe('sanitizeRegistry: definition budget', () => {
    });
 });
 
+describe('sanitizeRegistry: total definition budget', () => {
+   it('accepts definitions only while all listed definitions and the built-in reserve fit the total budget', () => {
+      /** @type {object} A schema whose listed definition is close to the definition budget. */
+      const inputSchema = paddedSchema(790);
+      /** @type {object[]} 29 definitions of about 790 listed bytes: more than the total budget allows. */
+      const payload = Array.from({ length: 29 }, (_, index) => entry({
+         name: `padded_script_${String(index).padStart(2, '0')}`,
+         description: 'd'.repeat(20),
+         inputSchema,
+      }));
+      const { outcome, lines } = run(payload);
+      /** @type {number} The listed size of each definition. */
+      const each = definitionBytes('padded_script_00', 'd'.repeat(20), compileSchema(inputSchema).listed);
+      const reserve = RESERVED_SCRIPT_NAMES.length * getBudget('DEFINITION_MAX_BYTES').value;
+      const fits = Math.floor((getBudget('ALL_DEFINITIONS_MAX_BYTES').value - reserve) / each);
+      expect(fits).toBeLessThan(29);
+      expect(outcome.tools).toHaveLength(fits);
+      expect(outcome.refused).toBe(29 - fits);
+      expect(lines.length).toBeLessThanOrEqual(29 - fits);
+      expect(lines.join('|')).toMatch(/all definitions together/);
+      expect(lines.every((line) => line.length < 400)).toBe(true);
+   });
+});
+
 describe('sanitizeRegistry: tool count budget', () => {
    it('accepts tools up to the always-listed budget less the built-ins and refuses the rest with one line', () => {
-      const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_TOOL_NAMES.length;
+      const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
       const payload = Array.from({ length: room + 5 }, (_, index) => entry({ name: `tool_${index}` }));
       const { outcome, lines } = run(payload);
       expect(outcome.tools).toHaveLength(room);
@@ -370,24 +476,33 @@ describe('sanitizeRegistry: tool count budget', () => {
 
 describe('sanitizeRegistry: hostile payloads', () => {
    it('does not pollute Object.prototype from an own __proto__ key in a parsed entry', () => {
-      const payload = JSON.parse(
-         '[{"name":"mock_tool","description":"d","__proto__":{"polluted":true},' +
-            '"inputSchema":{"type":"object","__proto__":{"polluted":true}}}]',
-      );
-      const { outcome } = run(payload);
+      /** @type {string} A complete entry serialized with a __proto__ key added. */
+      const text = JSON.stringify(entry()).replace('{', '{"__proto__":{"polluted":true},');
+      const { outcome } = run(JSON.parse(`[${text}]`));
       expect({}.polluted).toBeUndefined();
-      expect(outcome.tools.length + outcome.refused).toBe(1);
-      for (const tool of outcome.tools) {
-         expect(tool.polluted).toBeUndefined();
-      }
+      expect(outcome.tools).toHaveLength(1);
+      expect(outcome.tools[0].polluted).toBeUndefined();
+   });
+
+   it('refuses a schema with an own __proto__ keyword without changing any prototype', () => {
+      /** @type {string} A complete entry serialized with a __proto__ key inside the schema. */
+      const text = JSON.stringify(entry({ inputSchema: { type: 'object' } })).replace(
+         '"inputSchema":{',
+         '"inputSchema":{"__proto__":{"polluted":true},',
+      );
+      const { outcome, lines } = run(JSON.parse(`[${text}]`));
+      expect({}.polluted).toBeUndefined();
+      expect(outcome.tools).toEqual([]);
+      expect(lines[0]).toContain('keyword');
    });
 
    it('refuses a schema property named __proto__ without changing any prototype', () => {
-      const payload = JSON.parse(
-         '[{"name":"mock_tool","description":"d","inputSchema":{"type":"object","properties":' +
-            '{"__proto__":{"type":"string"}}}}]',
+      /** @type {string} A complete entry serialized with a __proto__ schema property. */
+      const text = JSON.stringify(entry({ inputSchema: { type: 'object' } })).replace(
+         '"inputSchema":{',
+         '"inputSchema":{"properties":{"__proto__":{"type":"string"}},',
       );
-      const { outcome, lines } = run(payload);
+      const { outcome, lines } = run(JSON.parse(`[${text}]`));
       expect(outcome.tools).toEqual([]);
       expect(lines[0]).toContain('property name');
       expect({}.type).toBeUndefined();
@@ -434,10 +549,8 @@ describe('sanitizeRegistry: hostile payloads', () => {
    it('does not read inherited fields', () => {
       Object.prototype.name = 'inherited_name';
       try {
-         const { outcome } = run([{
-            description: 'd',
-            inputSchema: { type: 'object' },
-         }]);
+         const { name: _own, ...nameless } = entry();
+         const { outcome } = run([nameless]);
          expect(outcome.tools).toEqual([]);
          expect(outcome.refused).toBe(1);
       } finally {

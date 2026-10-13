@@ -3,14 +3,16 @@ import { describe, it, expect, afterEach } from 'vitest';
 import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
-import { callCreateActor } from './mcpHttp.js';
+import { callCreateActor, mcpCall } from './mcpHttp.js';
+import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
+   BRIDGE_REGISTRY,
    ENDPOINT_GONE,
    NOT_GM,
    NO_ENDPOINT,
-   OP_CREATE_ACTOR,
+   OP_CALL_TOOL,
    OP_FAILED,
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
@@ -70,6 +72,19 @@ function identify(overrides = {}) {
    };
 }
 
+/**
+ * Identify a fake client as a GM endpoint and register the create_actor script on it.
+ * @param {import('socket.io-client').Socket} client - The fake client.
+ * @param {object} [overrides] - Identify fields replacing the defaults.
+ * @returns {Promise<void>}
+ */
+async function identifyWithCreateActor(client, overrides = {}) {
+   expect(await client.emitWithAck(BRIDGE_IDENTIFY, identify(overrides))).toEqual({ ok: true });
+   expect(await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript()]))).toMatchObject({
+      ok: true,
+   });
+}
+
 describe('endpoint routing over Socket.IO', () => {
    /** @type {ReturnType<typeof createWiretapServer> | undefined} The server under test. */
    let server;
@@ -121,14 +136,17 @@ describe('endpoint routing over Socket.IO', () => {
       const agentSeen = [];
       const human = await connectFake(port, 'human', humanSeen);
       const agent = await connectFake(port, 'agent', agentSeen);
-      expect(await human.emitWithAck(BRIDGE_IDENTIFY, identify({ kind: 'human' }))).toEqual({ ok: true });
-      expect(await agent.emitWithAck(BRIDGE_IDENTIFY, identify({ kind: 'agent', userId: 'u2' }))).toEqual({ ok: true });
+      await identifyWithCreateActor(human, { kind: 'human' });
+      await identifyWithCreateActor(agent, { kind: 'agent', userId: 'u2' });
       const result = await callCreateActor(mcpPort);
       expect(result.isError).toBeFalsy();
       expect(result.content[0].text).toContain('Actor.agent');
       expect(humanSeen).toEqual([]);
       expect(agentSeen).toHaveLength(1);
-      expect(agentSeen[0]).toMatchObject({ op: OP_CREATE_ACTOR, params: { name: 'Bob', type: 'npc' } });
+      expect(agentSeen[0]).toMatchObject({
+         op: OP_CALL_TOOL,
+         params: { name: 'create_actor', arguments: { name: 'Bob', type: 'npc' } },
+      });
       expect(agentSeen[0].requestId).toMatch(/^[0-9a-f-]{36}$/);
    });
 
@@ -137,8 +155,8 @@ describe('endpoint routing over Socket.IO', () => {
       const humanSeen = [];
       const human = await connectFake(port, 'human', humanSeen);
       const agent = await connectFake(port, 'agent', []);
-      await human.emitWithAck(BRIDGE_IDENTIFY, identify({ kind: 'human' }));
-      await agent.emitWithAck(BRIDGE_IDENTIFY, identify({ kind: 'agent', userId: 'u2' }));
+      await identifyWithCreateActor(human, { kind: 'human' });
+      await identifyWithCreateActor(agent, { kind: 'agent', userId: 'u2' });
       agent.close();
       // The server processes the disconnect asynchronously; poll until the call reaches the human endpoint.
       const result = await poll(async () => {
@@ -154,18 +172,27 @@ describe('endpoint routing over Socket.IO', () => {
       const humanSeen = [];
       const human = await connectFake(port, 'human', humanSeen);
       await human.emitWithAck(BRIDGE_IDENTIFY, identify({ kind: 'human' }));
-      await expect(server.bridge.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).rejects.toMatchObject({
+      await expect(server.bridge.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' })).rejects.toMatchObject({
          code: NO_ENDPOINT,
       });
       expect(humanSeen).toEqual([]);
-      await expect(server.bridge.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'human' })).resolves.toMatchObject({
+      await expect(server.bridge.invoke(OP_CALL_TOOL, {}, { endpoint: 'human' })).resolves.toMatchObject({
          uuid: 'Actor.human',
       });
    });
 
-   it('returns the structured NO_ENDPOINT text from create_actor when nothing is connected', async () => {
-      await start();
-      const result = await callCreateActor(mcpPort);
+   it('returns the structured NO_ENDPOINT text from create_actor when its endpoint is gone', async () => {
+      const port = await start();
+      const gm = await connectFake(port, 'human', []);
+      await identifyWithCreateActor(gm);
+      // Open the session while the endpoint is there, so create_actor is listed to it.
+      await mcpCall(mcpPort, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+      gm.close();
+      // The session drops the tool one debounce after the disconnect; until then the call reaches the router.
+      const result = await poll(async () => {
+         const attempt = await callCreateActor(mcpPort);
+         return attempt.content[0].text.startsWith(`${NO_ENDPOINT}: `) ? attempt : undefined;
+      }, 'the call to find no endpoint');
       expect(result.isError).toBe(true);
       /** @type {string} The tool result text. */
       const text = result.content[0].text;
@@ -181,9 +208,7 @@ describe('endpoint routing over Socket.IO', () => {
       const ack = await client.emitWithAck(BRIDGE_IDENTIFY, { userId: 'u1', userName: 'GM', isGM: true });
       expect(ack.ok).toBe(false);
       expect(ack.error.code).toBe(PROTOCOL_MISMATCH);
-      const result = await callCreateActor(mcpPort);
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text.startsWith(`${NO_ENDPOINT}: `)).toBe(true);
+      await expect(server.bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
       expect(seen).toEqual([]);
    });
 
@@ -209,8 +234,8 @@ describe('endpoint routing over Socket.IO', () => {
          });
       });
       await new Promise((resolve) => client.on('connect', resolve));
-      await client.emitWithAck(BRIDGE_IDENTIFY, identify());
-      const error = await server.bridge.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      await identifyWithCreateActor(client);
+      const error = await server.bridge.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       expect(error.code).toBe(OP_FAILED);
       expect(Buffer.byteLength(error.message, 'utf8')).toBeLessThanOrEqual(512);
       expect(error.failures).toHaveLength(10);
@@ -233,23 +258,23 @@ describe('endpoint routing over Socket.IO', () => {
       const received = new Promise((resolve) => client.on(BRIDGE_INVOKE, () => resolve()));
       await new Promise((resolve) => client.on('connect', resolve));
       await client.emitWithAck(BRIDGE_IDENTIFY, identify());
-      const pending = server.bridge.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      const pending = server.bridge.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       await received;
       client.close();
       expect(await pending).toMatchObject({ code: ENDPOINT_GONE });
    });
 
-   it('turns a hostile ok:true ack without a result into a short OP_FAILED tool error', async () => {
+   it('shows an ok:true ack without a result as the text null, not as an error', async () => {
       const port = await start();
       /** @type {import('socket.io-client').Socket} A client that acks ok:true with no result. */
       const client = ioClient(`http://127.0.0.1:${port}`);
       clients.push(client);
       client.on(BRIDGE_INVOKE, (request, ack) => ack({ ok: true }));
       await new Promise((resolve) => client.on('connect', resolve));
-      await client.emitWithAck(BRIDGE_IDENTIFY, identify());
+      await identifyWithCreateActor(client);
       const result = await callCreateActor(mcpPort);
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text.startsWith(`${OP_FAILED}: `)).toBe(true);
+      expect(result.isError).toBeFalsy();
+      expect(result.content[0].text).toBe('null');
    });
 
    it('refuses a client-supplied reserved code by reporting OP_FAILED', async () => {
@@ -260,7 +285,7 @@ describe('endpoint routing over Socket.IO', () => {
       client.on(BRIDGE_INVOKE, (request, ack) => ack({ ok: false, error: { code: NO_ENDPOINT, message: 'spoof' } }));
       await new Promise((resolve) => client.on('connect', resolve));
       await client.emitWithAck(BRIDGE_IDENTIFY, identify());
-      const error = await server.bridge.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      const error = await server.bridge.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       expect(error.code).toBe(OP_FAILED);
    });
 });

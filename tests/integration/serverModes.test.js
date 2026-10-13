@@ -5,6 +5,7 @@ import os from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
 import { mcpCall } from './mcpHttp.js';
+import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
 import {
    TERMINAL_LAUNCH,
    TERMINAL_DATA,
@@ -12,6 +13,7 @@ import {
    TERMINAL_EXIT,
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
+   BRIDGE_REGISTRY,
    PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
 
@@ -113,7 +115,7 @@ function createActorWhenGmKnown(mcpPort) {
          // The MCP listener may not be accepting connections yet; the poll retries.
          return undefined;
       }
-      return response.result?.isError ? undefined : response;
+      return response.result && !response.result.isError ? response : undefined;
    }, 'the GM identify to be processed');
 }
 
@@ -235,6 +237,7 @@ describe('createWiretapServer modes', () => {
       client.emit(TERMINAL_LAUNCH, { command: 'node --version', cols: 80, rows: 24 });
       // Socket events are handled in order, so once the later identify has taken effect the launch was handled too.
       client.emit(BRIDGE_IDENTIFY, identifyPayload(), () => undefined);
+      client.emit(BRIDGE_REGISTRY, registryPayload([createActorScript()]), () => undefined);
       await createActorWhenGmKnown(mcpPort);
       expect(seen).toEqual([]);
    });
@@ -249,6 +252,9 @@ describe('createWiretapServer modes', () => {
          ack({ ok: true, result: { uuid: 'Actor.abc', id: 'abc', name: request.params.name, type: 'npc' } });
       });
       expect(await client.emitWithAck(BRIDGE_IDENTIFY, identifyPayload())).toEqual({ ok: true });
+      expect(await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript()]))).toMatchObject({
+         ok: true,
+      });
       /** @type {object} The successful create_actor response. */
       const response = await createActorWhenGmKnown(mcpPort);
       expect(response.result.isError).toBeFalsy();

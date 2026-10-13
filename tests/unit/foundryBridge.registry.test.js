@@ -1,7 +1,9 @@
 // @vitest-environment node
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { getBudget } from '../../shared/budgets.js';
 import { createFoundryBridge } from '../../server/foundryBridge.ts';
 import { BRIDGE_IDENTIFY, BRIDGE_REGISTRY, NOT_GM, OP_FAILED, PROTOCOL_VERSION } from '../../shared/protocol.js';
+import { registryPayload, script } from './scriptFixtures.js';
 
 /**
  * Build a fake Socket.IO server socket that records its registered handlers.
@@ -41,19 +43,12 @@ function identify(overrides = {}) {
 }
 
 /**
- * Build a valid registry entry.
+ * Build a valid script definition.
  * @param {string} name - The tool name.
- * @returns {object} A registry entry that passes every budget.
+ * @returns {object} A definition that passes every budget.
  */
 function entry(name) {
-   return {
-      name,
-      description: 'A synthetic tool.',
-      inputSchema: {
-         type: 'object',
-         properties: { text: { type: 'string' } },
-      },
-   };
+   return script(name, { description: 'A synthetic tool.' });
 }
 
 /**
@@ -106,6 +101,16 @@ function sendRegistry(fake, payload) {
    return acks[0];
 }
 
+/**
+ * Send a list of script definitions in a well-formed registry payload and return the ack.
+ * @param {{ fire: Function }} fake - The fake socket.
+ * @param {unknown[]} scripts - The definitions.
+ * @returns {any} The single ack the bridge sent back.
+ */
+function sendScripts(fake, scripts) {
+   return sendRegistry(fake, registryPayload(scripts));
+}
+
 describe('createFoundryBridge registry event', () => {
    it('names the event bridge:registry', () => {
       expect(BRIDGE_REGISTRY).toBe('bridge:registry');
@@ -119,7 +124,7 @@ describe('createFoundryBridge registry event', () => {
    it('stores the tools a registered endpoint sends and acks the counts', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
-      expect(sendRegistry(fake, [entry('first'), entry('second')])).toEqual({
+      expect(sendScripts(fake, [entry('first'), entry('second')])).toEqual({
          ok: true,
          accepted: 2,
          refused: 0,
@@ -131,15 +136,16 @@ describe('createFoundryBridge registry event', () => {
    });
 
    it('replaces the whole list on every event, and an empty array clears it', () => {
-      const { bridge } = makeBridge();
+      const { bridge, advance } = makeBridge();
       const fake = register(bridge, 'a');
-      sendRegistry(fake, [
+      sendScripts(fake, [
          entry('first'),
          entry('second'),
       ]);
-      sendRegistry(fake, [entry('third')]);
+      sendScripts(fake, [entry('third')]);
       expect(bridge.tools().map((tool) => tool.name)).toEqual(['third']);
-      expect(sendRegistry(fake, [])).toEqual({
+      advance(1000);
+      expect(sendScripts(fake, [])).toEqual({
          ok: true,
          accepted: 0,
          refused: 0,
@@ -150,7 +156,7 @@ describe('createFoundryBridge registry event', () => {
    it('keeps the valid tools of a payload and counts the refused ones', () => {
       const { bridge, lines } = makeBridge();
       const fake = register(bridge, 'a');
-      expect(sendRegistry(fake, [entry('good'), entry('BAD NAME'), null, entry('create_actor')])).toEqual({
+      expect(sendScripts(fake, [entry('good'), entry('BAD NAME'), null, entry('read_handle')])).toEqual({
          ok: true,
          accepted: 1,
          refused: 3,
@@ -163,22 +169,24 @@ describe('createFoundryBridge registry event', () => {
       const { bridge } = makeBridge();
       const human = register(bridge, 'h', { kind: 'human' });
       const agent = register(bridge, 'a', { kind: 'agent' });
-      sendRegistry(human, [entry('human_tool')]);
-      sendRegistry(agent, [entry('agent_tool')]);
+      sendScripts(human, [entry('human_tool')]);
+      sendScripts(agent, [entry('agent_tool')]);
       expect(bridge.tools().map((tool) => tool.name)).toEqual(['agent_tool']);
       expect(bridge.tools({ endpoint: 'human' }).map((tool) => tool.name)).toEqual(['human_tool']);
    });
 
-   it('refuses a payload that is not an array: acks OP_FAILED and clears the endpoint tools', () => {
-      const { bridge, lines } = makeBridge();
+   it('refuses a payload that is not a registry object: acks OP_FAILED and clears the endpoint tools', () => {
+      const { bridge, lines, advance } = makeBridge();
       const fake = register(bridge, 'a');
-      sendRegistry(fake, [entry('first')]);
-      for (const payload of [undefined, null, 'x', 5, {}, { tools: [entry('first')] }]) {
+      sendScripts(fake, [entry('first')]);
+      for (const payload of [undefined, null, 'x', 5, {}, { tools: [entry('first')] }, [entry('first')]]) {
+         advance(1000);
          const ack = sendRegistry(fake, payload);
          expect(ack.ok).toBe(false);
          expect(ack.error.code).toBe(OP_FAILED);
          expect(bridge.tools()).toEqual([]);
-         sendRegistry(fake, [entry('first')]);
+         advance(1000);
+         sendScripts(fake, [entry('first')]);
       }
       expect(lines.some((line) => line.includes('registry payload'))).toBe(true);
    });
@@ -187,7 +195,7 @@ describe('createFoundryBridge registry event', () => {
       const { bridge, lines } = makeBridge();
       const stranger = makeSocket('stranger');
       bridge.handleConnection(stranger.socket);
-      const ack = sendRegistry(stranger, [entry('first')]);
+      const ack = sendScripts(stranger, [entry('first')]);
       expect(ack).toEqual({
          ok: false,
          error: {
@@ -202,14 +210,14 @@ describe('createFoundryBridge registry event', () => {
    it('refuses a socket whose identify was refused', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'p', { isGM: false });
-      expect(sendRegistry(fake, [entry('first')]).error.code).toBe(NOT_GM);
+      expect(sendScripts(fake, [entry('first')]).error.code).toBe(NOT_GM);
       expect(bridge.tools()).toEqual([]);
    });
 
    it('drops the tools with the endpoint when the socket disconnects', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
-      sendRegistry(fake, [entry('first')]);
+      sendScripts(fake, [entry('first')]);
       fake.fire('disconnect');
       expect(bridge.tools()).toEqual([]);
    });
@@ -217,7 +225,7 @@ describe('createFoundryBridge registry event', () => {
    it('keeps the tools across a repeated identify of the same socket', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
-      sendRegistry(fake, [entry('first')]);
+      sendScripts(fake, [entry('first')]);
       fake.fire(BRIDGE_IDENTIFY, identify(), () => undefined);
       expect(bridge.tools().map((tool) => tool.name)).toEqual(['first']);
    });
@@ -225,17 +233,17 @@ describe('createFoundryBridge registry event', () => {
    it('tolerates a missing ack callback', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
-      expect(() => fake.fire(BRIDGE_REGISTRY, [entry('first')])).not.toThrow();
+      expect(() => fake.fire(BRIDGE_REGISTRY, registryPayload([entry('first')]))).not.toThrow();
       expect(bridge.tools()).toHaveLength(1);
       const stranger = makeSocket('s');
       bridge.handleConnection(stranger.socket);
-      expect(() => stranger.fire(BRIDGE_REGISTRY, [entry('first')])).not.toThrow();
+      expect(() => stranger.fire(BRIDGE_REGISTRY, registryPayload([entry('first')]))).not.toThrow();
    });
 
    it('closes the endpoint list and acks OP_FAILED when sanitizing throws', () => {
       const { bridge, lines } = makeBridge();
       const fake = register(bridge, 'a');
-      sendRegistry(fake, [entry('first')]);
+      sendScripts(fake, [entry('first')]);
       const hostile = new Proxy([], {
          get(target, property) {
             if (property === 'length') {
@@ -244,7 +252,7 @@ describe('createFoundryBridge registry event', () => {
             return Reflect.get(target, property);
          },
       });
-      const ack = sendRegistry(fake, hostile);
+      const ack = sendScripts(fake, hostile);
       expect(ack.ok).toBe(false);
       expect(ack.error.code).toBe(OP_FAILED);
       expect(bridge.tools()).toEqual([]);
@@ -254,10 +262,10 @@ describe('createFoundryBridge registry event', () => {
    it('throttles refusal lines to 10 per minute with one summary line after the window', () => {
       const { bridge, lines, advance } = makeBridge();
       const fake = register(bridge, 'a');
-      sendRegistry(fake, Array.from({ length: 15 }, (_, index) => entry(`BAD ${index}`)));
+      sendScripts(fake, Array.from({ length: 15 }, (_, index) => entry(`BAD ${index}`)));
       expect(lines.filter((line) => line.includes('registry refused tool'))).toHaveLength(10);
       advance(61_000);
-      sendRegistry(fake, [entry('BAD again')]);
+      sendScripts(fake, [entry('BAD again')]);
       expect(lines.some((line) => line.includes('5 further registry refusal lines suppressed'))).toBe(true);
    });
 
@@ -266,10 +274,131 @@ describe('createFoundryBridge registry event', () => {
       const fake = register(bridge, 'a');
       const listener = vi.fn();
       const stop = bridge.subscribe(listener);
-      sendRegistry(fake, [entry('first')]);
+      sendScripts(fake, [entry('first')]);
       expect(listener).toHaveBeenCalledTimes(1);
       stop();
-      sendRegistry(fake, [entry('second')]);
+      sendScripts(fake, [entry('second')]);
       expect(listener).toHaveBeenCalledTimes(1);
+   });
+});
+
+describe('createFoundryBridge registry rate limit', () => {
+   afterEach(() => {
+      vi.useRealTimers();
+   });
+
+   /**
+    * Create a bridge on fake timers, with the real clock the timers also drive, and a registered GM endpoint.
+    * @returns {{ bridge: ReturnType<typeof createFoundryBridge>, fake: { socket: object, fire: Function } }} The pair.
+    */
+   function makeLimited() {
+      vi.useFakeTimers();
+      const bridge = createFoundryBridge({ log: () => undefined });
+      return {
+         bridge,
+         fake: register(bridge, 'a'),
+      };
+   }
+
+   /**
+    * Push a registry of one named script and collect the ack.
+    * @param {{ fire: Function }} fake - The fake socket.
+    * @param {string} name - The script name.
+    * @returns {unknown[]} The acks received so far for this push (filled when the ack arrives).
+    */
+   function push(fake, name) {
+      /** @type {unknown[]} Acks of this push. */
+      const acks = [];
+      fake.fire(BRIDGE_REGISTRY, registryPayload([entry(name)]), (ack) => acks.push(ack));
+      return acks;
+   }
+
+   it('applies the pushes within the per-second limit at once', () => {
+      const { bridge, fake } = makeLimited();
+      const limit = getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value;
+      for (let index = 0; index < limit; index += 1) {
+         const acks = push(fake, `tool_${index}`);
+         expect(acks).toHaveLength(1);
+         expect(acks[0].ok).toBe(true);
+         expect(bridge.tools().map((tool) => tool.name)).toEqual([`tool_${index}`]);
+      }
+   });
+
+   it('coalesces the pushes past the limit and applies only the latest when the second ends', async () => {
+      const { bridge, fake } = makeLimited();
+      const limit = getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value;
+      for (let index = 0; index < limit; index += 1) {
+         push(fake, `tool_${index}`);
+      }
+      const early = push(fake, 'early');
+      const latest = push(fake, 'latest');
+      expect(bridge.tools().map((tool) => tool.name)).toEqual([`tool_${limit - 1}`]);
+      expect(early).toEqual([{ ok: true, coalesced: true }]);
+      expect(latest).toEqual([]);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(latest).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(bridge.tools().map((tool) => tool.name)).toEqual(['latest']);
+      expect(latest).toHaveLength(1);
+      expect(latest[0].ok).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+   });
+
+   it('applies at most the limit plus one registry in the second after a flood of pushes', async () => {
+      const { bridge, fake } = makeLimited();
+      /** @type {string[]} Every tool name set seen after each applied push. */
+      const applied = [];
+      bridge.subscribe(() => applied.push(bridge.tools().map((tool) => tool.name).join(',')));
+      for (let index = 0; index < 500; index += 1) {
+         push(fake, `flood_${index}`);
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(applied.length).toBeLessThanOrEqual(getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value + 1);
+      expect(bridge.tools().map((tool) => tool.name)).toEqual(['flood_499']);
+   });
+
+   it('allows a new burst after the window passes', async () => {
+      const { bridge, fake } = makeLimited();
+      const limit = getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value;
+      for (let index = 0; index < limit; index += 1) {
+         push(fake, `a_${index}`);
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+      const acks = push(fake, 'b_0');
+      expect(acks).toHaveLength(1);
+      expect(bridge.tools().map((tool) => tool.name)).toEqual(['b_0']);
+   });
+
+   it('limits each socket on its own', () => {
+      const { bridge, fake } = makeLimited();
+      const other = register(bridge, 'b');
+      const limit = getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value;
+      for (let index = 0; index < limit + 1; index += 1) {
+         push(fake, `a_${index}`);
+      }
+      expect(push(other, 'other_0')).toHaveLength(1);
+   });
+
+   it('drops the pending push and its timer when the socket disconnects', async () => {
+      const { bridge, fake } = makeLimited();
+      const limit = getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value;
+      for (let index = 0; index < limit + 1; index += 1) {
+         push(fake, `a_${index}`);
+      }
+      expect(vi.getTimerCount()).toBe(1);
+      fake.fire('disconnect');
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(bridge.tools()).toEqual([]);
+   });
+
+   it('drops the pending push and its timer on dispose', async () => {
+      const { bridge, fake } = makeLimited();
+      const limit = getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value;
+      for (let index = 0; index < limit + 1; index += 1) {
+         push(fake, `a_${index}`);
+      }
+      bridge.dispose();
+      expect(vi.getTimerCount()).toBe(0);
    });
 });

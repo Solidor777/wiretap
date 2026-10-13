@@ -4,11 +4,13 @@ import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
 import { mcpCall } from './mcpHttp.js';
+import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
 import { GATES, closedGateState } from '../../shared/gates.js';
 import {
    BRIDGE_GATE_STATE,
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
+   BRIDGE_REGISTRY,
    NOT_GM,
    PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
@@ -31,7 +33,7 @@ function freePort() {
 }
 
 /**
- * Build a v3 identify payload.
+ * Build an identify payload.
  * @param {object} [overrides] - Fields replacing the defaults.
  * @returns {object} The payload.
  */
@@ -210,6 +212,7 @@ describe('gate state over Socket.IO', () => {
          BRIDGE_IDENTIFY,
          identify({ gateState: { allowMacroExecution: true, allowedPluginModules: ['secret-module-id'] } }),
       );
+      await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createActorScript()]));
       const call = await mcpCall(mcpPort, {
          jsonrpc: '2.0',
          id: 1,
@@ -221,5 +224,6 @@ describe('gate state over Socket.IO', () => {
          expect(text).not.toMatch(/gateState|secret-module-id|allowMacroExecution|allowedPluginModules/);
       }
       expect(call.result.isError).toBeFalsy();
+      expect(call.result.content[0].text).toContain('Actor.x');
    });
 });

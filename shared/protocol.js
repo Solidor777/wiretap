@@ -67,7 +67,7 @@ export const TERMINAL_EXIT = 'terminal:exit';
 
 // Bridge protocol version carried by every identify; the sidecar refuses any other value (no translation of older
 // payloads).
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 // Client → server, once per (re)connect, with an ack callback: register this socket as a live Foundry-GM bridge
 // endpoint. The sidecar acks after registration (or refusal).
@@ -78,10 +78,11 @@ export const BRIDGE_IDENTIFY = 'bridge:identify';
 // socket that is not a registered endpoint is refused and its snapshot is not applied.
 export const BRIDGE_GATE_STATE = 'bridge:gateState';
 
-// Client → server, with an optional ack callback: the registered GM endpoint's complete list of MCP tool definitions
-// (an array of `RegistryToolDefinition`). Each event replaces the endpoint's previous list; an empty array clears it.
-// A socket that is not a registered endpoint is refused and nothing is applied. The sidecar sanitizes and bounds every
-// entry, then tells the open MCP sessions routed to that endpoint with `notifications/tools/list_changed`.
+// Client → server, with an optional ack callback: the registered GM endpoint's complete script list, a
+// `ScriptRegistryPayload` `{ apiVersion, scripts }` (see `shared/scripts.js`). Each event replaces the endpoint's
+// previous list; an empty `scripts` array clears it. A socket that is not a registered endpoint is refused and nothing
+// is applied. The sidecar validates every definition with the shared script validator and bounds the list, then tells
+// the open MCP sessions routed to that endpoint with `notifications/tools/list_changed`.
 export const BRIDGE_REGISTRY = 'bridge:registry';
 
 // Server → client, with an ack callback: run a Foundry operation and return its result.
@@ -91,11 +92,9 @@ export const BRIDGE_INVOKE = 'bridge:invoke';
 // else.
 export const BRIDGE_PING = 'bridge:ping';
 
-// Operation names dispatched over BRIDGE_INVOKE (shared so both sides agree).
-export const OP_CREATE_ACTOR = 'createActor';
-
-// Operation that runs a tool the endpoint registered with BRIDGE_REGISTRY. Params are `{ name, arguments }`; the
-// result is shown to the MCP caller as text (a string as is, anything else as JSON).
+// Operation name dispatched over BRIDGE_INVOKE (shared so both sides agree): runs a script the endpoint registered
+// with BRIDGE_REGISTRY. Params are `{ name, arguments }`; the result is shown to the MCP caller as text (a string as
+// is, anything else as JSON).
 export const OP_CALL_TOOL = 'callTool';
 
 // Endpoint kinds a client may identify as: a person's browser tab ('human') or an agent-runner browser ('agent').
@@ -123,7 +122,7 @@ export const ENDPOINT_LIMIT = 'ENDPOINT_LIMIT';
 // Error code: the endpoint a registry tool call reached no longer registers that tool.
 export const TOOL_GONE = 'TOOL_GONE';
 
-// Error code: an identify payload is not protocol version 3 (or is malformed).
+// Error code: an identify payload is not the current protocol version (or is malformed).
 export const PROTOCOL_MISMATCH = 'PROTOCOL_MISMATCH';
 
 // Error code: an identify came from a user that is not a GM.
@@ -157,22 +156,13 @@ export const GATE_DENIED = 'GATE_DENIED';
  */
 
 /**
- * @typedef {object} RegistryToolDefinition
- * @property {string} name - The MCP tool name: 1 to 32 characters of a-z, 0-9, `_` and `-`, starting with a letter.
- * @property {string} description - One line, at most 240 characters.
- * @property {object} inputSchema - A JSON Schema object (a documented subset; see `server/toolRegistry.ts`).
- * @property {number} [budgetBytes] - The tool's own result budget in bytes, 1 to 16000.
- * @property {string} [gate] - A risk gate the tool needs open on the routed endpoint (a name in `GATES`).
- * @property {string} [moduleId] - The module id; required with the `allowedPluginModules` gate and refused otherwise.
- */
-
-/**
  * @typedef {object} BridgeRegistryAck
  * @property {boolean} ok - True when the endpoint's list was replaced.
- * @property {number} [accepted] - Tools accepted, when ok is true.
+ * @property {number} [accepted] - Scripts accepted, when ok is true.
  * @property {number} [refused] - Entries refused or never examined, when ok is true.
  * @property {{ code: string, message: string }} [error] - NOT_GM for a socket that is not a registered endpoint;
- * OP_FAILED when the payload is not an array or could not be processed (the endpoint's list is then cleared).
+ * OP_FAILED when the payload is not `{ apiVersion, scripts }` of the current api version or could not be processed (the
+ * endpoint's list is then cleared).
  */
 
 /**

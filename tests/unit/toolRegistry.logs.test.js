@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { sanitizeRegistry } from '../../server/toolRegistry.ts';
+import { registryPayload, script } from './scriptFixtures.js';
 
 /** @type {string} The Unicode line and paragraph separators. */
 const LINE_SEPARATORS = String.fromCharCode(0x2028, 0x2029);
@@ -14,11 +15,7 @@ const CONTROL = new RegExp(`[\\u0000-\\u001f\\u007f-\\u009f${LINE_SEPARATORS}]`)
  * @returns {object} A registry entry that is otherwise valid.
  */
 function entryWith(inputSchema) {
-   return {
-      name: 'mock_tool',
-      description: 'A synthetic tool.',
-      inputSchema,
-   };
+   return script('mock_tool', { inputSchema });
 }
 
 describe('sanitizeRegistry: log lines are safe', () => {
@@ -38,7 +35,7 @@ describe('sanitizeRegistry: log lines are safe', () => {
    ])('writes one bounded line without control characters for %s', (_label, schema) => {
       /** @type {string[]} The log lines written during the call. */
       const lines = [];
-      const outcome = sanitizeRegistry([entryWith(schema)], (line) => lines.push(line));
+      const outcome = sanitizeRegistry(registryPayload([entryWith(schema)]), (line) => lines.push(line));
       expect(outcome.tools).toEqual([]);
       expect(lines).toHaveLength(1);
       expect(lines[0]).not.toMatch(CONTROL);

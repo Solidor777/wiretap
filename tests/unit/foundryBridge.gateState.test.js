@@ -7,7 +7,7 @@ import {
    BRIDGE_IDENTIFY,
    GATE_DENIED,
    NOT_GM,
-   OP_CREATE_ACTOR,
+   OP_CALL_TOOL,
    OP_FAILED,
    PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
@@ -271,7 +271,7 @@ describe('createFoundryBridge invoke with requireGate', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
       await expect(
-         bridge.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } }),
+         bridge.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowMacroExecution' } }),
       ).rejects.toMatchObject({ code: GATE_DENIED });
       expect(fake.emitted).toEqual([]);
    });
@@ -281,7 +281,7 @@ describe('createFoundryBridge invoke with requireGate', () => {
       const closed = register(bridge, 'h', { kind: 'human', userId: 'uh' });
       const open = register(bridge, 'a', { kind: 'agent', userId: 'ua', gateState: { allowMacroExecution: true } });
       await expect(
-         bridge.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } }),
+         bridge.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowMacroExecution' } }),
       ).resolves.toEqual({ from: 'a' });
       expect(open.emitted).toHaveLength(1);
       expect(closed.emitted).toEqual([]);
@@ -291,7 +291,7 @@ describe('createFoundryBridge invoke with requireGate', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
       fake.fire(BRIDGE_GATE_STATE, { allowFileUpload: true }, () => undefined);
-      await expect(bridge.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowFileUpload' } })).resolves.toEqual({
+      await expect(bridge.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowFileUpload' } })).resolves.toEqual({
          from: 'a',
       });
    });

@@ -7,7 +7,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { z } from 'zod';
 import { createWiretapServer } from '../../server/server.ts';
 import { startMcpServer } from '../../server/mcp.ts';
+import { sanitizeRegistry } from '../../server/toolRegistry.ts';
 import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, PROTOCOL_VERSION } from '../../shared/protocol.js';
+import { createActorScript, registryPayload } from '../unit/scriptFixtures.js';
 
 /** @type {string} The op of the test-only tool; the fake client is the only party that knows it. */
 const OP_TEST_BIG = 'test:big-result';
@@ -394,13 +396,15 @@ describe('large results become handles', () => {
       }
    });
 
-   it('answers a create_actor failure that is not a BridgeError with the fixed text only', async () => {
+   it('answers a registry tool failure that is not a BridgeError with the fixed text only', async () => {
+      /** @type {import('../../server/toolRegistry.ts').RegistryTool[]} The create_actor script as sanitized. */
+      const registered = sanitizeRegistry(registryPayload([createActorScript()]), () => undefined).tools;
       const failing = startMcpServer(
          {
-            invoke: async () => {
+            invokeTool: async () => {
                throw new Error('SECRET_INTERNAL_DETAIL');
             },
-            tools: () => [],
+            tools: () => registered,
             subscribe: () => () => undefined,
          },
          0,

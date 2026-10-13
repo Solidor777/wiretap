@@ -13,6 +13,7 @@ import {
    validateIdentify,
 } from '../../server/endpoints.ts';
 import { sanitizeRegistry } from '../../server/toolRegistry.ts';
+import { registryPayload, script } from './scriptFixtures.js';
 import { truncateUtf8 } from '../../server/utf8.ts';
 import { closedGateState } from '../../shared/gates.js';
 import {
@@ -24,7 +25,6 @@ import {
    NOT_GM,
    NO_ENDPOINT,
    OP_CALL_TOOL,
-   OP_CREATE_ACTOR,
    OP_FAILED,
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
@@ -53,10 +53,11 @@ function identify(overrides = {}) {
  * @param {ReturnType<typeof createEndpointRegistry>} registry - The registry that receives the endpoint.
  * @param {string} socketId - The id of the fake socket the endpoint belongs to.
  * @param {string} kind - Either 'human' or 'agent'.
+ * @param {boolean} [dom] - Whether the endpoint can run DOM scripts (default true).
  * @returns {void}
  */
-function add(registry, socketId, kind) {
-   registry.register(socketId, validateIdentify(identify({ userId: socketId, kind })).identity);
+function add(registry, socketId, kind, dom = true) {
+   registry.register(socketId, validateIdentify(identify({ userId: socketId, kind, dom })).identity);
 }
 
 describe('createEndpointRegistry', () => {
@@ -138,6 +139,18 @@ describe('createEndpointRegistry health', () => {
       const registry = createEndpointRegistry();
       add(registry, 's1', 'agent');
       expect(registry.get('s1').health).toBe('healthy');
+   });
+
+   it('restricts firstOfKind to DOM-capable endpoints when asked', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 'a1', 'agent', false);
+      add(registry, 'a2', 'agent', true);
+      add(registry, 'h1', 'human', false);
+      expect(registry.firstOfKind('agent')?.socketId).toBe('a1');
+      expect(registry.firstOfKind('agent', { dom: true })?.socketId).toBe('a2');
+      expect(registry.firstOfKind('human', { dom: true })).toBeUndefined();
+      registry.setHealth('a2', 'unresponsive');
+      expect(registry.firstOfKind('agent', { dom: true })).toBeUndefined();
    });
 
    it('skips an unresponsive endpoint in firstOfKind and keeps registration order among the rest', () => {
@@ -352,6 +365,11 @@ describe('validateIdentify', () => {
       expect(result.ok).toBe(false);
       expect(result.error.code).toBe(PROTOCOL_MISMATCH);
       expect(result.error.message).toMatch(/reload/i);
+   });
+
+   it('speaks protocol 4 and refuses the previous version 3', () => {
+      expect(PROTOCOL_VERSION).toBe(4);
+      expect(validateIdentify(identify({ protocolVersion: 3 })).error.code).toBe(PROTOCOL_MISMATCH);
    });
 
    it('refuses a wrong protocolVersion', () => {
@@ -644,7 +662,7 @@ describe('createRouter', () => {
 
       it('throws GATE_DENIED before sending when the picked endpoint has the gate closed', async () => {
          const { router, sent } = setup([['a', 'agent']]);
-         const rejection = router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } });
+         const rejection = router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowMacroExecution' } });
          await expect(rejection).rejects.toMatchObject({ name: 'BridgeError', code: GATE_DENIED });
          await rejection.catch((error) => {
             expect(error.message).toContain('allowMacroExecution');
@@ -656,7 +674,7 @@ describe('createRouter', () => {
       it('sends to the same endpoint whose snapshot opened the gate', async () => {
          const { router, registry, sent } = setup([['h', 'human'], ['a', 'agent']]);
          open(registry, 'a', 'allowMacroExecution');
-         await router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } });
+         await router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowMacroExecution' } });
          expect(sent.map((entry) => entry.socketId)).toEqual(['a']);
       });
 
@@ -664,7 +682,7 @@ describe('createRouter', () => {
          const { router, registry, sent } = setup([['h', 'human'], ['a', 'agent']]);
          open(registry, 'h', 'allowMacroExecution');
          await expect(
-            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } }),
+            router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowMacroExecution' } }),
          ).rejects.toMatchObject({ code: GATE_DENIED });
          expect(sent).toEqual([]);
       });
@@ -672,7 +690,7 @@ describe('createRouter', () => {
       it('cannot be split from the send by an endpoint change after the call starts', async () => {
          const { router, registry, sent } = setup([['a', 'agent'], ['h', 'human']]);
          open(registry, 'a', 'allowMacroExecution');
-         const pending = router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } });
+         const pending = router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowMacroExecution' } });
          // The pick and the gate check ran synchronously inside invoke; these changes come too late to matter.
          registry.setGateState('a', closedGateState());
          registry.remove('a');
@@ -686,7 +704,7 @@ describe('createRouter', () => {
          open(registry, 'a1', 'allowFileUpload');
          registry.setHealth('a1', 'unresponsive');
          await expect(
-            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowFileUpload' } }),
+            router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowFileUpload' } }),
          ).rejects.toMatchObject({ code: GATE_DENIED });
          expect(sent).toEqual([]);
       });
@@ -694,17 +712,17 @@ describe('createRouter', () => {
       it('honours the endpoint override when judging the gate', async () => {
          const { router, registry, sent } = setup([['h', 'human'], ['a', 'agent']]);
          open(registry, 'h', 'allowUserWrites');
-         await router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'human', requireGate: { gate: 'allowUserWrites' } });
+         await router.invoke(OP_CALL_TOOL, {}, { endpoint: 'human', requireGate: { gate: 'allowUserWrites' } });
          expect(sent.map((entry) => entry.socketId)).toEqual(['h']);
          await expect(
-            router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent', requireGate: { gate: 'allowUserWrites' } }),
+            router.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent', requireGate: { gate: 'allowUserWrites' } }),
          ).rejects.toMatchObject({ code: GATE_DENIED });
       });
 
       it('reports NO_ENDPOINT, not GATE_DENIED, when nothing is connected', async () => {
          const { router } = setup([]);
          await expect(
-            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } }),
+            router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowMacroExecution' } }),
          ).rejects.toMatchObject({ code: NO_ENDPOINT });
       });
 
@@ -712,22 +730,22 @@ describe('createRouter', () => {
          const { router, registry } = setup([['a', 'agent']]);
          registry.setHealth('a', 'unresponsive');
          await expect(
-            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowMacroExecution' } }),
+            router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowMacroExecution' } }),
          ).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
       });
 
       it('requires the module id to be listed for the plugin module gate', async () => {
          const { router, registry, sent } = setup([['a', 'agent']]);
          registry.setGateState('a', { ...closedGateState(), allowedPluginModules: ['my-module'] });
-         await router.invoke(OP_CREATE_ACTOR, {}, {
+         await router.invoke(OP_CALL_TOOL, {}, {
             requireGate: { gate: 'allowedPluginModules', moduleId: 'my-module' },
          });
          expect(sent).toHaveLength(1);
          await expect(
-            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowedPluginModules', moduleId: 'other' } }),
+            router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowedPluginModules', moduleId: 'other' } }),
          ).rejects.toMatchObject({ code: GATE_DENIED });
          await expect(
-            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowedPluginModules' } }),
+            router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowedPluginModules' } }),
          ).rejects.toMatchObject({ code: GATE_DENIED });
          expect(sent).toHaveLength(1);
       });
@@ -735,40 +753,40 @@ describe('createRouter', () => {
       it('denies an unknown gate name', async () => {
          const { router, sent } = setup([['a', 'agent']]);
          await expect(
-            router.invoke(OP_CREATE_ACTOR, {}, { requireGate: { gate: 'allowDelete' } }),
+            router.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowDelete' } }),
          ).rejects.toMatchObject({ code: GATE_DENIED });
          expect(sent).toEqual([]);
       });
 
       it('does not gate a call that sets no requireGate', async () => {
          const { router, sent } = setup([['a', 'agent']]);
-         await router.invoke(OP_CREATE_ACTOR, {});
+         await router.invoke(OP_CALL_TOOL, {});
          expect(sent).toHaveLength(1);
       });
    });
 
    it('prefers an agent endpoint over an earlier human endpoint', async () => {
       const { router, sent } = setup([['h', 'human'], ['a', 'agent']]);
-      await router.invoke(OP_CREATE_ACTOR, { name: 'Bob' });
+      await router.invoke(OP_CALL_TOOL, { name: 'Bob' });
       expect(sent[0].socketId).toBe('a');
    });
 
    it('falls back to a human endpoint when no agent is registered', async () => {
       const { router, sent } = setup([['h', 'human']]);
-      await router.invoke(OP_CREATE_ACTOR, {});
+      await router.invoke(OP_CALL_TOOL, {});
       expect(sent[0].socketId).toBe('h');
    });
 
    it('uses insertion order between endpoints of the same kind', async () => {
       const { router, sent } = setup([['a1', 'agent'], ['a2', 'agent']]);
-      await router.invoke(OP_CREATE_ACTOR, {});
+      await router.invoke(OP_CALL_TOOL, {});
       expect(sent[0].socketId).toBe('a1');
    });
 
    it('sends { op, params, requestId } and resolves with the ack result', async () => {
       const { router, sent } = setup([['h', 'human']]);
-      await expect(router.invoke(OP_CREATE_ACTOR, { name: 'Bob' })).resolves.toEqual({ done: true });
-      expect(sent[0].payload).toEqual({ op: OP_CREATE_ACTOR, params: { name: 'Bob' }, requestId: 'req-1' });
+      await expect(router.invoke(OP_CALL_TOOL, { name: 'Bob' })).resolves.toEqual({ done: true });
+      expect(sent[0].payload).toEqual({ op: OP_CALL_TOOL, params: { name: 'Bob' }, requestId: 'req-1' });
    });
 
    it('generates a distinct UUID requestId per invocation by default', async () => {
@@ -790,7 +808,7 @@ describe('createRouter', () => {
 
    it('restricts an endpoint override to that kind with no fallback', async () => {
       const { router, sent } = setup([['h', 'human']]);
-      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).rejects.toMatchObject({
+      await expect(router.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' })).rejects.toMatchObject({
          code: NO_ENDPOINT,
       });
       expect(sent).toEqual([]);
@@ -798,13 +816,13 @@ describe('createRouter', () => {
 
    it('routes an override to the requested kind even when the other kind is preferred', async () => {
       const { router, sent } = setup([['a', 'agent'], ['h', 'human']]);
-      await router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'human' });
+      await router.invoke(OP_CALL_TOOL, {}, { endpoint: 'human' });
       expect(sent[0].socketId).toBe('h');
    });
 
    it('rejects with NO_ENDPOINT, within 256 bytes, naming the fix, when nothing is registered', async () => {
       const { router } = setup([]);
-      const err = await router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      const err = await router.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       expect(err).toBeInstanceOf(BridgeError);
       expect(err.code).toBe(NO_ENDPOINT);
       expect(Buffer.byteLength(err.message, 'utf8')).toBeLessThanOrEqual(256);
@@ -814,7 +832,7 @@ describe('createRouter', () => {
 
    it('keeps the NO_ENDPOINT message within 256 bytes for an override', async () => {
       const { router } = setup([]);
-      const err = await router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' }).catch((e) => e);
+      const err = await router.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' }).catch((e) => e);
       expect(Buffer.byteLength(err.message, 'utf8')).toBeLessThanOrEqual(256);
    });
 
@@ -822,7 +840,7 @@ describe('createRouter', () => {
       const { router } = setup([['h', 'human']], async () => {
          throw new EndpointTimeoutError('operation has timed out');
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
    });
 
    it('maps any other transport rejection to ENDPOINT_GONE and logs the cause, not ENDPOINT_TIMEOUT', async () => {
@@ -836,7 +854,7 @@ describe('createRouter', () => {
          log: (line) => lines.push(line),
          newRequestId: () => 'req-3',
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
       expect(lines.some((line) => line.includes('req-3') && line.includes('emit blew up'))).toBe(true);
    });
 
@@ -850,7 +868,7 @@ describe('createRouter', () => {
          },
          log: (line) => lines.push(line),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
       expect(lines.some((line) => line.includes('plain string'))).toBe(true);
    });
 
@@ -865,7 +883,7 @@ describe('createRouter', () => {
          log: (line) => lines.push(line),
          newRequestId: () => 'req-2',
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
       expect(lines.some((line) => line.includes('req-2') && line.includes('socket disconnected'))).toBe(true);
    });
 
@@ -875,17 +893,17 @@ describe('createRouter', () => {
       ['a string', 'ok'],
    ])('rejects with OP_FAILED when the ack is %s', async (_label, ack) => {
       const { router } = setup([['h', 'human']], async () => ack);
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: OP_FAILED });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: OP_FAILED });
    });
 
    it('resolves undefined for an ok:true ack without a result (the caller validates the result)', async () => {
       const { router } = setup([['h', 'human']], async () => ({ ok: true }));
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).resolves.toBeUndefined();
+      await expect(router.invoke(OP_CALL_TOOL, {})).resolves.toBeUndefined();
    });
 
    it('rejects with a normalized BridgeError when the client acks ok:false', async () => {
       const { router } = setup([['h', 'human']], async () => ({ ok: false, error: { message: 'Unknown type' } }));
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({
          code: OP_FAILED,
          message: 'Unknown type',
       });
@@ -894,7 +912,7 @@ describe('createRouter', () => {
    it('stops routing to an endpoint once it is removed from the registry', async () => {
       const { router, registry, sent } = setup([['a', 'agent'], ['h', 'human']]);
       registry.remove('a');
-      await router.invoke(OP_CREATE_ACTOR, {});
+      await router.invoke(OP_CALL_TOOL, {});
       expect(sent[0].socketId).toBe('h');
    });
 
@@ -973,10 +991,10 @@ describe('createRouter endpoint health', () => {
 
    it('keeps routing to the same agent when the ping after a timeout is acked', async () => {
       const { router, registry, sent, pings } = setup([['a', 'agent'], ['h', 'human']], { silent: ['a'] });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       expect(pings).toEqual(['a']);
       expect(registry.get('a').health).toBe('healthy');
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       expect(sent).toEqual(['a', 'a']);
       expect(vi.getTimerCount()).toBe(0);
    });
@@ -986,9 +1004,9 @@ describe('createRouter endpoint health', () => {
          silent: ['a'],
          ping: switchablePing({ up: false }),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       expect(registry.get('a').health).toBe('unresponsive');
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ who: 'h' });
+      await expect(router.invoke(OP_CALL_TOOL, {})).resolves.toEqual({ who: 'h' });
       expect(sent).toEqual(['a', 'h']);
    });
 
@@ -999,7 +1017,7 @@ describe('createRouter endpoint health', () => {
             throw new EndpointGoneError('socket gone');
          },
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       expect(registry.get('a').health).toBe('unresponsive');
    });
 
@@ -1017,14 +1035,14 @@ describe('createRouter endpoint health', () => {
          log: () => undefined,
       });
       routers.push(router);
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_GONE });
       expect(pings).toEqual([]);
    });
 
    it('fails at once with ENDPOINT_UNAVAILABLE within 256 bytes when every endpoint is unresponsive', async () => {
       const { router, sent } = setup([['a', 'agent']], { silent: ['a'], ping: switchablePing({ up: false }) });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
-      const err = await router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      const err = await router.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       expect(err).toBeInstanceOf(BridgeError);
       expect(err.code).toBe(ENDPOINT_UNAVAILABLE);
       expect(Buffer.byteLength(err.message, 'utf8')).toBeLessThanOrEqual(256);
@@ -1037,8 +1055,8 @@ describe('createRouter endpoint health', () => {
          silent: ['a'],
          ping: switchablePing({ up: false }),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
-      const err = await router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' }).catch((e) => e);
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      const err = await router.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' }).catch((e) => e);
       expect(err.code).toBe(ENDPOINT_UNAVAILABLE);
       expect(Buffer.byteLength(err.message, 'utf8')).toBeLessThanOrEqual(256);
       expect(sent).toEqual(['a']);
@@ -1046,8 +1064,8 @@ describe('createRouter endpoint health', () => {
 
    it('keeps NO_ENDPOINT for an override of a kind that is not connected', async () => {
       const { router } = setup([['a', 'agent']], { silent: ['a'], ping: switchablePing({ up: false }) });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
-      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'human' })).rejects.toMatchObject({
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {}, { endpoint: 'human' })).rejects.toMatchObject({
          code: NO_ENDPOINT,
       });
    });
@@ -1057,8 +1075,8 @@ describe('createRouter endpoint health', () => {
          silent: ['a1'],
          ping: switchablePing({ up: false }),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
-      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).resolves.toEqual({ who: 'a2' });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' })).resolves.toEqual({ who: 'a2' });
       expect(sent).toEqual(['a1', 'a2']);
    });
 
@@ -1068,7 +1086,7 @@ describe('createRouter endpoint health', () => {
          silent: ['a'],
          ping: switchablePing(state),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       expect(pings).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(4_999);
       expect(pings).toHaveLength(1);
@@ -1097,7 +1115,7 @@ describe('createRouter endpoint health', () => {
             return new Promise(() => undefined);
          },
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       await vi.advanceTimersByTimeAsync(30_000);
       expect(pings).toEqual(['a', 'a']);
    });
@@ -1108,9 +1126,9 @@ describe('createRouter endpoint health', () => {
          ping: switchablePing({ up: false }),
       });
       const results = await Promise.all([
-         router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e),
-         router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e),
-         router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e),
+         router.invoke(OP_CALL_TOOL, {}).catch((e) => e),
+         router.invoke(OP_CALL_TOOL, {}).catch((e) => e),
+         router.invoke(OP_CALL_TOOL, {}).catch((e) => e),
       ]);
       expect(results.map((e) => e.code)).toEqual([ENDPOINT_TIMEOUT, ENDPOINT_TIMEOUT, ENDPOINT_TIMEOUT]);
       expect(pings).toEqual(['a']);
@@ -1123,14 +1141,14 @@ describe('createRouter endpoint health', () => {
          silent: ['a'],
          ping: switchablePing({ up: false }),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       await vi.advanceTimersByTimeAsync(60_000);
       expect(sent).toEqual(['a']);
    });
 
    it('words ENDPOINT_TIMEOUT as possibly applied, within 512 bytes', async () => {
       const { router } = setup([['a', 'agent']], { silent: ['a'] });
-      const err = await router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      const err = await router.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       expect(err.message).toBe(
          'Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.',
       );
@@ -1143,11 +1161,11 @@ describe('createRouter endpoint health', () => {
          silent: ['a'],
          ping: switchablePing(state),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       add(registry, 'a', 'agent');
       expect(registry.get('a').health).toBe('unresponsive');
       expect(registry.firstOfKind('agent')).toBeUndefined();
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).resolves.toEqual({ who: 'h' });
+      await expect(router.invoke(OP_CALL_TOOL, {})).resolves.toEqual({ who: 'h' });
       expect(sent).toEqual(['a', 'h']);
       expect(vi.getTimerCount()).toBe(1);
       state.up = true;
@@ -1162,7 +1180,7 @@ describe('createRouter endpoint health', () => {
          silent: ['a'],
          ping: switchablePing({ up: false }),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       expect(vi.getTimerCount()).toBe(1);
       registry.remove('a');
       router.forget('a');
@@ -1181,7 +1199,7 @@ describe('createRouter endpoint health', () => {
                failPing = reject;
             }),
       });
-      const call = router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      const call = router.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       await vi.advanceTimersByTimeAsync(0);
       registry.remove('a');
       router.forget('a');
@@ -1200,7 +1218,7 @@ describe('createRouter endpoint health', () => {
                failPing = reject;
             }),
       });
-      const call = router.invoke(OP_CREATE_ACTOR, {}).catch((e) => e);
+      const call = router.invoke(OP_CALL_TOOL, {}).catch((e) => e);
       await vi.advanceTimersByTimeAsync(0);
       expect(pings).toEqual(['a']);
       router.dispose();
@@ -1219,10 +1237,10 @@ describe('createRouter endpoint health', () => {
          silent: ['a1', 'a2'],
          ping: switchablePing({ up: false }),
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).rejects.toMatchObject({
+      await expect(router.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' })).rejects.toMatchObject({
          code: ENDPOINT_TIMEOUT,
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {}, { endpoint: 'agent' })).rejects.toMatchObject({
+      await expect(router.invoke(OP_CALL_TOOL, {}, { endpoint: 'agent' })).rejects.toMatchObject({
          code: ENDPOINT_TIMEOUT,
       });
       expect(vi.getTimerCount()).toBe(2);
@@ -1252,7 +1270,7 @@ describe('createRouter endpoint health', () => {
          },
          log: () => undefined,
       });
-      await expect(router.invoke(OP_CREATE_ACTOR, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
+      await expect(router.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: ENDPOINT_TIMEOUT });
       router.dispose();
       expect(calls).toEqual([['set', 5_000], ['clear', 77]]);
    });
@@ -1339,14 +1357,12 @@ describe('router invokeTool', () => {
     */
    function tool(name, overrides = {}) {
       const outcome = sanitizeRegistry(
-         [
-            {
-               name,
-               description: `The ${name} tool.`,
+         registryPayload([
+            script(name, {
                inputSchema: { type: 'object' },
                ...overrides,
-            },
-         ],
+            }),
+         ]),
          () => undefined,
       );
       return outcome.tools[0];
@@ -1389,7 +1405,7 @@ describe('router invokeTool', () => {
 
    it('runs the tool on the picked endpoint and returns that endpoint\'s declaration with the result', async () => {
       const listed = tool('echo');
-      const picked = tool('echo', { budgetBytes: 50 });
+      const picked = tool('echo', { result: { budgetBytes: 50 } });
       const { router, sent } = setup([['a', 'agent', [picked]]]);
       const outcome = await router.invokeTool('echo', { text: 'hi' }, { listed });
       expect(outcome.result).toBe('ran');
@@ -1482,10 +1498,129 @@ describe('router invokeTool', () => {
       const listed = tool('echo');
       const picked = tool('echo', {
          description: 'Another description.',
-         budgetBytes: 50,
+         result: { budgetBytes: 50 },
       });
       const { router, sent } = setup([['a', 'agent', [picked]]]);
       await router.invokeTool('echo', {}, { listed });
       expect(sent).toHaveLength(1);
+   });
+
+   it('routes a dom script to the agent endpoint, not to the first healthy endpoint of the route order', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router, sent } = setup([
+         ['h', 'human', [listed]],
+         ['a', 'agent', [listed]],
+      ]);
+      await router.invokeTool('shot', {}, { listed });
+      expect(sent.map((entry) => entry.socketId)).toEqual(['a']);
+   });
+
+   it('does not fall back from the agent to a human tab for a dom script', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router, sent } = setup([['h', 'human', [listed]]]);
+      await expect(router.invokeTool('shot', {}, { listed })).rejects.toMatchObject({
+         name: 'BridgeError',
+         code: NO_ENDPOINT,
+      });
+      expect(sent).toEqual([]);
+   });
+
+   it('still falls back from the agent to a human tab for an api script', async () => {
+      const listed = tool('reader', { requires: 'api' });
+      const { router, sent } = setup([['h', 'human', [listed]]]);
+      await router.invokeTool('reader', {}, { listed });
+      expect(sent.map((entry) => entry.socketId)).toEqual(['h']);
+   });
+
+   it('names the missing endpoint kind in an error of at most 256 bytes', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router } = setup([['h', 'human', [listed]]]);
+      const error = await router.invokeTool('shot', {}, { listed }).catch((cause) => cause);
+      expect(error.message).toContain("'agent'");
+      expect(error.message).toContain('DOM');
+      expect(Buffer.byteLength(error.message)).toBeLessThanOrEqual(256);
+      const named = await router.invokeTool('shot', {}, {
+         endpoint: 'agent',
+         listed,
+      }).catch((cause) => cause);
+      expect(named.message).toContain("'agent'");
+   });
+
+   it('refuses a dom script when the only agent endpoint cannot run DOM scripts', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router, registry, sent } = setup([]);
+      add(registry, 'a', 'agent', false);
+      registry.setTools('a', [listed]);
+      await expect(router.invokeTool('shot', {}, { listed })).rejects.toMatchObject({ code: NO_ENDPOINT });
+      expect(sent).toEqual([]);
+   });
+
+   it('skips an agent endpoint without DOM and uses a later one that has it', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router, registry, sent } = setup([]);
+      add(registry, 'a1', 'agent', false);
+      registry.setTools('a1', [listed]);
+      add(registry, 'a2', 'agent', true);
+      registry.setTools('a2', [listed]);
+      await router.invokeTool('shot', {}, { listed });
+      expect(sent.map((entry) => entry.socketId)).toEqual(['a2']);
+   });
+
+   it('routes a dom script to a human tab only when the session restricts the kind to human', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router, sent } = setup([
+         ['h', 'human', [listed]],
+         ['a', 'agent', [listed]],
+      ]);
+      await router.invokeTool('shot', {}, {
+         endpoint: 'human',
+         listed,
+      });
+      expect(sent.map((entry) => entry.socketId)).toEqual(['h']);
+   });
+
+   it('refuses a dom script on a restricted human kind whose tabs cannot run DOM scripts', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router, registry, sent } = setup([]);
+      add(registry, 'h', 'human', false);
+      registry.setTools('h', [listed]);
+      const error = await router.invokeTool('shot', {}, {
+         endpoint: 'human',
+         listed,
+      }).catch((cause) => cause);
+      expect(error.code).toBe(NO_ENDPOINT);
+      expect(error.message).toContain("'human'");
+      expect(sent).toEqual([]);
+   });
+
+   it('reports ENDPOINT_UNAVAILABLE for a dom script whose only DOM agent is unresponsive', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+      registry.setHealth('a', 'unresponsive');
+      await expect(router.invokeTool('shot', {}, { listed })).rejects.toMatchObject({ code: ENDPOINT_UNAVAILABLE });
+      expect(sent).toEqual([]);
+   });
+
+   it('reports NO_ENDPOINT, not unavailable, when the unresponsive agent has no DOM anyway', async () => {
+      const listed = tool('shot', { requires: 'dom' });
+      const { router, registry } = setup([]);
+      add(registry, 'a', 'agent', false);
+      registry.setTools('a', [listed]);
+      registry.setHealth('a', 'unresponsive');
+      await expect(router.invokeTool('shot', {}, { listed })).rejects.toMatchObject({ code: NO_ENDPOINT });
+   });
+
+   it('refuses the call when the picked endpoint declares another requires for the name', async () => {
+      const listed = tool('shot', { requires: 'api' });
+      const { router, sent } = setup([['a', 'agent', [tool('shot', { requires: 'dom' })]]]);
+      await expect(router.invokeTool('shot', {}, { listed })).rejects.toMatchObject({ code: TOOL_GONE });
+      expect(sent).toEqual([]);
+   });
+
+   it('refuses the call when the picked endpoint declares another mutates for the name', async () => {
+      const listed = tool('shot', { mutates: false });
+      const { router, sent } = setup([['a', 'agent', [tool('shot', { mutates: true })]]]);
+      await expect(router.invokeTool('shot', {}, { listed })).rejects.toMatchObject({ code: TOOL_GONE });
+      expect(sent).toEqual([]);
    });
 });

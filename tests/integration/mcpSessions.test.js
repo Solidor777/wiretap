@@ -10,7 +10,8 @@ import { z } from 'zod';
 import { INITIALIZE, freePort, raw } from './mcpHttp.js';
 import { createWiretapServer } from '../../server/server.ts';
 import { createHandleStore } from '../../server/handles.ts';
-import { RESERVED_TOOL_NAMES } from '../../server/toolRegistry.ts';
+import { RESERVED_SCRIPT_NAMES } from '../../shared/scripts.js';
+import { registryPayload, script } from '../unit/scriptFixtures.js';
 import { WIRETAP_INSTRUCTIONS, startMcpServer } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
 import {
@@ -33,22 +34,16 @@ const FAKED = [
 ];
 
 /**
- * Build a valid registry entry.
+ * Build a valid script definition.
  * @param {string} name - The tool name.
  * @param {object} [overrides] - Fields replacing the defaults.
- * @returns {object} A registry entry that passes every budget.
+ * @returns {object} A script definition that passes every budget.
  */
 function entry(name, overrides = {}) {
-   return {
-      name,
+   return script(name, {
       description: `The ${name} tool.`,
-      inputSchema: {
-         type: 'object',
-         properties: { text: { type: 'string' } },
-         required: ['text'],
-      },
       ...overrides,
-   };
+   });
 }
 
 describe('stateful MCP sessions', () => {
@@ -112,8 +107,9 @@ describe('stateful MCP sessions', () => {
     * @param {string} [options.kind] - The endpoint kind.
     * @param {(request: object) => object} [options.answer] - Builds the ack of an invocation.
     * @returns {Promise<{ socket: ReturnType<typeof ioClient>, invokes: object[], register: Function,
-    * pushGates: Function }>} The fake client, the invocations it received, and helpers that emit a registry and a
-    * gate state.
+    * registerRaw: Function, pushGates: Function }>} The fake client, the invocations it received, and helpers that
+    * emit a registry (`register` wraps script definitions in the payload, `registerRaw` sends what it is given) and
+    * a gate state.
     */
    async function connectGm({ kind = 'human', answer = () => ({ ok: true, result: 'done' }) } = {}) {
       /** @type {ReturnType<typeof ioClient>} The fake GM client. */
@@ -137,7 +133,8 @@ describe('stateful MCP sessions', () => {
       return {
          socket,
          invokes,
-         register: (payload) => socket.emitWithAck(BRIDGE_REGISTRY, payload),
+         register: (scripts) => socket.emitWithAck(BRIDGE_REGISTRY, registryPayload(scripts)),
+         registerRaw: (payload) => socket.emitWithAck(BRIDGE_REGISTRY, payload),
          pushGates: (state) => socket.emitWithAck(BRIDGE_GATE_STATE, state),
       };
    }
@@ -188,7 +185,7 @@ describe('stateful MCP sessions', () => {
          expect(mcp.sessions()).toBe(1);
          expect(client.getInstructions()).toBe(WIRETAP_INSTRUCTIONS);
          expect(WIRETAP_INSTRUCTIONS.length).toBeLessThanOrEqual(getBudget('INSTRUCTIONS_MAX_CHARS').value);
-         expect(await toolNames(client)).toEqual([...RESERVED_TOOL_NAMES].sort());
+         expect(await toolNames(client)).toEqual([...RESERVED_SCRIPT_NAMES].sort());
       });
 
       it('gives every session its own id', async () => {
@@ -436,7 +433,6 @@ describe('stateful MCP sessions', () => {
          }) });
          const { client, notifications } = await connectClient();
          expect(await toolNames(client)).toEqual([
-            'create_actor',
             'read_handle',
          ]);
          expect(await gm.register([entry('late_tool')])).toEqual({
@@ -446,7 +442,6 @@ describe('stateful MCP sessions', () => {
          });
          await expect.poll(notifications, { timeout: 1000 }).toBe(1);
          expect(await toolNames(client)).toEqual([
-            'create_actor',
             'late_tool',
             'read_handle',
          ]);
@@ -473,7 +468,6 @@ describe('stateful MCP sessions', () => {
          await gm.register([entry('early_tool')]);
          const { client, notifications } = await connectClient();
          expect(await toolNames(client)).toEqual([
-            'create_actor',
             'early_tool',
             'read_handle',
          ]);
@@ -504,7 +498,6 @@ describe('stateful MCP sessions', () => {
          await gm.register([entry('second_tool')]);
          await expect.poll(notifications, { timeout: 1000 }).toBe(1);
          expect(await toolNames(client)).toEqual([
-            'create_actor',
             'read_handle',
             'second_tool',
          ]);
@@ -551,7 +544,6 @@ describe('stateful MCP sessions', () => {
          gm.socket.close();
          await expect.poll(notifications, { timeout: 1000 }).toBe(1);
          expect(await toolNames(client)).toEqual([
-            'create_actor',
             'read_handle',
          ]);
       });
@@ -564,7 +556,9 @@ describe('stateful MCP sessions', () => {
          const gm = await connectGm();
          const { client, notifications } = await connectClient();
          vi.useFakeTimers({ toFake: FAKED });
-         for (let index = 0; index < 8; index += 1) {
+         // One endpoint may push `REGISTRY_PUSHES_PER_SECOND_MAX` registries per second; a burst is that many.
+         const burst = getBudget('REGISTRY_PUSHES_PER_SECOND_MAX').value;
+         for (let index = 0; index < burst; index += 1) {
             await gm.register([entry(`burst_${index}`)]);
             await vi.advanceTimersByTimeAsync(50);
          }
@@ -575,8 +569,7 @@ describe('stateful MCP sessions', () => {
          expect(notifications()).toBe(1);
          vi.useRealTimers();
          expect(await toolNames(client)).toEqual([
-            'burst_7',
-            'create_actor',
+            `burst_${burst - 1}`,
             'read_handle',
          ]);
       });
@@ -606,7 +599,7 @@ describe('stateful MCP sessions', () => {
          const hostile = [
             [entry('__proto__')],
             [entry('constructor')],
-            [entry('create_actor')],
+            [entry('read_handle')],
             [entry('BAD NAME')],
             [entry('x'.repeat(200))],
             [{
@@ -631,10 +624,12 @@ describe('stateful MCP sessions', () => {
                },
             }],
             JSON.parse(
-               '[{"name":"ok_name","description":"d","inputSchema":{"type":"object",' +
-                  '"properties":{"__proto__":{"type":"string"}}}}]',
+               `[${JSON.stringify(entry('ok_name', { inputSchema: { type: 'object' } })).replace(
+                  '"inputSchema":{',
+                  '"inputSchema":{"properties":{"__proto__":{"type":"string"}},',
+               )}]`,
             ),
-            Array.from({ length: 5000 }, (_, index) => entry(`bulk_${index}`)),
+            Array.from({ length: 2000 }, (_, index) => entry(`bulk_${index}`)),
             [
                null,
                5,
@@ -643,17 +638,24 @@ describe('stateful MCP sessions', () => {
             ],
             'not an array',
             { tools: [entry('wrapped')] },
+            { scripts: [entry('wrapped')] },
+            registryPayload([entry('wrapped')], { apiVersion: 2 }),
          ];
+         // A list of definitions travels in a registry payload; every other value is sent as it is. Each payload comes
+         // from an endpoint of its own, because one endpoint may push only a few registries per second.
          for (const payload of hostile) {
-            await gm.register(payload).catch(() => undefined);
+            const sender = await connectGm();
+            await sender.registerRaw(Array.isArray(payload) ? registryPayload(payload) : payload).catch(() => undefined);
          }
+         // The previous plain-array shape is refused whole.
+         await (await connectGm()).registerRaw([entry('wrapped')]).catch(() => undefined);
          await new Promise((resolve) => setTimeout(resolve, 150));
          const names = await toolNames(client);
          expect(names).not.toContain('__proto__');
          expect(names).not.toContain('constructor');
          expect(names).not.toContain('ok_name');
          expect(names).not.toContain('wrapped');
-         expect(names.filter((name) => name === 'create_actor')).toHaveLength(1);
+         expect(names.filter((name) => name === 'read_handle')).toHaveLength(1);
          expect(names.length).toBeLessThanOrEqual(getBudget('ALWAYS_LISTED_TOOLS_MAX').value);
          expect({}.polluted).toBeUndefined();
          // A valid registry still works afterwards.
@@ -672,11 +674,10 @@ describe('stateful MCP sessions', () => {
          const stranger = ioClient(`http://127.0.0.1:${server.io.httpServer.address().port}`);
          gms.push(stranger);
          await new Promise((resolve) => stranger.on('connect', resolve));
-         const ack = await stranger.emitWithAck(BRIDGE_REGISTRY, [entry('sneaky')]);
+         const ack = await stranger.emitWithAck(BRIDGE_REGISTRY, registryPayload([entry('sneaky')]));
          expect(ack.ok).toBe(false);
          const { client } = await connectClient();
          expect(await toolNames(client)).toEqual([
-            'create_actor',
             'read_handle',
          ]);
       });
@@ -685,8 +686,8 @@ describe('stateful MCP sessions', () => {
          await start();
          const gm = await connectGm();
          const ack = await gm.register(Array.from({ length: 40 }, (_, index) => entry(`many_${index}`)));
-         expect(ack.accepted).toBe(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - 2);
-         expect(ack.refused).toBe(12);
+         expect(ack.accepted).toBe(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length);
+         expect(ack.refused).toBe(40 - ack.accepted);
          const { client } = await connectClient();
          expect((await toolNames(client)).length).toBe(getBudget('ALWAYS_LISTED_TOOLS_MAX').value);
       });
@@ -708,13 +709,11 @@ describe('stateful MCP sessions', () => {
          const humanSession = await connectClient('?endpoint=human');
          const defaultSession = await connectClient();
          expect(await toolNames(humanSession.client)).toEqual([
-            'create_actor',
             'human_only',
             'read_handle',
          ]);
          expect(await toolNames(defaultSession.client)).toEqual([
             'agent_only',
-            'create_actor',
             'read_handle',
          ]);
          const fromHuman = await humanSession.client.callTool({
@@ -948,11 +947,9 @@ describe('stateful MCP sessions', () => {
          expect(refused.headers['mcp-session-id']).toBeUndefined();
          expect(mcp.sessions()).toBe(2);
          expect(await toolNames(first.client)).toEqual([
-            'create_actor',
             'read_handle',
          ]);
          expect(await toolNames(second.client)).toEqual([
-            'create_actor',
             'read_handle',
          ]);
          expect(logs.some((line) => line.includes('cap of 2 reached: initialize refused'))).toBe(true);

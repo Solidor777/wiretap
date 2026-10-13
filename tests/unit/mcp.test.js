@@ -1,192 +1,20 @@
 // @vitest-environment node
 import http from 'node:http';
 import { describe, it, expect } from 'vitest';
-import { makeCreateActorHandler, makeReadHandleHandler, startMcpServer } from '../../server/mcp.ts';
+import { makeReadHandleHandler, startMcpServer } from '../../server/mcp.ts';
 import { createHandleStore } from '../../server/handles.ts';
-import { BridgeError } from '../../server/endpoints.ts';
-import { NO_ENDPOINT, OP_CREATE_ACTOR, OP_FAILED } from '$shared/protocol.js';
 
 /**
- * Build a bridge that has no endpoint: no tools, no changes and an invoke that resolves to nothing.
- * @returns {{ invoke: Function, tools: Function, subscribe: Function }} A bridge with no endpoint behind it.
+ * Build a bridge that has no endpoint: no tools and no changes.
+ * @returns {{ invokeTool: Function, tools: Function, subscribe: Function }} A bridge with no endpoint behind it.
  */
 function idleBridge() {
    return {
-      invoke: async () => undefined,
+      invokeTool: async () => undefined,
       tools: () => [],
       subscribe: () => () => undefined,
    };
 }
-
-describe('makeCreateActorHandler', () => {
-   it('returns success content containing the new actor uuid', async () => {
-      const bridge = { invoke: async () => ({
-         uuid: 'Actor.abc',
-         id: 'abc',
-         name: 'Bob',
-         type: 'npc',
-      }) };
-      const handler = makeCreateActorHandler(bridge);
-      const result = await handler({
-         name: 'Bob',
-         type: 'npc',
-      });
-      expect(result.isError).toBeFalsy();
-      expect(result.content[0].text).toContain('Actor.abc');
-      expect(result.content[0].text).toContain('Bob');
-   });
-
-   it('forwards name and type to the bridge as createActor params', async () => {
-      let captured;
-      const bridge = {
-         invoke: async (op, params) => {
-            captured = {
-               op,
-               params,
-            };
-            return {
-               uuid: 'Actor.x',
-               name: 'Z',
-               type: 'character',
-            };
-         },
-      };
-      const handler = makeCreateActorHandler(bridge);
-      await handler({ name: 'Z' });
-      expect(captured.op).toBe(OP_CREATE_ACTOR);
-      expect(captured.params).toEqual({
-         name: 'Z',
-         type: undefined,
-      });
-   });
-
-   it('forwards an explicit type to the bridge', async () => {
-      let captured;
-      const bridge = {
-         invoke: async (op, params) => {
-            captured = params;
-            return {
-               uuid: 'Actor.y',
-               name: 'Z',
-               type: 'character',
-            };
-         },
-      };
-      const handler = makeCreateActorHandler(bridge);
-      await handler({
-         name: 'Z',
-         type: 'character',
-      });
-      expect(captured).toEqual({
-         name: 'Z',
-         type: 'character',
-      });
-   });
-
-   it('maps a BridgeError to an isError result formatted <code>: <message>', async () => {
-      const bridge = {
-         invoke: async () => {
-            throw new BridgeError(NO_ENDPOINT, 'No GM endpoint connected.');
-         },
-      };
-      const handler = makeCreateActorHandler(bridge);
-      const result = await handler({ name: 'Bob' });
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe('NO_ENDPOINT: No GM endpoint connected.');
-   });
-
-   it('lists the failures and appends (+N more) when the BridgeError carries truncated failures', async () => {
-      const failures = Array.from({ length: 10 }, (_, i) => ({
-         path: `p${i}`,
-         message: 'm',
-      }));
-      const bridge = {
-         invoke: async () => {
-            throw new BridgeError(OP_FAILED, 'invalid', failures, 50);
-         },
-      };
-      const result = await makeCreateActorHandler(bridge)({ name: 'Bob' });
-      expect(result.content[0].text.startsWith('OP_FAILED: invalid\np0: m\np1: m')).toBe(true);
-      expect(result.content[0].text.endsWith('p9: m (+40 more)')).toBe(true);
-      expect(Buffer.byteLength(result.content[0].text, 'utf8')).toBeLessThanOrEqual(512);
-   });
-
-   it('bounds an actor result string to 256 bytes', async () => {
-      const bridge = { invoke: async () => ({
-         uuid: 'Actor.x',
-         name: 'n'.repeat(5000),
-         type: 'npc',
-      }) };
-      const result = await makeCreateActorHandler(bridge)({ name: 'Bob' });
-      expect(result.isError).toBeFalsy();
-      expect(Buffer.byteLength(result.content[0].text, 'utf8')).toBeLessThan(256 + 128);
-      expect(result.content[0].text).toContain('…');
-   });
-
-   it.each([
-      [
-         'undefined',
-         undefined,
-      ],
-      [
-         'null',
-         null,
-      ],
-      [
-         'a string',
-         'Actor.x',
-      ],
-      [
-         'an array',
-         ['Actor.x'],
-      ],
-      [
-         'an object without a uuid',
-         {
-            name: 'Bob',
-            type: 'npc',
-         },
-      ],
-      [
-         'an object with a numeric uuid',
-         {
-            uuid: 5,
-            name: 'Bob',
-            type: 'npc',
-         },
-      ],
-      [
-         'an object without a name',
-         {
-            uuid: 'Actor.x',
-            type: 'npc',
-         },
-      ],
-      [
-         'an object with an object type',
-         {
-            uuid: 'Actor.x',
-            name: 'Bob',
-            type: {},
-         },
-      ],
-   ])('turns %s from a hostile ok:true ack into a short OP_FAILED result without throwing', async (_label, value) => {
-      const bridge = { invoke: async () => value };
-      const result = await makeCreateActorHandler(bridge)({ name: 'Bob' });
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text.startsWith(`${OP_FAILED}: `)).toBe(true);
-      expect(Buffer.byteLength(result.content[0].text, 'utf8')).toBeLessThanOrEqual(128);
-   });
-
-   it('rethrows a non-BridgeError rejection instead of returning its message', async () => {
-      const bridge = {
-         invoke: async () => {
-            throw new Error('boom');
-         },
-      };
-      await expect(makeCreateActorHandler(bridge)({ name: 'Bob' })).rejects.toThrow('boom');
-   });
-});
 
 describe('startMcpServer on an ephemeral port', () => {
    /**
