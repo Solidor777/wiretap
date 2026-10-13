@@ -1,4 +1,14 @@
 import { createActorDefinition, createActorHandler } from '~/bridge/scripts/createActor.js';
+import {
+   describeSchemaDefinition,
+   getDocumentDefinition,
+   listDocumentTypesDefinition,
+   searchDocumentsDefinition,
+} from '~/bridge/scripts/definitions.js';
+import { describeSchemaHandler } from '~/bridge/scripts/describeSchema.js';
+import { getDocumentHandler } from '~/bridge/scripts/getDocument.js';
+import { listDocumentTypesHandler } from '~/bridge/scripts/listDocumentTypes.js';
+import { searchDocumentsHandler } from '~/bridge/scripts/searchDocuments.js';
 import { scriptRegistry } from '~/bridge/scripts/registry.js';
 
 /**
@@ -9,6 +19,22 @@ export const SHIPPED_SCRIPTS = Object.freeze([
    {
       definition: createActorDefinition,
       handler: createActorHandler,
+   },
+   {
+      definition: listDocumentTypesDefinition,
+      handler: listDocumentTypesHandler,
+   },
+   {
+      definition: getDocumentDefinition,
+      handler: getDocumentHandler,
+   },
+   {
+      definition: searchDocumentsDefinition,
+      handler: searchDocumentsHandler,
+   },
+   {
+      definition: describeSchemaDefinition,
+      handler: describeSchemaHandler,
    },
 ]);
 

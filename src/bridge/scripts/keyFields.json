@@ -1,0 +1,292 @@
+{
+   "titan": {
+      "ActiveEffect.effect": [
+         "duration.type",
+         "duration.remaining",
+         "duration.initiative"
+      ],
+      "Actor.player": [
+         "inspiration",
+         "xp.earned",
+         "attribute.body.baseValue",
+         "attribute.mind.baseValue",
+         "attribute.soul.baseValue",
+         "resource.stamina.value",
+         "resource.resolve.value",
+         "resource.wounds.value",
+         "speed.stride.baseValue",
+         "speed.fly.baseValue",
+         "speed.climb.baseValue",
+         "speed.swim.baseValue",
+         "speed.burrow.baseValue"
+      ],
+      "Actor.npc": [
+         "role",
+         "attribute.body.baseValue",
+         "attribute.mind.baseValue",
+         "attribute.soul.baseValue",
+         "resource.stamina.value",
+         "resource.resolve.value",
+         "resource.wounds.value",
+         "speed.stride.baseValue",
+         "speed.fly.baseValue",
+         "speed.climb.baseValue",
+         "speed.swim.baseValue",
+         "speed.burrow.baseValue"
+      ],
+      "ChatMessage.attributeCheck": [
+         "failuresReRolled",
+         "parameters.advantage",
+         "parameters.attributeDice",
+         "parameters.automaticFailure",
+         "parameters.baseDifficulty",
+         "parameters.complexity",
+         "parameters.damageToReduce",
+         "parameters.diceMod",
+         "parameters.difficulty",
+         "parameters.doubleExpertise",
+         "parameters.doubleTraining",
+         "parameters.expertiseMod",
+         "parameters.extraFailureOnCritical",
+         "parameters.extraSuccessOnCritical",
+         "parameters.skillExpertise",
+         "parameters.skillTrainingDice",
+         "parameters.totalDice",
+         "parameters.totalExpertise",
+         "parameters.totalTrainingDice",
+         "parameters.trainingMod",
+         "results.criticalFailures",
+         "results.criticalSuccesses",
+         "results.expertiseRemaining",
+         "results.extraSuccesses"
+      ],
+      "ChatMessage.resistanceCheck": [
+         "failuresReRolled",
+         "parameters.advantage",
+         "parameters.automaticFailure",
+         "parameters.baseDifficulty",
+         "parameters.complexity",
+         "parameters.damageToReduce",
+         "parameters.diceMod",
+         "parameters.difficulty",
+         "parameters.doubleExpertise",
+         "parameters.expertiseMod",
+         "parameters.extraFailureOnCritical",
+         "parameters.extraSuccessOnCritical",
+         "parameters.resistanceDice",
+         "parameters.totalDice",
+         "parameters.totalExpertise",
+         "results.criticalFailures",
+         "results.criticalSuccesses",
+         "results.expertiseRemaining",
+         "results.extraSuccesses",
+         "results.succeeded",
+         "results.successes",
+         "results.damageTaken"
+      ],
+      "ChatMessage.attackCheck": [
+         "failuresReRolled",
+         "parameters.advantage",
+         "parameters.attackerAccuracy",
+         "parameters.attackerMelee",
+         "parameters.attackerRating",
+         "parameters.attributeDice",
+         "parameters.automaticFailure",
+         "parameters.baseDifficulty",
+         "parameters.cleave",
+         "parameters.complexity",
+         "parameters.damage",
+         "parameters.damageMod",
+         "parameters.diceMod",
+         "parameters.difficulty",
+         "parameters.doubleExpertise",
+         "parameters.doubleTraining",
+         "parameters.expertiseMod",
+         "parameters.extraFailureOnCritical",
+         "parameters.extraSuccessOnCritical",
+         "parameters.flurry",
+         "parameters.ineffective",
+         "parameters.magical",
+         "parameters.multiAttack",
+         "parameters.penetrating"
+      ],
+      "ChatMessage.castingCheck": [
+         "failuresReRolled",
+         "parameters.advantage",
+         "parameters.attributeDice",
+         "parameters.automaticFailure",
+         "parameters.baseDifficulty",
+         "parameters.complexity",
+         "parameters.damage",
+         "parameters.damageMod",
+         "parameters.diceMod",
+         "parameters.difficulty",
+         "parameters.doubleExpertise",
+         "parameters.doubleTraining",
+         "parameters.expertiseMod",
+         "parameters.extraFailureOnCritical",
+         "parameters.extraSuccessOnCritical",
+         "parameters.healing",
+         "parameters.healingMod",
+         "parameters.reflexesCheck",
+         "parameters.resilienceCheck",
+         "parameters.skillExpertise",
+         "parameters.skillTrainingDice",
+         "parameters.totalDice",
+         "parameters.totalExpertise",
+         "parameters.totalTrainingDice"
+      ],
+      "ChatMessage.itemCheck": [
+         "failuresReRolled",
+         "parameters.advantage",
+         "parameters.attributeDice",
+         "parameters.automaticFailure",
+         "parameters.baseDifficulty",
+         "parameters.complexity",
+         "parameters.damage",
+         "parameters.damageMod",
+         "parameters.damageReducedBy",
+         "parameters.diceMod",
+         "parameters.difficulty",
+         "parameters.doubleExpertise",
+         "parameters.doubleTraining",
+         "parameters.expertiseMod",
+         "parameters.extraFailureOnCritical",
+         "parameters.extraSuccessOnCritical",
+         "parameters.healing",
+         "parameters.healingMod",
+         "parameters.isDamage",
+         "parameters.isHealing",
+         "parameters.resistanceCheck",
+         "parameters.resolveCost",
+         "parameters.scaling",
+         "parameters.skillExpertise"
+      ],
+      "ChatMessage.weapon": [
+         "rarity",
+         "value",
+         "equipped",
+         "multiAttack"
+      ],
+      "ChatMessage.armor": [
+         "rarity",
+         "value",
+         "armor.max",
+         "armor.value"
+      ],
+      "ChatMessage.spell": [
+         "rarity",
+         "xpCost",
+         "quantity",
+         "castingCheck.attribute",
+         "castingCheck.skill",
+         "castingCheck.difficulty",
+         "castingCheck.complexity",
+         "castingCheck.autoCalculateDC"
+      ],
+      "ChatMessage.ability": [
+         "xpCost",
+         "rarity",
+         "action",
+         "reaction",
+         "passive"
+      ],
+      "ChatMessage.shield": [
+         "rarity",
+         "value",
+         "defense"
+      ],
+      "ChatMessage.equipment": [
+         "rarity",
+         "value",
+         "equipped"
+      ],
+      "ChatMessage.commodity": [
+         "rarity",
+         "value",
+         "quantity"
+      ],
+      "ChatMessage.effect": [
+         "duration.type",
+         "duration.remaining",
+         "duration.initiative"
+      ],
+      "ChatMessage.damageReport": [
+         "damageTaken",
+         "damageResisted",
+         "staminaLost",
+         "woundsSuffered",
+         "ignoredArmor"
+      ],
+      "ChatMessage.healingReport": [
+         "staminaRestored"
+      ],
+      "ChatMessage.spendResolveReport": [
+         "resolveSpent",
+         "resolveShortage"
+      ],
+      "ChatMessage.longRestReport": [
+         "woundsHealed"
+      ],
+      "ChatMessage.rendReport": [
+         "rend",
+         "armorLost"
+      ],
+      "ChatMessage.repairsReport": [
+         "armorRepaired"
+      ],
+      "ChatMessage.turnStartReport": [
+         "expiredEffectsRemoved"
+      ],
+      "ChatMessage.turnEndReport": [
+         "expiredEffectsRemoved"
+      ],
+      "ChatMessage.effectsExpiredReport": [
+         "expiredEffectsRemoved"
+      ],
+      "Item.ability": [
+         "xpCost",
+         "rarity",
+         "action",
+         "reaction",
+         "passive"
+      ],
+      "Item.armor": [
+         "rarity",
+         "value",
+         "armor.max",
+         "armor.value"
+      ],
+      "Item.commodity": [
+         "rarity",
+         "value",
+         "quantity"
+      ],
+      "Item.equipment": [
+         "rarity",
+         "value",
+         "equipped"
+      ],
+      "Item.shield": [
+         "rarity",
+         "value",
+         "defense"
+      ],
+      "Item.spell": [
+         "rarity",
+         "xpCost",
+         "quantity",
+         "castingCheck.attribute",
+         "castingCheck.skill",
+         "castingCheck.difficulty",
+         "castingCheck.complexity",
+         "castingCheck.autoCalculateDC"
+      ],
+      "Item.weapon": [
+         "rarity",
+         "value",
+         "equipped",
+         "multiAttack"
+      ]
+   }
+}

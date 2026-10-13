@@ -38,6 +38,7 @@ import { cleanForLog } from '$shared/logText.js';
  * @property {() => ScriptDefinition[]} definitions - Fresh copies of every definition, in registration order.
  * @property {(listener: () => void) => () => void} subscribe - Call the listener after every accepted script; returns
  * the unsubscribe function.
+ * @property {(line: string) => void} log - Write one line to the registry's log sink; never throws.
  */
 
 /**
@@ -71,12 +72,13 @@ const LOG_LABEL_BYTES = 48;
 const LOG_REASON_BYTES = 200;
 
 /**
- * Create a script registry: the shipped scripts a Foundry client offers to the sidecar. Registration applies the shared
- * definition validator (source `shipped`), the argument-schema subset the sidecar converts, and the tool-count and
- * total-definition-bytes budgets measured on the listed form the sidecar lists; the registry never keeps a reference to
- * the objects it was given.
+ * Create a script registry: the shipped scripts a Foundry client offers to the sidecar. Registration applies the
+ * shared definition validator (source `shipped`), the argument-schema subset the sidecar converts, and the tool-count
+ * and total-definition-bytes budgets measured on the listed form the sidecar lists; the registry never keeps a
+ * reference to the objects it was given.
  * @param {object} [options] - Optional settings of the registry.
- * @param {(line: string) => void} [options.log] - Receives one line per refusal or warning; defaults to `console.warn`.
+ * @param {(line: string) => void} [options.log] - Receives one line per refusal or warning; defaults to
+ * `console.warn`.
  * @returns {ScriptRegistry} A new, empty registry.
  */
 export function createScriptRegistry(options = {}) {
@@ -222,6 +224,8 @@ export function createScriptRegistry(options = {}) {
       definitions() {
          return [...scripts.values()].map((registered) => structuredClone(registered.definition));
       },
+
+      log,
 
       subscribe(listener) {
          listeners.add(listener);

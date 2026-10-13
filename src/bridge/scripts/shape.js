@@ -6,6 +6,8 @@ import { truncateUtf8, utf8Bytes } from '$shared/utf8.js';
  * @typedef {object} CompactOptions
  * @property {RegExp} [keyPattern] - Matches the key names of the `system` leaves that appear in the view; defaults to
  * `DEFAULT_KEY_PATTERN`.
+ * @property {string[]} [keyPaths] - Dotted paths below `system` naming the leaves to show, in order; when this is a
+ * list, `keyPattern` is not used. A path that does not end at a scalar, or holds an unsafe segment, is skipped.
  * @property {string[]} [embedded] - The names of the embedded collections to list as tuples; defaults to every
  * top-level array whose first element is an object with a string `_id`.
  */
@@ -161,8 +163,8 @@ function jsonBytes(value) {
 }
 
 /**
- * Collect the scalar leaves of a `system` tree whose key matches the pattern. Depth-first in property order; arrays are
- * not entered and each object is entered once.
+ * Collect the scalar leaves of a `system` tree whose key matches the pattern. Depth-first in property order; arrays
+ * are not entered and each object is entered once.
  * @param {unknown} system - The `system` value of the document.
  * @param {RegExp} pattern - Matches a leaf key; has no `g` or `y` flag.
  * @returns {Array<[string, string | number | boolean]>} At most `COMPACT_LEAVES_MAX` path and value pairs.
@@ -220,6 +222,45 @@ function collectLeaves(system, pattern) {
 }
 
 /**
+ * Read the named scalar leaves of a `system` tree, in the order named. Reads own properties only.
+ * @param {unknown} system - The `system` value of the document.
+ * @param {unknown[]} keyPaths - Dotted paths below `system`.
+ * @returns {Array<[string, string | number | boolean]>} At most `COMPACT_LEAVES_MAX` path and value pairs.
+ */
+function pathLeaves(system, keyPaths) {
+   /** @type {Array<[string, string | number | boolean]>} The leaves found. */
+   const leaves = [];
+   for (const keyPath of keyPaths) {
+      if (leaves.length >= COMPACT_LEAVES_MAX) {
+         break;
+      }
+      if (typeof keyPath !== 'string' || `system.${keyPath}`.length > LEAF_PATH_MAX_CHARS) {
+         continue;
+      }
+      /** @type {string[]} The path's segments. */
+      const names = keyPath.split('.');
+      if (names.some((name) => name === '' || name === 'prototype' || name in Object.prototype)) {
+         continue;
+      }
+      /** @type {unknown} The node reached so far. */
+      let node = system;
+      for (const name of names) {
+         node = isRecord(node) ? own(node, name) : undefined;
+      }
+      /** @type {boolean} Whether the node is a scalar a leaf can show. */
+      const scalar =
+         typeof node === 'string' || typeof node === 'boolean' || (typeof node === 'number' && Number.isFinite(node));
+      if (scalar) {
+         leaves.push([
+            `system.${keyPath}`,
+            typeof node === 'string' ? truncateUtf8(node, VALUE_MAX_BYTES) : node,
+         ]);
+      }
+   }
+   return leaves;
+}
+
+/**
  * Pick the embedded collections to list: the named ones, else every top-level array whose first element is an object
  * with a string `_id`.
  * @param {Record<string, unknown>} doc - The document export.
@@ -262,14 +303,15 @@ function tupleOf(element) {
 }
 
 /**
- * Build the compact view of a document export: `uuid`, `name`, `type`, the `system` leaves whose key matches a pattern
- * (`fields`, at most 24), and the embedded documents as `[id, name, type]` tuples (`embedded`: at most 8 collections,
- * their names shortened to 32 bytes, at most 40 tuples in all, with the true `total` of each collection). Every string
- * is bounded. While the serialized view exceeds `COMPACT_VIEW_MAX_BYTES` it loses entries and `cut` is set: the larger
- * of the leaves and the tuples loses its last entry, then any remaining leaf, then a collection with no tuples left,
- * then the header fields, so the size bound holds for any data. Reads own properties only and never throws.
+ * Build the compact view of a document export: `uuid`, `name`, `type`, the `modified` time of the export's `_stats`
+ * when it holds one, the `system` leaves named by `keyPaths` or whose key matches a pattern (`fields`, at most 24),
+ * and the embedded documents as `[id, name, type]` tuples (`embedded`: at most 8 collections, their names shortened to
+ * 32 bytes, at most 40 tuples in all, with the true `total` of each collection). Every string is bounded. While the
+ * serialized view exceeds `COMPACT_VIEW_MAX_BYTES` it loses entries and `cut` is set: the larger of the leaves and the
+ * tuples loses its last entry, then any remaining leaf, then a collection with no tuples left, then the header fields,
+ * so the size bound holds for any data. Reads own properties only and never throws.
  * @param {unknown} doc - The canonical document export (plain data).
- * @param {CompactOptions} [options] - The leaf key pattern and the embedded collection names.
+ * @param {CompactOptions} [options] - The leaf key paths or key pattern and the embedded collection names.
  * @returns {Record<string, unknown>} The compact view; `{}` when the input is not an object.
  */
 function compact(doc, options = {}) {
@@ -297,8 +339,17 @@ function compact(doc, options = {}) {
             header[key] = truncateUtf8(value, max);
          }
       }
+      /** @type {unknown} The document's `_stats`, from which the modified time is read. */
+      const stats = own(doc, '_stats');
+      /** @type {unknown} The last modification time in milliseconds, when the stats hold one. */
+      const modified = isRecord(stats) ? own(stats, 'modifiedTime') : undefined;
+      if (typeof modified === 'number' && Number.isFinite(modified)) {
+         header.modified = modified;
+      }
       /** @type {Array<[string, string | number | boolean]>} The leaves, trimmed to fit. */
-      const leaves = collectLeaves(own(doc, 'system'), pattern);
+      const leaves = Array.isArray(options.keyPaths)
+         ? pathLeaves(own(doc, 'system'), options.keyPaths)
+         : collectLeaves(own(doc, 'system'), pattern);
       /**
        * The embedded collections and their tuples.
        * @type {Array<{ name: string, total: number, rows: Array<[string, string, string]> }>}
@@ -362,7 +413,12 @@ function compact(doc, options = {}) {
       /** @type {boolean} Whether an entry was dropped to fit the budget or a collection was left out. */
       let cut = skipped;
       /** @type {string[]} The header fields in the order they are dropped when nothing else is left to drop. */
-      const headerDrop = ['type', 'name', 'uuid'];
+      const headerDrop = [
+         'modified',
+         'type',
+         'name',
+         'uuid',
+      ];
       while (jsonBytes(assemble(cut)) > budget) {
          cut = true;
          /** @type {number} The bytes the leaves take. */
@@ -582,7 +638,8 @@ function ack(fields) {
       let cap = ACK_VALUE_START_BYTES;
       /** @type {Record<string, string | number | boolean | null>} The candidate ack. */
       let candidate = build(cap);
-      // Shorten the strings first; once they cannot shrink further, drop fields from the end. An empty ack always fits.
+      // Shorten the strings first; once they cannot shrink further, drop fields from the end. An empty ack always
+      // fits.
       while (jsonBytes(candidate) > budget) {
          if (cap > 4) {
             cap = Math.floor(cap / 2);

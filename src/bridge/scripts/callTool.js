@@ -46,8 +46,8 @@ export const SCRIPT_BUSY = 'SCRIPT_BUSY';
  * the handler under a time limit. The order is fixed: a denied call learns nothing about its arguments. At most
  * `SCRIPT_CONCURRENCY_MAX` handlers run at once; a call beyond it is refused with `SCRIPT_BUSY`.
  * @param {CallToolOptions} options - The registry and time limit.
- * @returns {(params: unknown) => Promise<unknown>} The op handler: resolves with the plain-data result and rejects with
- * a `ScriptError` (its code is acked) or the handler's own error.
+ * @returns {(params: unknown) => Promise<unknown>} The op handler: resolves with the plain-data result and rejects
+ * with a `ScriptError` (its code is acked) or the handler's own error.
  */
 export function createCallTool({ registry, timeoutMs = SCRIPT_TIMEOUT_MS }) {
    /** @type {number} The script executions running now, from the start of a handler until its call ends. */
@@ -84,7 +84,7 @@ export function createCallTool({ registry, timeoutMs = SCRIPT_TIMEOUT_MS }) {
       let result;
       try {
          result = await Promise.race([
-            Promise.resolve().then(() => handler(args, buildContext(definition, controller.signal))),
+            Promise.resolve().then(() => handler(args, buildContext(definition, controller.signal, registry.log))),
             timeout,
          ]);
       } finally {

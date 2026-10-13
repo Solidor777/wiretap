@@ -96,6 +96,10 @@ export const BUDGETS = table([
    budget('COMPACT_VIEW_MAX_BYTES', 2000, 'bytes', BUDGET_SEVERITY.HARD),
    // Embedded tuples in a compact view; a total count follows, so the size bound is independent of the data.
    budget('COMPACT_EMBEDDED_TUPLES_MAX', 40, 'count', BUDGET_SEVERITY.HARD),
+   // The world's document classes and subtypes as `list_document_types` returns them; longer subtype lists are cut.
+   budget('DOCUMENT_TYPES_MAX_BYTES', 3000, 'bytes', BUDGET_SEVERITY.HARD),
+   // The `describe_schema` result: the blank export plus the schema outline or subtree, within the default result cap.
+   budget('DESCRIBE_SCHEMA_MAX_BYTES', 8000, 'bytes', BUDGET_SEVERITY.HARD),
    // Projection fixture target per 10 requested fields (1 KB); the size of a projection is the agent's request.
    budget('PROJECTION_BYTES_PER_10_FIELDS', 1000, 'bytes', BUDGET_SEVERITY.WARN),
    // One page of search rows (4 KB).
@@ -104,6 +108,18 @@ export const BUDGETS = table([
    budget('SEARCH_DEFAULT_LIMIT', 20, 'count', BUDGET_SEVERITY.HARD),
    // Largest search page size a caller may request.
    budget('SEARCH_MAX_LIMIT', 100, 'count', BUDGET_SEVERITY.HARD),
+   // Candidates one search call examines after its cursor; a search that reaches it reports `cut` and resumes.
+   budget('SEARCH_SCAN_MAX', 2000, 'count', BUDGET_SEVERITY.HARD),
+   // Documents one search call exports to test a filter; a search that reaches it reports `cut` and resumes.
+   budget('SEARCH_EXPORT_MAX', 300, 'count', BUDGET_SEVERITY.HARD),
+   // Candidates a search examines between two yields to the event loop (and checks of the abort signal).
+   budget('SEARCH_BATCH_SIZE', 25, 'count', BUDGET_SEVERITY.HARD),
+   // Longest `fields` path of a search row, in bytes; a longer path is refused because rows echo it as a key.
+   budget('SEARCH_FIELD_PATH_MAX_BYTES', 64, 'bytes', BUDGET_SEVERITY.HARD),
+   // Distinct paths a compendium search asks the pack index for; the index is shared and keeps what is requested.
+   budget('SEARCH_INDEX_FIELDS_MAX', 5, 'count', BUDGET_SEVERITY.HARD),
+   // Most segments of a path asked of a compendium index.
+   budget('SEARCH_INDEX_SEGMENTS_MAX', 3, 'count', BUDGET_SEVERITY.HARD),
    // One error text.
    budget('ERROR_MAX_BYTES', 512, 'bytes', BUDGET_SEVERITY.HARD),
    // Failures listed in one error before a count of the rest.
