@@ -17,10 +17,11 @@ document, so none are stated here; the count at the time this file was written i
 | M13 Context-budget harness, result enforcer, handle store, path resolver | Done | 2026-10-11 | `e672583`, `c810a24`, `1701020`, `ffce097`, `1cf0aac`, `7816dbf` | calibration table below; `tests/measure/measureContext.mjs` |
 | M2 Risk-gate options | Done | 2026-10-11 | `718b5b4`, `b38193d`, `4f1fcba`, `efdae9b` (protocol version 3) | gate table in `shared/gates.js`; PLAN.md section 4.6 |
 | M3 Stateful MCP sessions | Done | 2026-10-12 to 2026-10-13 | `0de73da` (sessions, registry, HTTP hardening), `1030fdb` (build output to `dist/`), `36f2b59` (skills, results, rules) | [`experiments/2026-10-m3-results.md`](experiments/2026-10-m3-results.md) (live check run 2026-10-12) |
+| M14 Script runtime and the discovery layer | Done | 2026-10-13 | not yet committed | [`PLAN.md`](PLAN.md) section 4.5 as-built note; client runtime in `src/bridge/scripts/`; user-facing skill `skills/wiretap/SKILL.md` |
 
-Current suite (MEASURED 2026-10-13, `npm test`): 50 test files passed, 1241 tests passed, 1 skipped (1242).
+Current suite (MEASURED 2026-10-13, `npm test`): 63 test files passed, 1678 tests passed, 1 skipped (1679).
 
-Next milestone in the order of PLAN.md section 5: M14.
+Next milestone in the order of PLAN.md section 5: M4.
 
 ## M0 status and deviations
 

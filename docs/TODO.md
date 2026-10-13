@@ -59,18 +59,34 @@
       exists; the result enforcer checks only the longest side (1280 px), the 1,000,000-character data size and the
       PNG type, never the area
 
-- [ ] Reconcile the M3 registry (`bridge:registry` as a plain array, tool names of at most 32 characters, 30 tools in
-      all) with the script registry when it is built: plugin tool names of at most 64 characters
-      (`PLUGIN_TOOL_NAME_MAX_CHARS`), the `{apiVersion, skills}` shape of docs/PLAN.md section 4.5, and the shared budget of
-      listed tools
-- [ ] Client handler for the `callTool` op (`src/bridge/foundryBridge.js` has no entry for it in `OP_HANDLERS`) and the
-      client side of `bridge:registry`: the production client sends no registry yet, so no registry tool exists in a
-      real session
-- [ ] The client `callTool` handler must validate `arguments` against the client's own declaration of the tool (docs/PLAN.md M14
-      "client-side argument validation"): today the sidecar validates against the listed shape and refuses a call when the
-      picked endpoint declares a different schema, but `src/` has no handler and so no validation of its own
-- [ ] Extend `WIRETAP_INSTRUCTIONS` when user-facing Wiretap skills ship: the text names no skill today; add the
-      pointer sentence and keep it within `INSTRUCTIONS_MAX_CHARS` (the context-budget test checks the tool names)
+- [ ] Set `destructiveHint` for scripts that delete: a script definition has no field that declares a script
+      destructive, so the sidecar sets only `readOnlyHint`; add the field when `delete_documents` is built
+- [ ] Plugin and agent-saved script routes: `validateScriptDefinition` already applies the 64-character
+      `<moduleId>__<skill>` and `agent__<name>` rules but refuses both sources as not supported until their routes exist
+      (docs/PLAN.md M7, M16)
+- [ ] Point `WIRETAP_INSTRUCTIONS` (`server/mcp.ts`, a sidecar file) at the user-facing skill `skills/wiretap/SKILL.md`
+      when that is judged right: one sentence within `INSTRUCTIONS_MAX_CHARS` (600; the current text leaves room to
+      check against the constant), and the cost is paid by every session at start (the 531-character text measured about
+      221 tokens, `docs/experiments/2026-10-m3-results.md`), so measure the sentence before keeping it
+- [ ] `bridge:registry` acks carry counts only (`{ ok, accepted, refused }`), so the client logs how many scripts the
+      sidecar refused but not which or why (the reasons are only in the sidecar log). Return `{ name, reason }` for each
+      refused entry (sidecar change, bounded) so the client log can name them
+- [ ] `ctx.dom` is `{ document }` only. Define the DOM surface (layout measurement, region capture) with the first
+      `requires: 'dom'` script (docs/PLAN.md M15b); the client always identifies with `dom: true`
+- [ ] The executing client's own gate check is covered by unit tests only: through the sidecar a closed gate is denied
+      by the sidecar's snapshot before anything is sent (e2e `scripts.spec.js` shows that path). An e2e that reaches the
+      client check needs a way to hold the sidecar's snapshot stale, for example a test-only observer command
+- [ ] Compact view: `ctx.shape.compact` uses a generic default key-name pattern; the per-subtype key-field lists and
+      the compact view of Foundry documents (a canonical export) belong to docs/PLAN.md M4. With 16-character ids and
+      18-character names 40 tuples do not fit the 2 KB budget (35 fit in the fixture, asserted by
+      `tests/unit/scriptShape.test.js`), so the byte budget trims them
+
+- [ ] e2e registry (docs/PLAN.md section 4.8): the running list records world documents only. Add `parent`, `packId`
+      and `sceneId` fields and embedded-first teardown ordering (tokens, then other embedded documents, then world
+      documents, folders, world compendia) with the first flow that creates an embedded document or a compendium; also
+      the TITAN safety net's chat messages since the run start and the E2E users' broken hotbar entries, and the
+      restore of world settings other than the risk gates. The sweep and census cover prefixed world documents,
+      combats and orphan tokens (`tests/e2e/registryCore.js`)
 
 ## Carried-over cleanups
 
@@ -96,8 +112,9 @@
 
 ## Deferred (later)
 
-- [ ] Call `requireGate(name, moduleId?)` (`src/bridge/gates.js`) at the start of every gated op handler as those ops
-      land, and ack its denial as `GATE_DENIED`; today it has no production caller and is covered by unit tests only.
+- [ ] A script that declares a `gate` is gated by the `callTool` dispatcher (`requireGate`, ack `GATE_DENIED`). Each
+      core operation in `ctx.core` that touches a gated category must also call `requireGate` itself, because a script
+      can call a core operation outside the gate of its own category; no such operation exists yet.
 - [ ] Wire `denyWiretapSettingWrite` / `resolveSettingKey` into every Setting write path (CRUD, path-scoped writes,
       batch, replace, delete, settings skills, scripts' `ctx.core.*`) as those paths land; each path gets a test that
       it refuses `wiretap.*` and writes the string `resolveSettingKey` returned.

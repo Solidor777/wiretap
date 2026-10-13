@@ -20,7 +20,8 @@ replaced `invokeOnGM` and the first-socket routing with the endpoint registry an
 `create_actor`. The request path was MCP HTTP (`127.0.0.1:31417/mcp`, stateless; a new
 `McpServer` is built per request, READ `server/mcp.ts:95-100`) → `bridge.invokeOnGM` (first identified GM socket, READ
 `server/foundryBridge.ts:57-76`) → Socket.IO `bridge:invoke` → `OP_HANDLERS` on a GM browser client (READ
-`src/bridge/foundryBridge.js:25-27`). Socket.IO is bound to `127.0.0.1` (READ `server/server.ts:30`). Identify trusts
+`src/bridge/foundryBridge.js:25-27`; as built the table is `opHandlers` and holds only `callTool`, which runs a
+registered script). Socket.IO is bound to `127.0.0.1` (READ `server/server.ts:30`). Identify trusts
 the client's `isGM` claim (READ `server/foundryBridge.ts:40-44`).
 
 Goals:
@@ -545,20 +546,35 @@ Protocol v2 replaces v1; a mismatched `protocolVersion` is refused, not translat
 
 - `bridge:identify` gains: `kind`, `dom` (can render and measure), `protocolVersion`, `token?` (external mode only),
   `gateState` (from M2). The per-class `fingerprint` was only for raw-socket eligibility and is dropped with M11 (D27).
-- `bridge:registry` carries `{apiVersion, skills: [{name, moduleId, source: shipped|plugin|agent, description,
-  inputSchema, mutates, requires, budgetBytes}]}`.
-  **As built in M3** (the script registry of M14 reshapes this): the payload is a plain array of `{name, description,
-  inputSchema, budgetBytes?, gate?, moduleId?}`; each event replaces the endpoint's whole list (an empty array clears
-  it); the ack is `{ok, accepted, refused}` (`NOT_GM` for an unregistered socket, `OP_FAILED` for a non-array payload,
-  which also clears the list). The sidecar sanitizes every entry: names of at most 32 characters
-  (`CORE_TOOL_NAME_MAX_CHARS`) and at most 30 tools in all (`ALWAYS_LISTED_TOOLS_MAX` less the built-in tools) apply to
-  every registry tool, plugin names of 64 characters are not yet accepted; the JSON Schema is a documented subset
-  (depth 4, 64 nodes, 32 properties, string enums of at most 32 values) and `$ref`, combinators, `pattern`, `format`,
-  `default`, `const` and `Object.prototype`-named properties are refused. A call runs the `callTool` op with
-  `{name, arguments}`; the executing endpoint is resolved by name at call time and its own declaration of the tool
-  supplies the gate and the result budget (`TOOL_GONE` when it no longer registers the name, `GATE_DENIED` when its
-  declared gate differs from the listed one). An MCP session picks its endpoint kind with `?endpoint=human|agent` on
-  the initialize URL.
+- `bridge:registry` carries `{apiVersion, scripts: [ScriptDefinition]}`. **As built (protocol v4, M14 phase 1):**
+  `apiVersion` is the integer `SCRIPT_API_VERSION` (1) and a payload with another value, or a plain array, is refused
+  whole (the endpoint's list is cleared and the ack is `OP_FAILED`). A `ScriptDefinition` (`shared/scripts.js`, one
+  validator for both sides) is `{name, version, description, inputSchema, result: {budgetBytes}, requires, mutates,
+  gate?, moduleId?}`. `result.shape` of §2.4 is not on the wire (the result shaping runs in the client handler).
+  `source` (shipped|plugin|agent) is not a field: the registering route implies it and the validator takes it as an
+  argument; only `shipped` is accepted today and a valid plugin or agent definition is refused with "not supported by
+  this version of Wiretap". `requires` and `mutates` are required and never defaulted; `requires: 'none'` (sidecar
+  scripts) is valid in the shared shape but refused when a client registers it. `version` is a semver-like string of
+  at most 32 characters (`SCRIPT_VERSION_MAX_CHARS`); `gate` is a name in `GATES` other than `allowedPluginModules`;
+  `moduleId` is plugin-only. Each event replaces the endpoint's whole list (an empty `scripts` clears it); the ack is
+  `{ok, accepted, refused}` (`NOT_GM` for an unregistered socket). The sidecar validates every entry with the shared
+  validator and the sidecar-only conversion: names of at most 32 characters (`CORE_TOOL_NAME_MAX_CHARS`; plugin and
+  agent names would be 64) and at most 30 tools in all (`ALWAYS_LISTED_TOOLS_MAX` less the built-in `read_handle`);
+  the JSON Schema is a documented subset (depth 4, 64 nodes, 32 properties, string enums of at most 32 values) and
+  `$ref`, combinators, `pattern`, `format`, `default`, `const` and `Object.prototype`-named properties are refused.
+  Every script is listed as an MCP tool with `readOnlyHint = !mutates`; `destructiveHint` is not set. A call runs
+  the `callTool` op with `{name, arguments}`; the executing endpoint is resolved by name at call time and its own
+  declaration of the tool supplies the gate and the result budget (`TOOL_GONE` when it no longer registers the name or
+  declares a different argument schema, `requires` or `mutates`; `GATE_DENIED` when its declared gate differs from the
+  listed one). `requires: 'dom'` scripts route to a `dom: true` endpoint of the `agent` kind only (D25), or of the
+  kind the session fixed with `?endpoint=`; with none, the call fails with `NO_ENDPOINT` naming the missing kind. An
+  MCP session picks its endpoint kind with `?endpoint=human|agent` on the initialize URL. `create_actor` is no longer
+  a sidecar handler: the sidecar's only built-in tool is `read_handle`, and the client registers `create_actor` as a
+  script (`src/bridge/scripts/`). The client sends the registry after every acknowledged identify and whenever a script
+  registers. Its `callTool` handler finds the script by name, judges the declared gate from its own settings
+  (`GATE_DENIED`), validates the arguments with `shared/schemaValidate.js` (`ARGS_INVALID`), and runs the handler under
+  an 8 s limit (`SCRIPT_TIMEOUT`); a result that cannot be serialized or exceeds 900,000 bytes is refused
+  (`RESULT_INVALID`, `RESULT_TOO_LARGE`).
 - `bridge:credentials` (GM human tab → sidecar only) carries the agent list. It is never broadcast and never sent
   sidecar → client.
 - `bridge:invoke` gains `actAs?`, `dryRun?`, `requestId`, and `code` + `sha256` for agent-saved scripts (if D21).
@@ -834,6 +850,8 @@ server `instructions`; `list_changed` fires at most once per registry change (de
 re-list on every identify. **Risks:** session leak under abandoned clients. Mitigation: expiry with tests.
 
 ### M14 — Script runtime and the discovery layer
+
+Done: see [`docs/PROGRESS.md`](PROGRESS.md).
 
 **Goal:** one registry for core tools, shipped scripts and plugin scripts (§2.4), and the skills that point to them
 (§2.7). **Depends on:** M1, M3, M13. **Consent at start:** layout `src/bridge/scripts/`; delivery of user-facing

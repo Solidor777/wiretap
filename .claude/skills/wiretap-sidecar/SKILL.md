@@ -63,10 +63,33 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 ## Shared protocol
 
-`shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (3), `BRIDGE_IDENTIFY`, `BRIDGE_GATE_STATE`,
-`BRIDGE_REGISTRY`, `BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CREATE_ACTOR`, `OP_CALL_TOOL`, `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
-`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `PROTOCOL_MISMATCH`, `NOT_GM`, `GATE_DENIED`, and typedefs for the identify (with its optional `gateState`), identify ack, gate-state ack, `RegistryToolDefinition`, `BridgeRegistryAck`, invoke, op ack and error payloads. Routing,
+`shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (4), `BRIDGE_IDENTIFY`, `BRIDGE_GATE_STATE`,
+`BRIDGE_REGISTRY`, `BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CALL_TOOL` (the only op), `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
+`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `TOOL_GONE`, `PROTOCOL_MISMATCH`, `NOT_GM`, `GATE_DENIED`, and typedefs for the identify (with its optional `gateState`), identify ack, gate-state ack, `BridgeRegistryAck`, invoke, op ack and error payloads. Routing,
 the endpoint registry and the error contract are in `server/endpoints.ts` (see `wiretap-mcp-bridge`). Both sides import these constants; adding an event means editing this file and both consumers.
+
+## Script definition (`shared/scripts.js`)
+
+Plain JS with JSDoc, imported by both sides (today only `server/toolRegistry.ts` imports it). The module header documents every
+field of a script definition `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate?,
+moduleId? }`. Exports: `SCRIPT_API_VERSION` (1), `SCRIPT_SOURCES` (`shipped`, `plugin`, `agent`), `SCRIPT_REQUIRES` (`none`, `api`,
+`dom`), `RESERVED_SCRIPT_NAMES` (`read_handle`), `definitionBytes(name, description, inputSchema)`,
+`validateScriptDefinition(input, source)` and `parseRegistryPayload(payload)`.
+
+- `validateScriptDefinition` returns `{ ok: true, definition, warnings }` (a fresh copy of the known fields; a description over the
+  160-character target warns) or `{ ok: false, reason }`; it never throws (own properties only, a throwing getter or an
+  unserializable schema is a refusal). `source` is implied by the registering route and is not a field: an unknown source is a
+  refusal, `shipped` names are 1 to 32 characters (`[a-z][a-z0-9_-]*`), `plugin` names are `<moduleId>__<skill>` and `agent` names
+  `agent__<name>` of at most 64 characters, and every field is checked for every source before a valid plugin or agent definition is
+  refused as "not supported by this version of Wiretap". `mutates` (boolean) and `requires` are required and never defaulted;
+  `version` is `MAJOR.MINOR.PATCH` with optional `-prerelease` and `+build` within `SCRIPT_VERSION_MAX_CHARS` (32); `result.budgetBytes` is
+  an integer 1 to `RESULT_HARD_CAP_MAX_BYTES`; `gate` is a name in `GATES` except `allowedPluginModules`; `moduleId` exists on
+  plugin scripts only; `{name, description, inputSchema}` is held to `DEFINITION_MAX_BYTES` in UTF-8 bytes. The JSON Schema subset check
+  and the conversion to zod are sidecar-only (`server/toolRegistry.ts`).
+- `parseRegistryPayload` opens `{ apiVersion, scripts }` and refuses everything else (a plain array included) with a reason that
+  names `apiVersion`.
+
+Tests: `tests/unit/scripts.test.js`.
 
 ## Risk gates (`shared/gates.js`)
 
@@ -84,7 +107,7 @@ Plain JS with no dependencies and JSDoc types, shared by both sides. Today only 
 
 - `shared/budgets.js` — `BUDGETS` (frozen table of named entries `{ name, value, unit, severity }`), `BUDGET_SEVERITY`
   (`hard` | `warn`) and `getBudget(name)` (throws on an unknown name; inherited properties are not budgets). The numbers
-  are the context budgets (tool name, definition, description, ack, compact view, search page, error, text hard cap and
+  are the context budgets (tool name, script version length, definition, description, ack, compact view, search page, error, text hard cap and
   per-call maximum, sheet layout, image side, count and data size, stored-result entry size and count, live recalibration, paths per call, path-error bytes, `PATH_BYTES_MAX` 512,
   `PATH_SEGMENTS_MAX` 16). `warn` entries are `DESCRIPTION_TARGET_CHARS`, `PROJECTION_BYTES_PER_10_FIELDS`,
   `LIVE_RECALIBRATION_MAX_RUNS`. 1 KB is 1000 bytes (8000, 16000, 2000, 1000, 4000).

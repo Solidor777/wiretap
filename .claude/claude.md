@@ -69,6 +69,7 @@ On Fable-class models (`claude-fable-5`, `claude-mythos-5`), follow the global `
 | `wiretap-sidecar` | `paths:` `server/**`, `shared/**` | Socket.IO server, PTY relay, composition |
 | `wiretap-mcp-bridge` | `paths:` MCP/bridge files | MCP tools, result enforcer, endpoint router, bridge handshake, ops |
 | `wiretap-mcp-sessions` | `paths:` `server/mcpSessions.ts`, `server/toolRegistry.ts`, session tests | Stateful MCP sessions, expiry and cap, `list_changed`, HTTP limits, the endpoint tool registry |
+| `wiretap-scripts` | `paths:` `src/bridge/scripts/**`, `shared/scripts.js`, `shared/schemaValidate.js`, their tests | Client script registry, `callTool` dispatch, `ctx`, shipped scripts, user-facing skill |
 | `wiretap-build-test` | `paths:` `tests/**`, build/lint configs | Build, vitest, Playwright e2e |
 
 * **Mandatory update:** when a plan finishes (and after any significant inline change) update every `wiretap-*` skill whose paths the change touched, in the same work unit, to the current state. A plan is not complete until this is done.

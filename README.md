@@ -29,6 +29,17 @@ Svelte 5 (runes), SCSS, and Vite.
 up, Foundry app in `<userdata>/../foundry`); override with `FOUNDRY_DATA_PATH`, `FOUNDRY_APP_DIR`, `FOUNDRY_PORT`,
 `FOUNDRY_WORLD`, `FOUNDRY_SERVER_LOG` (default `debug/dumps/e2e-server.log`).
 
+A spec that creates a world document records it in the running list `test/state/registry.json` (gitignored,
+overwritten, never deleted) as soon as its id is known, and removes it with a Foundry document call (`document.delete()`)
+after the test. Before it deletes anything the teardown checks every recorded entry: an allowed world document type, a
+uuid of the form `<Type>.<16-character id>` (never a compendium or embedded uuid), a resolved document of the recorded
+type that is not in a pack, not embedded and named with the `Wiretap E2E ` prefix; if any entry fails, nothing is
+deleted and the run fails. After the teardown a sweep deletes (through the same checks) every world document named with
+the prefix that no running list recorded, and the run fails when it finds one. A census then counts prefixed documents,
+every combat and every token whose actor no longer resolves; each test and the global teardown fail on a non-empty
+census, and the global setup removes what a crashed run left. The suite refuses to run these steps in any world but
+`FOUNDRY_WORLD` (default `test-titan`).
+
 ## Running the sidecar
 
 Wiretap's terminal needs a small local Node sidecar (it runs the real PTY; a browser can't). Start it with
@@ -81,15 +92,34 @@ method `405`.
   client the session routes to (any other value gets `400`). Without it a call goes to the first healthy `agent`
   endpoint, then the first healthy `human` one.
 - **Instructions.** Every session receives a short server `instructions` text that names the tools and explains
-  handles and tool-list changes; it names no skill because none ships yet. An earlier, longer text (531 characters)
-  cost about 221 tokens of context (measured, same results file); the current text is shorter and was not re-measured.
-- **Registered tools.** A registered GM client can push its complete tool list with the Socket.IO event
-  `bridge:registry` (an array of `{ name, description, inputSchema, budgetBytes?, gate?, moduleId? }`; each event
-  replaces the endpoint's previous list). The sidecar refuses any entry over the budgets (name at most 32 characters,
-  description at most 240, bounded definition, a documented JSON Schema subset), logs the reason, and tells each session
-  routed to that endpoint with one debounced `notifications/tools/list_changed` (200 ms quiet, 1,000 ms at most). A
-  call to such a tool runs the `callTool` operation on the session's endpoint. The shipped client sends no registry yet.
-  A tool added during a `claude` session was deferred (found through `ToolSearch`) and callable in the same session.
+  handles and tool-list changes; it does not point to the Wiretap skill (see below). An earlier, longer text (531
+  characters) cost about 221 tokens of context (measured, same results file); the current text is shorter and was not
+  re-measured.
+- **Registered scripts.** Every tool except the built-in `read_handle` is a script a GM client registers. A registered
+  GM client pushes its complete script list with the Socket.IO event `bridge:registry`, whose payload is
+  `{ apiVersion: 1, scripts: [...] }` (a plain array is refused); each event replaces the endpoint's previous list. A
+  script definition is `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate? }`,
+  documented field by field in `shared/scripts.js`: `version` is a semver-like string of at most 32 characters,
+  `requires` is `'api'` (any client endpoint) or `'dom'` (a DOM-capable endpoint), and `mutates` is required and never
+  defaulted. The sidecar refuses any entry over the budgets (name at most 32 characters, description at most 240,
+  bounded definition, a documented JSON Schema subset), logs the reason, and tells each session routed to that endpoint
+  with one debounced `notifications/tools/list_changed` (200 ms quiet, 1,000 ms at most). A call to such a tool runs the
+  `callTool` operation on the session's endpoint; each tool is listed with `readOnlyHint` set to the inverse of
+  `mutates`. `create_actor` is one of these scripts: the Foundry client registers it from `src/bridge/scripts/` and the
+  sidecar has no handler of its own for it. The client sends its registry after every acknowledged identify and
+  whenever a script registers, so a reconnect restores the tool list. The client runs a call only after it has found the
+  script by name, judged the script's declared risk gate from its own world settings, and validated the arguments
+  against the script's own schema (`shared/schemaValidate.js`, the same JSON Schema subset the sidecar converts; every
+  array schema must declare a `maxItems` of at most 1,000); a script that runs longer than 8 s fails with
+  `SCRIPT_TIMEOUT`, which says the operation may still have applied. A client runs at most 8 scripts at once; a call
+  beyond that fails at once with `SCRIPT_BUSY`. The client sends one registry push per task however many scripts register in it; the sidecar applies at most 2
+  `bridge:registry` pushes per second from one socket: later pushes in the same second are coalesced, and the latest is applied when the second ends (an earlier
+  coalesced push is acked `{ ok: true, coalesced: true }`). The listed definitions of all tools, with the room kept
+  for the sidecar's own `read_handle`, fit 16,000 bytes; a tool that would overflow it is refused with a logged reason.
+  `create_actor` takes `name` (1 to 128 characters) and an optional `type` (1 to 64 characters), accepts no other
+  argument, is listed with `readOnlyHint` false, and returns the JSON ack `{uuid, name, type}` (a name over about 80
+  bytes is shortened in it). A tool
+  added during a `claude` session was deferred (found through `ToolSearch`) and callable in the same session.
 - **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
   alone does not count). At most 32 sessions are held; an `initialize` beyond that is refused with `503` and a
   `Retry-After` header and no held session is ended, so one client cannot push another's session out. The idle sweep (one
@@ -100,6 +130,17 @@ method `405`.
   as an open event stream, is not); at most 128 connections are served at once. An unknown session id is answered
   `404` before any body is read. A refused request is answered with `Connection: close` once the rest of its body
   (up to 8 MiB) has been read and discarded, so the client sees the status instead of a reset connection.
+
+## Wiretap skill for Claude Code
+
+`skills/wiretap/SKILL.md` is a short user-facing skill that tells an agent which Wiretap tools exist
+(`mcp__wiretap__create_actor`, `mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
+copy the `skills/wiretap` directory into the `.claude/skills/` directory of the project that runs `claude` (a skill for
+one project), or into `~/.claude/skills/` (a skill for every project), so that the file is
+`.claude/skills/wiretap/SKILL.md`, then start a new `claude` session. A symbolic link to the directory works the same
+way where your system allows one (`ln -s <module>/skills/wiretap <target>/wiretap`; on Windows `mklink /D` needs a
+console with symbolic-link rights). The skill names only tools that exist; a test (`tests/unit/shippedSkill.test.js`
+and the context-budget test) fails when it names one that does not.
 
 ## Large results and handles
 
@@ -138,7 +179,7 @@ UTF-8 size and twice its character count, plus 256 bytes of overhead; least rece
 a handle not read for 30 minutes (measured on a monotonic clock) expires.
 
 **Errors and images.** Error text is capped at 512 bytes. A thrown `BridgeError` passes as `<code>: <message>`; any
-other failure (`create_actor` rethrows them too), and any result the enforcer cannot read (no `content`, non-string text, unserializable content), becomes a fixed short
+other failure, and any result the enforcer cannot read (no `content`, non-string text, unserializable content), becomes a fixed short
 error (`Tool failed.` or `Tool returned an invalid result.`) and the real cause is written to the sidecar log only, with
 control characters and line breaks replaced by spaces and the text cut to 512 bytes. A
 result is refused with `IMAGE_LIMIT` when it carries more than one image, an image whose `mimeType` is not `image/png`,
@@ -166,7 +207,7 @@ origins, plus `http://localhost:30001` and `http://127.0.0.1:30001`, the Vite de
 
 The list is not configurable yet; a Foundry served from another port or host needs the constant edited.
 
-## Bridge routing and identify (protocol v3)
+## Bridge routing and identify (protocol v4)
 
 Foundry GM clients register with the sidecar as **endpoints** over Socket.IO. Each endpoint has a `kind`: `human` (a
 person's tab) or `agent` (an agent-runner browser).
@@ -176,6 +217,14 @@ invocation goes to the earliest-registered endpoint of the first kind that has o
 preferred and a human tab is the fallback. A call may pass `endpoint: 'agent' | 'human'` to the router's
 `invoke(op, params, { endpoint })` to restrict the choice to that kind with no fallback. With no eligible endpoint the
 call fails with `NO_ENDPOINT`.
+
+**Scripts that need the DOM.** A script registered with `requires: 'dom'` (opening sheets, measuring layout) is routed
+to the `agent` kind only, and only to an endpoint that identified with `dom: true`; it never falls back to a human tab.
+A session opened with `?endpoint=human` is routed to human tabs instead (a DOM-capable one). With no such endpoint the
+call fails with `NO_ENDPOINT` (at most 256 bytes) naming the missing kind, for example `No DOM-capable 'agent' GM
+endpoint is connected: enable an agent, or restrict this session to a human tab with ?endpoint=human.` A script with
+`requires: 'api'` follows the default order above. The endpoint that runs a call must declare the same `requires`
+and `mutates` for the script as the listing did, or the call fails with `TOOL_GONE` without being sent.
 
 **Endpoint health.** Every endpoint is `healthy` or `unresponsive`; routing (the default order and the `endpoint`
 override alike) skips unresponsive endpoints, keeping the order above among the rest. When an invocation gets no ack in
@@ -195,7 +244,7 @@ checks before retrying.
 
 ```js
 socket.emit('bridge:identify', {
-   protocolVersion: 3,
+   protocolVersion: 4,
    userId,
    userName,
    isGM: true,
@@ -243,7 +292,7 @@ a sidecar check ran. No write path may write a `Setting` whose key is in the `wi
 to its key first; pass a namespaced setting as `{ namespace, key }`). The module's own client sends no snapshot, so every
 gate reads closed.
 
-**Wiretap client.** The module's Foundry client sends this identify (protocol 3, `dom: true`) on every (re)connect, with
+**Wiretap client.** The module's Foundry client sends this identify (protocol 4, `dom: true`) on every (re)connect, with
 `kind` taken from the client-scope setting `wiretap.endpointKind` (`human` by default; an agent runner sets `agent`). The
 client counts as identified only after an `{ ok: true }` ack: `game.modules.get('wiretap').api.bridge.identified` is
 `true` from that ack until a disconnect or a refusal, so a runner waits on it before invoking tools. A refused ack is
@@ -261,8 +310,8 @@ reported at once, not after 10 s), `OP_FAILED` (the default when the client give
 is reported as `OP_FAILED`. Messages are at most 512 bytes (256 for `NO_ENDPOINT`), truncated with `…`; `failures` is
 capped at 10 entries with `failureCount` holding the true total. MCP error results are at most 512 bytes in total:
 `<code>: <message>`, then as many `path: message` failure lines as fit, then ` (+N more)` for the failures not shown.
-The `create_actor` result must be an object with string `uuid`, `name` and `type` (each bounded to 256 bytes in the tool
-text); any other ack result is reported as `OP_FAILED`.
+A registered script's ack result is shown as text (a string as is, anything else as JSON) behind the result enforcer with
+the script's own `result.budgetBytes`; an ack with no result is shown as `null`.
 
 ## Settings and risk gates
 

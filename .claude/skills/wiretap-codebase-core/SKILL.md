@@ -19,10 +19,10 @@ hosting an AI-agent terminal and a bridge that lets agents act on the live world
 | Sidecar (Node) | `server/` run by `tsx` (`npm run server:start`, `scripts/start-wiretap.sh`) | Socket.IO server (default `:31416`, `WIRETAP_PORT`), node-pty terminal relay, stateful MCP HTTP server (sessions with an SSE stream and `tools/list_changed`; default `127.0.0.1:31417/mcp`, `WIRETAP_MCP_PORT`) |
 
 `shared/protocol.js` holds the wire constants used by both sides (imported as `$shared/protocol.js` in the client and
-`../shared/protocol.js` in the sidecar). The Foundry bridge speaks protocol v3 (`PROTOCOL_VERSION`): GM clients identify as `human` or
+`../shared/protocol.js` in the sidecar). The Foundry bridge speaks protocol v4 (`PROTOCOL_VERSION`): GM clients identify as `human` or
 `agent` endpoints (acked after registration) and the sidecar routes each invocation through an endpoint registry and
 router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`,
-`ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH` and `NOT_GM`; a client ack cannot produce them (they become `OP_FAILED`). `GATE_DENIED` is not reserved: the executing client re-enforces gates and may send it, so it is never proof that a sidecar check ran. A registered GM endpoint can push its tool list with `bridge:registry`; each MCP session lists the tools of the endpoint kind it routes to and is sent `tools/list_changed` when they change. Limits:
+`ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH`, `NOT_GM` and `TOOL_GONE`; a client ack cannot produce them (they become `OP_FAILED`). `GATE_DENIED` is not reserved: the executing client re-enforces gates and may send it, so it is never proof that a sidecar check ran. A registered GM endpoint can push its script list with `bridge:registry` (`{ apiVersion, scripts }`, the shared definition of `shared/scripts.js`); every tool except the sidecar's built-in `read_handle` (`create_actor` included) is such a script. Each MCP session lists the scripts of the endpoint kind it routes to and is sent `tools/list_changed` when they change; a script that `requires` the DOM routes to a `dom: true` endpoint of the agent kind only. Limits:
 `userId` 64 bytes, `userName` 128 bytes, 64 endpoints, 512 bytes of MCP error text.
 
 ## Subsystem map (one skill per subsystem)
@@ -31,8 +31,9 @@ router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `END
 |---|---|---|
 | Client UI + terminal client | `wiretap-client` | `src/**`, `lang/**` |
 | Sidecar terminal relay | `wiretap-sidecar` | `server/**` (except MCP/bridge files), `shared/**` |
-| MCP sessions + tool registry | `wiretap-mcp-sessions` | `server/mcpSessions.ts`, `server/toolRegistry.ts`, `tests/unit/mcpSessions.test.js`, `tests/unit/toolRegistry*.test.js`, `tests/unit/foundryBridge.registry.test.js`, `tests/integration/mcpSessions.test.js`, `tests/integration/mcpHardening.test.js`, `tests/integration/mcpHttp.js` (the session and HTTP parts of `server/mcp.ts` are described there too) |
+| MCP sessions + tool registry | `wiretap-mcp-sessions` | `server/mcpSessions.ts`, `server/toolRegistry.ts`, `shared/scripts.js`, `tests/unit/mcpSessions.test.js`, `tests/unit/toolRegistry*.test.js`, `tests/unit/scripts.test.js`, `tests/unit/scriptFixtures.js`, `tests/unit/foundryBridge.registry.test.js`, `tests/integration/mcpSessions.test.js`, `tests/integration/scriptRegistry.test.js`, `tests/integration/mcpHardening.test.js`, `tests/integration/mcpHttp.js` (the session and HTTP parts of `server/mcp.ts` are described there too) |
 | MCP + Foundry bridge | `wiretap-mcp-bridge` | `server/mcp.ts`, `server/resultBudget.ts`, `server/handles.ts`, `server/utf8.ts`, `server/endpoints.ts`, `server/foundryBridge.ts`, `src/bridge/foundryBridge.js`, `src/bridge/gates.js`, `src/settings/gates.js`, `shared/protocol.js`, `shared/gates.js` |
+| Client script runtime + user-facing skill | `wiretap-scripts` | `src/bridge/scripts/**`, `shared/schemaValidate.js`, `shared/utf8.js`, `shared/logText.js`, `skills/**`, the script runtime unit tests, `tests/e2e/scripts.spec.js`, `tests/e2e/registry.js`, `tests/e2e/registryCore.js`, `tests/e2e/registry.spec.js` |
 | Build, lint, tests | `wiretap-build-test` | `tests/**`, `vite.config.mjs`, `vitest.config.mjs`, `playwright.config.mjs`, `eslint.config.js`, `package.json` |
 
 Subsystem skills activate by `paths:`; this core skill activates by description. Invoke the matching subsystem skill

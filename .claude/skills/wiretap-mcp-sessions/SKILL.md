@@ -4,11 +4,15 @@ description: Wiretap stateful MCP sessions and the endpoint tool registry — se
 paths:
   - "server/mcpSessions.ts"
   - "server/toolRegistry.ts"
+  - "shared/scripts.js"
   - "tests/unit/mcpSessions.test.js"
+  - "tests/unit/scripts.test.js"
+  - "tests/unit/scriptFixtures.js"
   - "tests/unit/toolRegistry.test.js"
   - "tests/unit/toolRegistry.logs.test.js"
   - "tests/unit/foundryBridge.registry.test.js"
   - "tests/integration/mcpSessions.test.js"
+  - "tests/integration/scriptRegistry.test.js"
   - "tests/integration/mcpHardening.test.js"
   - "tests/integration/mcpHttp.js"
 ---
@@ -68,14 +72,14 @@ The constants are `MCP_REQUEST_TIMEOUT_MS`, `MCP_HEADERS_TIMEOUT_MS`, `MCP_TIMEO
 
 `buildServer(bridge, store, extraTools, instructions, ownerKey, ownerLive)` builds a `SessionMcpServer`: an `McpServer`
 named `wiretap` whose own `sendToolListChanged` is a no-op (the sidecar debounces), with `notifyToolListChanged()` sending
-one `tools/list_changed` when connected. It registers `create_actor`, `read_handle` and the extra tools, each behind the
+one `tools/list_changed` when connected. It registers `read_handle` (the only built-in tool) and the extra tools, each behind the
 result enforcer with the session id as owner and `ownerLive` = "the manager still holds the session". `fixedNames`
-(names a registry tool may not reuse) come from `RESERVED_TOOL_NAMES` plus the extra tools. An over-limit result for an
+(names a registry tool may not reuse) come from `RESERVED_SCRIPT_NAMES` (`shared/scripts.js`) plus the extra tools. An over-limit result for an
 ended session is answered `SESSION_ENDED: ...` and stores nothing.
 
 `WIRETAP_INSTRUCTIONS` is the `instructions` every session receives: a short orientation naming
-`mcp__wiretap__create_actor` and `mcp__wiretap__read_handle`, how handles are paged and that tools can appear or vanish
-(`tools/list_changed`). It names no skill (none ships yet); `INSTRUCTIONS_MAX_CHARS` is 600. `tests/unit/contextBudget.test.js`
+`mcp__wiretap__read_handle` only (every other tool is a registered script that may be absent), how handles are paged and that
+tools can appear or vanish (`tools/list_changed`). It names no skill (none ships yet); `INSTRUCTIONS_MAX_CHARS` is 600. `tests/unit/contextBudget.test.js`
 holds length, listed tool names and the absence of the word "skill".
 
 ## Session manager and debouncer (`server/mcpSessions.ts`)
@@ -108,21 +112,32 @@ holding the session is not lost.
 
 ## Tool registry (`server/toolRegistry.ts`)
 
-`sanitizeRegistry(payload, log)` reduces an untrusted `bridge:registry` payload (an array) to `RegistryTool`s. Entries are
-judged one by one: a refused entry is logged with its reason (`cleanForLog`, 200 bytes) and dropped. At most
-`ALWAYS_LISTED_TOOLS_MAX` (30) less the 2 built-in names are accepted and at most twice that many examined (the rest refused
-with one summary line); a non-array payload is refused as a whole. Per entry: `name` 1 to `CORE_TOOL_NAME_MAX_CHARS` (32) of
-`[a-z][a-z0-9_-]*`, not in `RESERVED_TOOL_NAMES` (`create_actor`, `read_handle`), not an `Object.prototype` member, unique;
-`description` 1 to `DESCRIPTION_MAX_CHARS` (240) characters on one line; `inputSchema` an object within
-`DEFINITION_MAX_BYTES` both as received and as the SDK lists it; optional integer `budgetBytes` 1 to 16000; optional
-`gate` (a name in `GATES`) with `moduleId` required exactly for `allowedPluginModules`.
+`sanitizeRegistry(payload, log)` reduces an untrusted `bridge:registry` payload to `RegistryTool`s. The payload must be
+`{ apiVersion: SCRIPT_API_VERSION, scripts: [...] }` (`parseRegistryPayload` in `shared/scripts.js`); anything else, a plain
+array included, is refused as a whole. Entries are judged one by one by the shared `validateScriptDefinition(entry, 'shipped')`
+(the registering route implies the source; plugin and agent definitions are refused as not supported) plus the sidecar-only
+checks: a refused entry is logged with its reason (`cleanForLog`, 200 bytes) and dropped, a description over the 160-character
+target is accepted with a logged warning. At most `ALWAYS_LISTED_TOOLS_MAX` (30) less the 1 built-in name are accepted and at most twice
+that many examined (the rest refused with one summary line). The listed definitions of the accepted tools together stay
+within `ALL_DEFINITIONS_MAX_BYTES` less one `DEFINITION_MAX_BYTES` kept for `read_handle`: a tool that would overflow it is
+refused with a logged reason. Per entry (`shared/scripts.js` documents each field): `name` 1 to
+`CORE_TOOL_NAME_MAX_CHARS` (32) of `[a-z][a-z0-9_-]*`, not in `RESERVED_SCRIPT_NAMES` (`read_handle`), not an `Object.prototype`
+member, unique; `version` a semver-like string of at most `SCRIPT_VERSION_MAX_CHARS` (32); `description` 1 to
+`DESCRIPTION_MAX_CHARS` (240) characters on one line; `inputSchema` an object within `DEFINITION_MAX_BYTES` both as received and
+as the SDK lists it, every array schema declaring a `maxItems` of at most `SCHEMA_ARRAY_ITEMS_MAX` (1000); `result.budgetBytes` an integer 1 to 16000; `requires` `'api'` or `'dom'` (`'none'` is refused: it runs on
+the sidecar); `mutates` a boolean, required and never defaulted; optional `gate` (a name in `GATES` other than
+`allowedPluginModules`); `moduleId` is refused. A `RegistryTool` carries `name`, `version`, `description`, `shape`,
+`budgetBytes`, `requires`, `mutates`, `gate?`, `signature` and `schemaSignature`.
 
 `jsonSchemaToZodShape(schema)` converts a documented subset: a root object whose properties are string (`enum`,
 `minLength`, `maxLength`), number, integer (`minimum`, `maximum`), boolean, array (`items`, `minItems`, `maxItems`) or
-object, depth 4, 64 nodes, 32 properties, string enums of at most 32 values. `$ref`, combinators, `pattern`, `format`,
+object, depth 4, 64 nodes, 32 properties, string enums of at most 32 values. The limits (`SCHEMA_*`, `TYPE_KEYWORDS`,
+`PROPERTY_NAME_PATTERN`) are exported by `shared/schemaValidate.js` and imported here, so both sides share them. `$ref`, combinators, `pattern`, `format`,
 `default`, `const`, unknown keywords and `Object.prototype`-named properties refuse the schema. A `description` is validated
-on every node but listed only on object properties. `RegistryTool.signature` identifies a definition for change detection.
-Log text goes through `server/logText.ts`: `cleanForLog(text, maxBytes)` replaces control characters and cuts to a byte bound,
+on every node but listed only on object properties. `RegistryTool.signature` identifies a definition for change detection (it covers
+the version, the budget, `requires`, `mutates` and the gate as well as the listed definition); each script is registered with
+`annotations: { readOnlyHint: !mutates }`.
+Log text goes through `server/logText.ts` (a re-export of `shared/logText.js`, which the client also uses): `cleanForLog(text, maxBytes)` replaces control characters and cuts to a byte bound,
 `describeCause(cause, maxBytes?)` does the same for a thrown value and never throws; `mcp.ts`, `mcpSessions.ts`, `foundryBridge.ts`,
 `resultBudget.ts` and `toolRegistry.ts` all use them.
 
@@ -130,20 +145,26 @@ Log text goes through `server/logText.ts`: `cleanForLog(text, maxBytes)` replace
 
 A registry tool's handler (`makeRegistryToolHandler`) calls `bridge.invokeTool(name, args, { endpoint?, listed })`. The
 router picks one endpoint, resolves the tool **by name on that endpoint** and uses that endpoint's own declaration: a
-missing name, or a different argument schema (`schemaSignature`, the schema as listed), → `TOOL_GONE` without sending; a
+missing name, or a different argument schema (`schemaSignature`, the schema as listed), `requires` or `mutates`, → `TOOL_GONE` without sending; a
 declared gate that differs from the listed tool's → `GATE_DENIED` without sending; the gate is judged on the picked
 endpoint's snapshot; the result budget is the picked endpoint's `budgetBytes` (a different description or budget does not
-fail the call). The sidecar validates the arguments against the listed shape, which equals the picked endpoint's schema
-once the signatures match. The client has no `callTool` handler yet, so it re-validates nothing (`docs/TODO.md`). The result is shown
-as text (a string as is, anything else as JSON) behind the result enforcer. The production client sends no registry and
-has no `callTool` handler (`docs/TODO.md`).
+fail the call). A `requires: 'dom'` script is routed to a `dom: true` endpoint of the `agent` kind (or of the session's
+`?endpoint=` kind) only; see `wiretap-mcp-bridge`. The SDK validates the arguments against the listed shape (zod from the JSON Schema)
+before the handler runs, so a bad call never reaches the client, and strips undeclared arguments; the listed shape equals the picked
+endpoint's schema once the signatures match. The client's `callTool` handler validates the arguments again against its own declared schema (`shared/schemaValidate.js`). The result is shown
+as text (a string as is, anything else as JSON) behind the result enforcer. The production client registers `create_actor`
+and sends its registry after every acknowledged identify and on each registry change (`wiretap-scripts`).
 
 ## Tests
 
 - `tests/unit/mcpSessions.test.js`: manager (cap refusal, `isFull`, idle expiry on a fake clock, timers, repeat `end`) and
   debouncer.
-- `tests/unit/toolRegistry.test.js`, `toolRegistry.logs.test.js`: sanitizer, schema subset, bounded safe log lines.
-- `tests/unit/foundryBridge.registry.test.js`: the `bridge:registry` socket handler. `tests/unit/logText.test.js`: the log helpers.
+- `tests/unit/scripts.test.js` (the shared definition validator and registry payload), `tests/unit/toolRegistry.test.js`,
+  `toolRegistry.logs.test.js`: sanitizer, schema subset, bounded safe log lines. `tests/unit/scriptFixtures.js` builds valid
+  definitions (`script`), payloads (`registryPayload`) and the `create_actor` script.
+- `tests/unit/foundryBridge.registry.test.js`: the `bridge:registry` socket handler and its per-socket rate limit. `tests/unit/logText.test.js`: the log helpers.
+- `tests/integration/scriptRegistry.test.js`: `create_actor` through the registry, argument validation before sending, payload shape
+  refusals, annotations and `requires` routing over real sockets.
 - `tests/integration/mcpSessions.test.js`: real HTTP with the SDK client (lifecycle, methods, late tools and
   `list_changed`, endpoint choice, gates, expiry, cap, 503).
 - `tests/integration/mcpHardening.test.js` (with `mcpHarness.js`): body, header, idle-socket and connection limits, no body
