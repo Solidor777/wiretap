@@ -87,7 +87,7 @@ export default [
          'templates/',
          'index.js',
          'server/',
-         // Vite code-split chunks emitted at the repo root by `build:e2e` (gated dynamic import).
+         // Hashed e2e chunks of the earlier layout, which emitted them at the repo root; the build now writes to dist/.
          '*-????????.js',
          'node_modules/',
          'fix-comments.js',

@@ -3,6 +3,7 @@ import { sveltePreprocess } from 'svelte-preprocess';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import autoprefixer from 'autoprefixer';
+import { buildOutput } from './scripts/lib/buildOutput.mjs';
 
 const __filename = fileURLToPath(import.meta.url); // Resolved path to this config file.
 const __dirname = path.dirname(__filename); // Directory containing this config file.
@@ -62,8 +63,8 @@ export default ({ mode }) => {
       },
 
       build: {
-         outDir: __dirname,
-         emptyOutDir: false,
+         // dist/, hash-free e2e names and no emptying: see `buildOutput`.
+         ...buildOutput(mode, __dirname),
          sourcemap: s_SOURCEMAPS,
          brotliSize: true,
          minify: s_COMPRESS ? 'terser' : false,

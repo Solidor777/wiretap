@@ -5,10 +5,11 @@
 !.vscode/extensions.json
 dist/
 node_modules/
+# Build output of the earlier layout (the bundle and the hashed e2e chunks were emitted at the repo root). The build
+# now writes to dist/; these lines stay until the stale root files are recycled.
 /index.js
 /index.js.map
 /style.css
-# Vite code-split chunks emitted at repo root by `build:e2e` (gated dynamic import → `[name]-[hash].js`).
 /*-????????.js
 /*-????????.js.map
 titan.zip
