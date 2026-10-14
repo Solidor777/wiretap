@@ -590,6 +590,34 @@ describe('createDocuments: gates and refusals', () => {
       expect(denied.message).toContain('allowModuleConfigWrites');
    });
 
+   it('refuses the reserved wiretap flag scope in create data, also dotted and embedded', async () => {
+      for (const data of [
+         {
+            name: 'MOCK_actor',
+            flags: { wiretap: { idem: { k: 'x' } } }
+         },
+         {
+            name: 'MOCK_actor',
+            'flags.wiretap.idem': { k: 'x' }
+         },
+         {
+            name: 'MOCK_actor',
+            items: [{
+               name: 'MOCK_item',
+               flags: { wiretap: 1 }
+            }]
+         },
+      ]) {
+         const error = await failure({
+            documentName: 'Actor',
+            data: [data],
+         });
+         expect(error.code, JSON.stringify(data)).toBe(GATE_DENIED);
+         expect(error.message).toContain('flags.wiretap');
+      }
+      expect(world.calls).toEqual([]);
+   });
+
    it('needs allowOwnershipWrites for a dotted ownership key, also inside embedded data', async () => {
       for (const data of [
          {
@@ -603,10 +631,6 @@ describe('createDocuments: gates and refusals', () => {
                'ownership.default': 3
             }]
          },
-         {
-            name: 'MOCK_actor',
-            '-=ownership': null
-         },
       ]) {
          const error = await failure({
             documentName: 'Actor',
@@ -614,6 +638,18 @@ describe('createDocuments: gates and refusals', () => {
          });
          expect(error.message).toContain('allowOwnershipWrites');
       }
+      expect(world.calls).toEqual([]);
+   });
+
+   it('refuses an operator-prefixed ownership key as an operator, not as an ownership change', async () => {
+      const error = await failure({
+         documentName: 'Actor',
+         data: [{
+            name: 'MOCK_actor',
+            '-=ownership': null,
+         }],
+      });
+      expect(error.code).toBe('PATH_OPERATOR');
       expect(world.calls).toEqual([]);
    });
 

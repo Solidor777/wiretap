@@ -3,19 +3,35 @@
  * core write operations (`writes.js`) calls `guardWrite` for the whole call before any Foundry write API runs, so a
  * refusal leaves the world untouched. The guard applies, in this order:
  *
- * 1. The User password rule: password-named fields of a `User` are refused in data and in paths, whatever the gates.
- * 2. The Wiretap setting rule: a `Setting` whose key lies in the `wiretap.` namespace is refused, whatever the gates
+ * 1. The operator rule: a key or value in the written data that spells an update operator (a `==` or `-=` key prefix, a
+ * `__$OPERATOR$__` object, an operator object) is refused. Operators exist only through the `op` field of a patch,
+ * and the guard sees them in the CLEANED changes (`targets`), where every spelling has become an operator object.
+ * 2. The flag rule: the `flags.wiretap` scope is never written, and `flags` is never rewritten as a whole.
+ * 3. The User password rule: password-named fields of a `User` are refused, whatever the gates.
+ * 4. The Wiretap setting rule: a `Setting` whose key lies in the `wiretap.` namespace is refused, whatever the gates
  * (`denyWiretapSettingWrite`); a `Setting` write with no resolvable key is refused.
- * 3. The category gates, judged from THIS client's world settings at call time (`requireGate`): User documents,
- * Setting documents, the module configuration setting, base64 data URIs, ownership changes and compendium writes.
+ * 5. The category gates, judged from THIS client's world settings at call time (`requireGate`): User documents,
+ * Setting documents, the module configuration setting, base64 data URIs, ownership changes, compendium writes and,
+ * for a call that is not a `dryRun`, deleting (`allowDelete`) and replacing (`allowReplace`) documents. The risky
+ * operations come from the `operations` the caller names and from the operators of the cleaned `targets`, judged by
+ * the schema field they land on (`writeFields.js`).
  *
  * The first refusal is thrown as a `GATE_DENIED` script error whose text names the rule or the gate.
  */
 
+import {
+   FLAG_SCOPE,
+   FLAGS_KEY,
+   OPERATOR_IDENTIFIER,
+   hasOperatorSegment,
+   isOperatorWrapper,
+   keyNames,
+} from '$shared/writeKeys.js';
 import { GATE_DENIED } from '$shared/protocol.js';
 import { denyWiretapSettingWrite, normalizeSettingKey, resolveSettingKey } from '$shared/gates.js';
 import { requireGate } from '~/bridge/gates.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
+import { analyzeChanges, isOperatorObject, isPlainObject } from '~/bridge/scripts/writeFields.js';
 
 /**
  * Matches a key or path segment that names a password: `password`, `passwordSalt`, `hashedPassword` and the like.
@@ -43,19 +59,12 @@ const MODULE_CONFIGURATION_KEY = 'core.moduleconfiguration';
 const OWNERSHIP_KEY = 'ownership';
 
 /**
- * Matches the Foundry operator prefix a data key or path segment may carry (`-=key` deletes, `==key` replaces).
- * @type {RegExp}
+ * Tell whether the names of a key or path hold the reserved flag scope: `flags` followed by `wiretap`.
+ * @param {string[]} names - The segments from `keyNames`.
+ * @returns {boolean} True when `flags.wiretap` appears in the names.
  */
-const KEY_OPERATOR_PREFIX = /^(?:-=|==)/;
-
-/**
- * Split a data key or a path into the names Foundry reads from it. Foundry expands a dotted key into nested objects
- * before cleaning (`common/utils/helpers.mjs` `expandObjectInPlace`), so `ownership.default` writes `ownership`.
- * @param {string} key - A data key or a dotted path.
- * @returns {string[]} The segments without their operator prefixes.
- */
-function namesOf(key) {
-   return key.split('.').map((segment) => segment.replace(KEY_OPERATOR_PREFIX, ''));
+function namesReserveFlagScope(names) {
+   return names.some((name, index) => name === FLAGS_KEY && names[index + 1] === FLAG_SCOPE);
 }
 
 /**
@@ -69,63 +78,118 @@ export const WRITE_SCAN_NODES_MAX = 200_000;
  * @property {boolean} password - Whether any key names a password.
  * @property {boolean} ownership - Whether any dot-separated segment of a key is `ownership`.
  * @property {boolean} dataUri - Whether any string is a base64 data URI.
+ * @property {boolean} wiretapFlag - Whether any key reaches the reserved `flags.wiretap` scope, dotted or nested, or
+ * blanks the whole `flags` object, which would erase the scope with it.
+ * @property {boolean} operator - Whether any key or value spells an update operator: a key prefix, a serialized
+ * operator or an operator object. Always false when the scan reads cleaned changes (`operators` other than
+ * `'refuse'`).
  */
 
 /**
  * @typedef {object} WriteIntent
  * @property {string} documentName - The class of the documents written.
  * @property {unknown[]} [values] - The data objects of a create, or the values of the patches of an update.
- * @property {string[]} [paths] - The paths of the patches of an update.
+ * @property {Array<{ document: object, changes: Record<string, unknown> }>} [targets] - For an update: each live
+ * document written and its changes after `cleanChanges`, which carry the operators of the patches as operator objects.
  * @property {unknown[]} [settingTargets] - For a `Setting` write: every key the write would touch, each the key text
  * alone (a value that is not text is refused).
  * @property {boolean} [inPack] - Whether the write lands in a compendium pack.
+ * @property {Array<'delete' | 'replace'>} [operations] - The risky operations the call performs; each needs its own
+ * gate (`allowDelete`, `allowReplace`).
+ * @property {boolean} [dryRun] - Whether the call only previews; a preview needs none of the `operations` gates.
  */
 
 /**
  * Walk the values written by a call, without recursion, and report what they contain. Visits at most
  * `WRITE_SCAN_NODES_MAX` values; past that the result reports everything, so a huge value cannot hide a field.
  * @param {unknown[]} values - The data objects or patch values.
+ * @param {object} [options] - How to read operators.
+ * @param {'refuse' | 'descend' | 'skip'} [options.operators] - How an operator object is read. `refuse` (raw values)
+ * reports it. For cleaned changes: `descend` looks through it, `skip` does not enter it, because cleaning fills the
+ * defaults of the field inside an operator value.
  * @returns {WriteScan} What the values contain.
  */
-export function scanWriteValues(values) {
+export function scanWriteValues(values, { operators = 'refuse' } = {}) {
    /** @type {WriteScan} The findings. */
    const found = {
       password: false,
       ownership: false,
       dataUri: false,
+      wiretapFlag: false,
+      operator: false,
    };
-   /** @type {unknown[]} Values still to visit. */
-   const pending = [...values];
+   /**
+    * Values still to visit, each with whether it sits directly under a `flags` key.
+    * @type {Array<{ node: unknown, underFlags: boolean }>}
+    */
+   const pending = values.map((node) => ({
+      node,
+      underFlags: false,
+   }));
    /** @type {number} Count of values scanned so far, bounded by the scan limit. */
    let visited = 0;
    while (pending.length > 0) {
+      /** @type {{ node: unknown, underFlags: boolean }} The entry to visit. */
+      const entry = pending.pop();
       /** @type {unknown} The value to visit. */
-      const node = pending.pop();
+      const node = entry.node;
       visited += 1;
       if (visited > WRITE_SCAN_NODES_MAX) {
          return {
             password: true,
             ownership: true,
             dataUri: true,
+            wiretapFlag: true,
+            operator: true,
          };
       }
-      if (typeof node === 'string') {
+      if (isOperatorObject(node)) {
+         if (operators === 'descend') {
+            pending.push({
+               node: foundry.data.operators.DataFieldOperator.get(node),
+               underFlags: entry.underFlags,
+            });
+         } else if (operators === 'refuse') {
+            found.operator = true;
+         }
+      } else if (typeof node === 'string') {
          if (DATA_URI.test(node)) {
             found.dataUri = true;
          }
       } else if (Array.isArray(node)) {
          for (const member of node) {
-            pending.push(member);
+            pending.push({
+               node: member,
+               underFlags: false,
+            });
          }
       } else if (typeof node === 'object' && node !== null) {
+         if (isOperatorWrapper(node)) {
+            found.operator = true;
+         }
          for (const key of Object.keys(node)) {
+            /** @type {string[]} The segments the key expands to. */
+            const names = keyNames(key);
             if (PASSWORD_KEY.test(key)) {
                found.password = true;
             }
-            if (namesOf(key).includes(OWNERSHIP_KEY)) {
+            if (names.includes(OWNERSHIP_KEY)) {
                found.ownership = true;
             }
-            pending.push(node[key]);
+            if (hasOperatorSegment(key)) {
+               found.operator = true;
+            }
+            if (
+               namesReserveFlagScope(names) ||
+               (entry.underFlags && names[0] === FLAG_SCOPE) ||
+               (names.at(-1) === FLAGS_KEY && !isPlainObject(node[key]) && !isOperatorObject(node[key]))
+            ) {
+               found.wiretapFlag = true;
+            }
+            pending.push({
+               node: node[key],
+               underFlags: names.at(-1) === FLAGS_KEY,
+            });
          }
       }
    }
@@ -159,21 +223,42 @@ function requireOpen(name) {
  * Judge a write. Returns when the write may go ahead and throws the first refusal otherwise; it never writes.
  * @param {WriteIntent} intent - What the call is about to write.
  * @returns {void}
- * @throws {ScriptError} `GATE_DENIED`: a password field, a Wiretap setting, or a closed gate.
+ * @throws {ScriptError} `GATE_DENIED`: an operator spelling, a password field, the reserved flag scope, a Wiretap
+ * setting, or a closed gate (a category gate, `allowDelete` or `allowReplace`).
  */
 export function guardWrite(intent) {
    /** @type {string} The class written. */
    const documentName = intent.documentName;
-   /** @type {string[]} The patch paths of an update. */
-   const paths = intent.paths ?? [];
    /** @type {WriteScan} What the written values contain. */
    const scan = scanWriteValues(intent.values ?? []);
-   /** @type {string[][]} The segments of every path. */
-   const segments = paths.map((path) => namesOf(String(path)));
-   if (documentName === 'User') {
-      if (scan.password || segments.some((names) => names.some((name) => PASSWORD_KEY.test(name)))) {
-         throw refuse('User password fields cannot be written through the bridge, whatever the gate state.');
+   /** @type {Set<string>} The risky operations the call performs. */
+   const risky = new Set(intent.operations ?? []);
+   /** @type {boolean} Whether the cleaned changes rewrite `flags` or the reserved scope. */
+   let reservedFlags = false;
+   for (const target of intent.targets ?? []) {
+      /** @type {ReturnType<typeof analyzeChanges>} What the operators of the cleaned changes do. */
+      const analysis = analyzeChanges(target.document, target.changes);
+      for (const operation of analysis.operations) {
+         risky.add(operation);
       }
+      reservedFlags ||= analysis.reservedFlags;
+      // The cleaned changes are read twice. The flag scope is read through operator values, where it can hide. The
+      // other keys are read outside them, because cleaning fills the defaults of a field inside an operator value.
+      scan.wiretapFlag ||= scanWriteValues([target.changes], { operators: 'descend' }).wiretapFlag;
+      /** @type {WriteScan} What the cleaned changes hold outside operator values. */
+      const cleaned = scanWriteValues([target.changes], { operators: 'skip' });
+      scan.password ||= cleaned.password;
+      scan.ownership ||= cleaned.ownership;
+      scan.dataUri ||= cleaned.dataUri;
+   }
+   if (scan.operator) {
+      throw refuse(`Written data may not spell an update operator (== or -= keys, ${OPERATOR_IDENTIFIER}); use op.`);
+   }
+   if (scan.wiretapFlag || reservedFlags) {
+      throw refuse('The flag scope flags.wiretap is reserved for Wiretap records and cannot be written.');
+   }
+   if (documentName === 'User' && scan.password) {
+      throw refuse('User password fields cannot be written through the bridge, whatever the gate state.');
    }
    /** @type {boolean} Whether a target is the module configuration setting. */
    let moduleConfiguration = false;
@@ -196,6 +281,14 @@ export function guardWrite(intent) {
          }
       }
    }
+   /** @type {Set<string>} The risky operations that need a gate now: none for a preview. */
+   const operations = intent.dryRun === true ? new Set() : risky;
+   if (operations.has('delete')) {
+      requireOpen('allowDelete');
+   }
+   if (operations.has('replace')) {
+      requireOpen('allowReplace');
+   }
    if (documentName === 'User') {
       requireOpen('allowUserWrites');
    }
@@ -208,7 +301,7 @@ export function guardWrite(intent) {
    if (scan.dataUri) {
       requireOpen('allowFileUpload');
    }
-   if (scan.ownership || segments.some((names) => names.includes(OWNERSHIP_KEY))) {
+   if (scan.ownership) {
       requireOpen('allowOwnershipWrites');
    }
    if (intent.inPack === true) {

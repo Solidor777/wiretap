@@ -60,6 +60,21 @@ describe('scanWriteValues', () => {
       expect(scanWriteValues([{ 'ownershipNote.default': 3 }]).ownership).toBe(false);
    });
 
+   it('finds the reserved wiretap flag scope at any depth and in dotted keys', () => {
+      expect(scanWriteValues([{ flags: { wiretap: { idem: {} } } }]).wiretapFlag).toBe(true);
+      expect(scanWriteValues([{ 'flags.wiretap.idem': 1 }]).wiretapFlag).toBe(true);
+      expect(scanWriteValues([{ flags: { 'wiretap.idem': 1 } }]).wiretapFlag).toBe(true);
+      expect(scanWriteValues([{ 'flags.wiretap': {} }]).wiretapFlag).toBe(true);
+      expect(scanWriteValues([{ items: [{ flags: { wiretap: 1 } }] }]).wiretapFlag).toBe(true);
+      expect(scanWriteValues([{ flags: null }]).wiretapFlag).toBe(true);
+      expect(scanWriteValues([{ flags: 'text' }]).wiretapFlag).toBe(true);
+      expect(scanWriteValues([{ flags: { wiretapE2e: { marker: 1 } } }]).wiretapFlag).toBe(false);
+      expect(scanWriteValues([{
+         wiretap: 1,
+         flags: { other: {} }
+      }]).wiretapFlag).toBe(false);
+   });
+
    it('finds a password segment in a dotted key', () => {
       expect(scanWriteValues([{ 'x.password': 'a' }]).password).toBe(true);
       expect(scanWriteValues([{ items: [{ 'a.passwordSalt': 'a' }] }]).password).toBe(true);
@@ -80,6 +95,8 @@ describe('scanWriteValues', () => {
          password: true,
          ownership: true,
          dataUri: true,
+         wiretapFlag: true,
+         operator: true,
       });
    });
 });
@@ -98,8 +115,7 @@ describe('guardWrite: plain documents', () => {
       expect(
          refusal({
             documentName: 'Item',
-            paths: ['system.quantity'],
-            values: [3],
+            values: [{ 'system.quantity': 3 }],
          }),
       ).toBeNull();
    });
@@ -148,8 +164,7 @@ describe('guardWrite: User documents', () => {
       ]) {
          const error = refusal({
             documentName: 'User',
-            paths: [path],
-            values: ['MOCK_value'],
+            values: [{ [path]: 'MOCK_value' }],
          });
          expect(error?.code, path).toBe(GATE_DENIED);
          expect(error.message, path).toContain('password');
@@ -160,8 +175,7 @@ describe('guardWrite: User documents', () => {
       stored.allowUserWrites = true;
       const error = refusal({
          documentName: 'User',
-         paths: ['flags'],
-         values: [{ nested: { password: 'MOCK_secret' } }],
+         values: [{ flags: { nested: { password: 'MOCK_secret' } } }],
       });
       expect(error?.code).toBe(GATE_DENIED);
       expect(error.message).toContain('password');
@@ -284,24 +298,57 @@ describe('guardWrite: Setting documents', () => {
       stored.allowSettingWrites = true;
       const error = refusal({
          documentName: 'Setting',
-         paths: ['value'],
-         values: ['"x"'],
+         values: [{ value: '"x"' }],
          settingTargets: [{ key: 'wiretap.allowUserWrites' }],
       });
       expect(error?.code).toBe(GATE_DENIED);
       expect(error.message).toContain('Wiretap settings');
    });
 
-   it('needs allowOwnershipWrites for a dotted ownership path segment, also behind an operator prefix', () => {
+   it('refuses the reserved wiretap flag scope for every class, whatever the gates say', () => {
+      stored.allowUserWrites = true;
+      stored.allowSettingWrites = true;
+      for (const intent of [
+         {
+            documentName: 'Actor',
+            values: [{ flags: { wiretap: { idem: {} } } }],
+         },
+         {
+            documentName: 'Actor',
+            values: [{ 'flags.wiretap.idem': 1 }],
+         },
+         {
+            documentName: 'Item',
+            values: [{ 'flags.wiretap.idem': 1 }],
+         },
+         {
+            documentName: 'Actor',
+            values: [{ 'items.AAAAAAAAAAAAAAAA.flags.wiretap.x': 1 }],
+         },
+      ]) {
+         const error = refusal(intent);
+         expect(error?.code, JSON.stringify(intent)).toBe(GATE_DENIED);
+         expect(error.message).toContain('flags.wiretap');
+      }
+   });
+
+   it('lets other flag scopes through', () => {
+      expect(
+         refusal({
+            documentName: 'Actor',
+            values: [{ 'flags.wiretapE2e.marker': 1 }],
+         }),
+      ).toBeNull();
+   });
+
+   it('needs allowOwnershipWrites for a dotted ownership key segment', () => {
       for (const path of [
          'ownership.default',
          'items.AAAAAAAAAAAAAAAA.ownership.default',
-         '-=ownership',
       ]) {
          const error = refusal({
             documentName: 'Actor',
-            paths: [path],
-            values: [3],
+            values: [{ [path]: 3 }],
          });
          expect(error?.message, path).toContain('allowOwnershipWrites');
       }
@@ -390,8 +437,7 @@ describe('guardWrite: file upload, ownership and compendium gates', () => {
    it('denies an ownership path of an update', () => {
       const error = refusal({
          documentName: 'Actor',
-         paths: ['ownership.default'],
-         values: [3],
+         values: [{ 'ownership.default': 3 }],
       });
       expect(error?.message).toContain('allowOwnershipWrites');
    });
@@ -399,8 +445,7 @@ describe('guardWrite: file upload, ownership and compendium gates', () => {
    it('denies an ownership path inside an embedded document path', () => {
       const error = refusal({
          documentName: 'Actor',
-         paths: ['items.AAAAAAAAAAAAAAAA.ownership.default'],
-         values: [3],
+         values: [{ 'items.AAAAAAAAAAAAAAAA.ownership.default': 3 }],
       });
       expect(error?.message).toContain('allowOwnershipWrites');
    });

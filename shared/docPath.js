@@ -13,10 +13,12 @@
  * there is refused, because an index would depend on array order at the time of the write.
  *
  * Error codes: `PATH_INVALID`, `PATH_UNSAFE_SEGMENT`, `PATH_WILDCARD_WRITE`, `PATH_LIMIT`, `PATH_INVALID_OP`,
- * `PATH_DUPLICATE`, `PATH_CONFLICT`, `PATH_UNSAFE_VALUE` and `PATH_AMBIGUOUS` (a wildcard whose result keys collide).
+ * `PATH_DUPLICATE`, `PATH_CONFLICT`, `PATH_UNSAFE_VALUE`, `PATH_OPERATOR` (a written path or value spells a Foundry
+ * update operator; see `writeKeys.js`) and `PATH_AMBIGUOUS` (a wildcard whose result keys collide).
  */
 
 import { getBudget } from './budgets.js';
+import { hasOperatorSegment, isOperatorWrapper, keyNames } from './writeKeys.js';
 
 /**
  * @typedef {{type: 'key', name: string} | {type: 'wildcard'}} PathSegment
@@ -24,7 +26,7 @@ import { getBudget } from './budgets.js';
 
 /**
  * @typedef {'PATH_INVALID' | 'PATH_UNSAFE_SEGMENT' | 'PATH_WILDCARD_WRITE' | 'PATH_LIMIT' | 'PATH_INVALID_OP'
- * | 'PATH_DUPLICATE' | 'PATH_CONFLICT' | 'PATH_UNSAFE_VALUE' | 'PATH_AMBIGUOUS'} PathErrorCode
+ * | 'PATH_DUPLICATE' | 'PATH_CONFLICT' | 'PATH_UNSAFE_VALUE' | 'PATH_OPERATOR' | 'PATH_AMBIGUOUS'} PathErrorCode
  */
 
 /**
@@ -87,8 +89,8 @@ export const UNSAFE_SEGMENTS = Object.freeze([
 ]);
 
 /**
- * The write operations a patch may carry. The client builds Foundry's `_replace` and `_del` update operators from
- * them, because operators cannot cross the JSON wire.
+ * The write operations a patch may carry. The client builds Foundry's `ForcedReplacement` and `ForcedDeletion`
+ * operator objects from them, because operators cannot cross the JSON wire.
  * @type {readonly WriteOp[]}
  */
 export const WRITE_OPS = Object.freeze([
@@ -96,6 +98,26 @@ export const WRITE_OPS = Object.freeze([
    'replace',
    'delete',
 ]);
+
+/**
+ * The key that identifies a document; a patch that writes it would retarget the update.
+ * @type {string}
+ */
+const IDENTITY_KEY = '_id';
+
+/**
+ * The refusal of an operator prefix in a written path.
+ * @type {string}
+ */
+export const OPERATOR_PATH_MESSAGE =
+   'A written path may not use the operator prefixes == or -=; use op replace or op delete.';
+
+/**
+ * The refusal of an operator key or serialized operator in a written value.
+ * @type {string}
+ */
+export const OPERATOR_VALUE_MESSAGE =
+   'Written data may not carry the operator prefixes == or -= or a __$OPERATOR$__ object; use op replace or op delete.';
 
 /**
  * The wildcard segment text.
@@ -199,7 +221,9 @@ export function parsePath(path) {
       if (name === '') {
          return fail('PATH_INVALID', 'Path must not contain an empty segment.');
       }
-      if (UNSAFE_SEGMENTS.includes(name) || name in Object.prototype) {
+      /** @type {string} The name the segment reads as, its operator prefix removed. */
+      const canonical = keyNames(name)[0];
+      if (UNSAFE_SEGMENTS.includes(canonical) || canonical in Object.prototype) {
          return fail('PATH_UNSAFE_SEGMENT', `Path segment "${name}" is refused.`);
       }
       if (name === WILDCARD) {
@@ -411,31 +435,23 @@ export function resolvePaths(documentExport, paths) {
 }
 
 /**
- * Matches the Foundry operator prefix a data key may carry (`-=key` deletes, `==key` replaces).
- * @type {RegExp}
- */
-const KEY_OPERATOR_PREFIX = /^(?:-=|==)/;
-
-/**
  * Tells whether a data key names an unsafe segment. Foundry expands a dotted key into nested objects before it
  * cleans the data (`common/utils/helpers.mjs` `expandObjectInPlace`), so every dot-separated segment is judged as
- * `parsePath` judges a path segment: an `UNSAFE_SEGMENTS` entry or any name found on `Object.prototype`.
+ * `parsePath` judges a path segment: an `UNSAFE_SEGMENTS` entry or any name found on `Object.prototype`, an operator
+ * prefix removed first (`==__proto__` is `__proto__`).
  * @param {string} key - A key of a written object.
  * @returns {boolean} True when any segment of the key is unsafe.
  */
 function keyHasUnsafeSegment(key) {
-   return key.split('.').some((segment) => {
-      /** @type {string} The segment without its operator prefix. */
-      const name = segment.replace(KEY_OPERATOR_PREFIX, '');
-      return UNSAFE_SEGMENTS.includes(name) || name in Object.prototype;
-   });
+   return keyNames(key).some((name) => UNSAFE_SEGMENTS.includes(name) || name in Object.prototype);
 }
 
 /**
- * Scans a written value, without recursion, for an own key with an unsafe segment (see `keyHasUnsafeSegment`) and for
- * nesting deeper than `VALUE_DEPTH_MAX`. Each object is scanned once, so a cyclic value terminates.
+ * Scans a written value, without recursion, for an own key with an unsafe segment (see `keyHasUnsafeSegment`), for
+ * an operator spelled as a key prefix or as a serialized wrapper (`writeKeys.js`) and for nesting deeper than
+ * `VALUE_DEPTH_MAX`. Each object is scanned once, so a cyclic value terminates. An unsafe key outranks an operator.
  * @param {*} value - The patch value.
- * @returns {'key' | 'depth' | null} What was found, or null when the value is acceptable.
+ * @returns {'key' | 'depth' | 'operator' | null} What was found, or null when the value is acceptable.
  */
 export function findUnsafeValue(value) {
    if (!isObject(value)) {
@@ -448,6 +464,8 @@ export function findUnsafeValue(value) {
    }];
    /** @type {Set<object>} Objects already scanned. */
    const seen = new Set();
+   /** @type {boolean} Whether an operator spelling was found; reported only when nothing else is wrong. */
+   let operator = false;
    while (pending.length > 0) {
       const { node, depth } = pending.pop();
       if (seen.has(node)) {
@@ -457,10 +475,12 @@ export function findUnsafeValue(value) {
       if (depth > VALUE_DEPTH_MAX) {
          return 'depth';
       }
+      operator ||= isOperatorWrapper(node);
       for (const key of Object.keys(node)) {
          if (keyHasUnsafeSegment(key)) {
             return 'key';
          }
+         operator ||= hasOperatorSegment(key);
          if (isObject(node[key])) {
             pending.push({
                node: node[key],
@@ -469,7 +489,7 @@ export function findUnsafeValue(value) {
          }
       }
    }
-   return null;
+   return operator ? 'operator' : null;
 }
 
 /**
@@ -490,8 +510,10 @@ function startsWith(prefix, names) {
  * document name. Every other path is a change on the document itself. A `delete` change carries no value.
  * Refused: wildcard and unsafe paths, duplicate paths, a path that is a prefix of another patch path
  * (`PATH_CONFLICT`), unknown ops, an embedded path with no field after the id, a purely numeric embedded id segment
- * (embedded writes address documents by `_id`), a malformed `embeddedCollections`, and a set or replace value with an
- * own `__proto__`, `constructor` or `prototype` key or more than 32 levels of nesting (`PATH_UNSAFE_VALUE`). Only
+ * (embedded writes address documents by `_id`), a malformed `embeddedCollections`, a path segment with an operator
+ * prefix and a value with an operator key or wrapper anywhere (`PATH_OPERATOR`: operators exist only through `op`), and
+ * a set or replace value with an own `__proto__`, `constructor` or `prototype` key or more than 32 levels of nesting
+ * (`PATH_UNSAFE_VALUE`). Only
  * embedded collections of the document itself are grouped; a deeper embedded path stays part of the relative path.
  * @param {Patch[]} patches - The writes, at most `PATHS_PER_CALL_MAX`.
  * @param {string[]} embeddedCollections - Names of the document's embedded collections, for example `['items']`.
@@ -537,6 +559,9 @@ export function groupWrites(patches, embeddedCollections) {
       if (parsed.segments.some((segment) => segment.type === 'wildcard')) {
          return fail('PATH_WILDCARD_WRITE', 'Wildcard paths cannot be written; list explicit ids.');
       }
+      if (hasOperatorSegment(patch.path)) {
+         return fail('PATH_OPERATOR', OPERATOR_PATH_MESSAGE);
+      }
       if (op !== 'delete') {
          /** @type {'key' | 'depth' | null} What makes the value unsafe, if anything. */
          const unsafe = findUnsafeValue(patch.value);
@@ -545,6 +570,9 @@ export function groupWrites(patches, embeddedCollections) {
          }
          if (unsafe === 'depth') {
             return fail('PATH_UNSAFE_VALUE', `A value may be nested at most ${VALUE_DEPTH_MAX} levels.`);
+         }
+         if (unsafe === 'operator') {
+            return fail('PATH_OPERATOR', OPERATOR_VALUE_MESSAGE);
          }
       }
       if (seen.has(patch.path)) {
@@ -569,6 +597,9 @@ export function groupWrites(patches, embeddedCollections) {
             op,
          };
       if (!embeddedCollections.includes(names[0])) {
+         if (names[0] === IDENTITY_KEY) {
+            return fail('PATH_UNSAFE_SEGMENT', 'The _id of a document cannot be written.');
+         }
          document.push(change);
          continue;
       }
@@ -577,6 +608,9 @@ export function groupWrites(patches, embeddedCollections) {
       }
       if (NUMERIC_PATTERN.test(names[1])) {
          return fail('PATH_INVALID', 'Embedded writes address documents by _id, not by index.');
+      }
+      if (names[2] === IDENTITY_KEY) {
+         return fail('PATH_UNSAFE_SEGMENT', 'The _id of a document cannot be written.');
       }
       change.path = names.slice(2).join('.');
       /** @type {EmbeddedGroup | undefined} The group of this collection, once created. */

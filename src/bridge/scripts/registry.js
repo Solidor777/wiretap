@@ -177,7 +177,7 @@ export function createScriptRegistry(options = {}) {
                return refuse(label, `the tool count budget allows at most ${room} scripts`);
             }
             /** @type {ReturnType<typeof compileSchema>} The compiled argument validator. */
-            const compiled = compileSchema(normalized.inputSchema);
+            const compiled = compileSchema(normalized.inputSchema, { strictNested: normalized.strictNested === true });
             if (!compiled.ok) {
                return refuse(label, `inputSchema: ${compiled.reason}`);
             }

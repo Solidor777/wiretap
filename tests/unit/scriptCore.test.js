@@ -8,11 +8,13 @@ describe('scriptCore', () => {
 
    it('holds exactly the read and write operations', () => {
       expect(Object.keys(scriptCore).sort()).toEqual([
+         'batchDocuments',
          'createDocuments',
          'deleteDocuments',
          'describeSchema',
          'documentTypes',
          'readDocument',
+         'replaceDocument',
          'searchDocuments',
          'updateDocuments',
       ]);

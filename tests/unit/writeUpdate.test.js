@@ -234,11 +234,9 @@ describe('updateDocuments: document paths', () => {
          ],
       });
       const changes = actor.update.mock.calls[0][0];
-      expect(changes['system.a']).toEqual({
-         operator: 'replace',
-         operatorValue: { x: 1 },
-      });
-      expect(changes['system.b'].operator).toBe('delete');
+      expect(changes['system.a']).toBeInstanceOf(foundry.data.operators.ForcedReplacement);
+      expect(foundry.data.operators.DataFieldOperator.get(changes['system.a'])).toEqual({ x: 1 });
+      expect(changes['system.b']).toBeInstanceOf(foundry.data.operators.ForcedDeletion);
       expect(changes['system.c']).toBe(3);
    });
 
@@ -373,11 +371,9 @@ describe('updateDocuments: embedded paths', () => {
          ],
       });
       const [, entries] = actor.updateEmbeddedDocuments.mock.calls[0];
-      expect(entries[0]['system.a']).toEqual({
-         operator: 'replace',
-         operatorValue: [1],
-      });
-      expect(entries[0]['system.b'].operator).toBe('delete');
+      expect(entries[0]['system.a']).toBeInstanceOf(foundry.data.operators.ForcedReplacement);
+      expect(foundry.data.operators.DataFieldOperator.get(entries[0]['system.a'])).toEqual([1]);
+      expect(entries[0]['system.b']).toBeInstanceOf(foundry.data.operators.ForcedDeletion);
    });
 
    it('refuses an embedded id that does not exist, before it writes anything', async () => {
@@ -724,6 +720,40 @@ describe('updateDocuments: gates and refusals', () => {
       expect(setting.update).toHaveBeenCalledTimes(1);
    });
 
+   it('refuses a value that carries the reserved wiretap flag scope when it is written at a flags path', async () => {
+      for (const patchEntry of [
+         {
+            path: 'flags',
+            value: { wiretap: { idem: {} } }
+         },
+         {
+            path: 'flags',
+            value: { wiretap: 1 },
+            op: 'replace'
+         },
+         {
+            path: 'flags.wiretap.idem',
+            value: 1
+         },
+         {
+            path: 'system.x',
+            value: { 'flags.wiretap.idem': 1 }
+         },
+      ]) {
+         const error = await failure({ updates: [update(actor, [patchEntry])] });
+         expect(error.code, JSON.stringify(patchEntry)).toBe(GATE_DENIED);
+         expect(error.message).toContain('flags.wiretap');
+      }
+      const embedded = await failure({
+         updates: [update(actor, [{
+            path: `items.${sword.id}.flags`,
+            value: { wiretap: 1 }
+         }])],
+      });
+      expect(embedded.code).toBe(GATE_DENIED);
+      expect(actor.update).not.toHaveBeenCalled();
+   });
+
    it('needs allowOwnershipWrites for a dotted ownership key inside a value', async () => {
       const error = await failure({
          updates: [update(actor, [{
@@ -874,6 +904,6 @@ describe('updateDocuments: read-back', () => {
          }])],
          readback: true,
       });
-      expect(rows[0].exported).toMatchObject({ name: 'MOCK_actor' });
+      expect(rows[0].exported).toMatchObject({ name: 'MOCK_x' });
    });
 });

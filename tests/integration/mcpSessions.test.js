@@ -7,7 +7,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { INITIALIZE, freePort, raw } from './mcpHttp.js';
+import { INITIALIZE, raw } from './mcpHttp.js';
+import { reservePort } from '../portPool.js';
 import { createWiretapServer } from '../../server/server.ts';
 import { createHandleStore } from '../../server/handles.ts';
 import { RESERVED_SCRIPT_NAMES } from '../../shared/scripts.js';
@@ -85,7 +86,7 @@ describe('stateful MCP sessions', () => {
     * @returns {Promise<void>}
     */
    async function start({ sessions = {}, tools = [] } = {}) {
-      server = createWiretapServer(0, await freePort(), 'mcp-only');
+      server = createWiretapServer(0, await reservePort(), 'mcp-only');
       await server.ready;
       store = createHandleStore();
       mcp = startMcpServer(server.bridge, 0, {
@@ -645,7 +646,9 @@ describe('stateful MCP sessions', () => {
          // from an endpoint of its own, because one endpoint may push only a few registries per second.
          for (const payload of hostile) {
             const sender = await connectGm();
-            await sender.registerRaw(Array.isArray(payload) ? registryPayload(payload) : payload).catch(() => undefined);
+            await sender
+               .registerRaw(Array.isArray(payload) ? registryPayload(payload) : payload)
+               .catch(() => undefined);
          }
          // The previous plain-array shape is refused whole.
          await (await connectGm()).registerRaw([entry('wrapped')]).catch(() => undefined);

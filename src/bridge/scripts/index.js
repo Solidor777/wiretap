@@ -1,10 +1,13 @@
 import { createDocumentsHandler } from '~/bridge/scripts/createDocuments.js';
+import { batchHandler } from '~/bridge/scripts/batch.js';
 import {
+   batchDefinition,
    createDocumentsDefinition,
    deleteDocumentsDefinition,
    describeSchemaDefinition,
    getDocumentDefinition,
    listDocumentTypesDefinition,
+   replaceDocumentDefinition,
    searchDocumentsDefinition,
    updateDocumentsDefinition,
 } from '~/bridge/scripts/definitions.js';
@@ -12,6 +15,7 @@ import { deleteDocumentsHandler } from '~/bridge/scripts/deleteDocuments.js';
 import { describeSchemaHandler } from '~/bridge/scripts/describeSchema.js';
 import { getDocumentHandler } from '~/bridge/scripts/getDocument.js';
 import { listDocumentTypesHandler } from '~/bridge/scripts/listDocumentTypes.js';
+import { replaceDocumentHandler } from '~/bridge/scripts/replaceDocument.js';
 import { searchDocumentsHandler } from '~/bridge/scripts/searchDocuments.js';
 import { scriptRegistry } from '~/bridge/scripts/registry.js';
 import { updateDocumentsHandler } from '~/bridge/scripts/updateDocuments.js';
@@ -48,6 +52,14 @@ export const SHIPPED_SCRIPTS = Object.freeze([
    {
       definition: deleteDocumentsDefinition,
       handler: deleteDocumentsHandler,
+   },
+   {
+      definition: replaceDocumentDefinition,
+      handler: replaceDocumentHandler,
+   },
+   {
+      definition: batchDefinition,
+      handler: batchHandler,
    },
 ]);
 

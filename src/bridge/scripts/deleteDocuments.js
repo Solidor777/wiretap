@@ -20,6 +20,7 @@ export async function deleteDocumentsHandler(args, ctx) {
    const result = await ctx.core.deleteDocuments({
       uuids: args.uuids,
       dryRun: args.dryRun === true,
+      actAs: args.actAs,
    });
    return Array.isArray(result) ? ackDocuments(result) : fitPreview(result);
 }

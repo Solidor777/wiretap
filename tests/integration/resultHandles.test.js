@@ -10,26 +10,10 @@ import { startMcpServer } from '../../server/mcp.ts';
 import { sanitizeRegistry } from '../../server/toolRegistry.ts';
 import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, PROTOCOL_VERSION } from '../../shared/protocol.js';
 import { createDocumentsArgs, createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
+import { reservePort } from '../portPool.js';
 
 /** @type {string} The op of the test-only tool; the fake client is the only party that knows it. */
 const OP_TEST_BIG = 'test:big-result';
-
-/**
- * Reserve a free loopback TCP port by listening on port 0 and releasing it.
- * @returns {Promise<number>} A port that was free at probe time.
- */
-function freePort() {
-   return new Promise((resolve, reject) => {
-      /** @type {import('node:net').Server} A throwaway server used to reserve a port. */
-      const probe = net.createServer();
-      probe.once('error', reject);
-      probe.listen(0, '127.0.0.1', () => {
-         /** @type {number} The port the OS assigned. */
-         const { port } = probe.address();
-         probe.close(() => resolve(port));
-      });
-   });
-}
 
 /**
  * Build the synthetic document the fake GM client returns: 120 obviously fake embedded items, over 100 KB serialized.
@@ -102,7 +86,7 @@ describe('large results become handles', () => {
     * @returns {Promise<Client>} The connected client.
     */
    async function start() {
-      server = createWiretapServer(0, await freePort(), 'mcp-only');
+      server = createWiretapServer(0, await reservePort(), 'mcp-only');
       await server.ready;
       gm = ioClient(`http://127.0.0.1:${server.io.httpServer.address().port}`);
       gm.on(BRIDGE_INVOKE, (request, ack) => {

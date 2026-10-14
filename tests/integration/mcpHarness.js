@@ -9,7 +9,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createWiretapServer } from '../../server/server.ts';
 import { createHandleStore } from '../../server/handles.ts';
 import { startMcpServer } from '../../server/mcp.ts';
-import { freePort } from './mcpHttp.js';
+import { reservePort } from '../portPool.js';
 import { registryPayload, script } from '../unit/scriptFixtures.js';
 import {
    BRIDGE_GATE_STATE,
@@ -105,7 +105,7 @@ export function createHarness() {
        * @returns {Promise<void>}
        */
       async start({ sessions = {}, limits, tools = [], bridge } = {}) {
-         server = createWiretapServer(0, await freePort(), 'mcp-only');
+         server = createWiretapServer(0, await reservePort(), 'mcp-only');
          await server.ready;
          store = createHandleStore();
          mcp = startMcpServer(bridge ?? server.bridge, 0, {

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import net from 'node:net';
+import { reservePort } from '../portPool.js';
 
 /** @type {{ terminalThrows: boolean, mcpCloseThrows: boolean }} Failure switches read by the mocked modules. */
 const failures = vi.hoisted(() => ({ terminalThrows: false, mcpCloseThrows: false }));
@@ -37,23 +38,6 @@ vi.mock('../../server/mcp.ts', async (importOriginal) => {
 });
 
 const { createWiretapServer } = await import('../../server/server.ts');
-
-/**
- * Reserve a free loopback TCP port by listening on port 0 and releasing it.
- * @returns {Promise<number>} A port that was free at probe time.
- */
-function freePort() {
-   return new Promise((resolve, reject) => {
-      /** @type {import('node:net').Server} A throwaway server used to reserve a port. */
-      const probe = net.createServer();
-      probe.once('error', reject);
-      probe.listen(0, '127.0.0.1', () => {
-         /** @type {number} The port the OS assigned. */
-         const { port } = probe.address();
-         probe.close(() => resolve(port));
-      });
-   });
-}
 
 /**
  * Report whether something accepts TCP connections on a loopback port.
@@ -99,7 +83,7 @@ describe('createWiretapServer dispose ordering', () => {
    it('releases both ports when terminal.dispose throws', async () => {
       failures.terminalThrows = true;
       /** @type {number} The MCP port under test. */
-      const mcpPort = await freePort();
+      const mcpPort = await reservePort();
       const server = createWiretapServer(0, mcpPort, 'full');
       await server.ready;
       /** @type {number} The Socket.IO port assigned to the server. */
@@ -114,7 +98,7 @@ describe('createWiretapServer dispose ordering', () => {
    it('still closes the Socket.IO server when mcp.close throws', async () => {
       failures.mcpCloseThrows = true;
       /** @type {number} The MCP port under test. */
-      const mcpPort = await freePort();
+      const mcpPort = await reservePort();
       const server = createWiretapServer(0, mcpPort, 'full');
       await server.ready;
       /** @type {number} The Socket.IO port assigned to the server. */

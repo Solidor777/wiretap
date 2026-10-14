@@ -18,6 +18,7 @@ import { startMcpServer } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
 import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, BRIDGE_REGISTRY, PROTOCOL_VERSION } from '../../shared/protocol.js';
 import { registryPayload, script, shippedScripts } from './scriptFixtures.js';
+import { reservePort } from '../portPool.js';
 
 /**
  * @typedef {object} GmAck
@@ -69,23 +70,6 @@ export const HELPER_TOOL_NAME = 'mock_big_document';
  * punctuation at the end of the name belongs to the sentence, not to the name.
  */
 const TOOL_MENTION_PATTERN = /mcp__wiretap__([A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*)/g;
-
-/**
- * Reserve a free loopback TCP port by listening on port 0 and releasing it.
- * @returns {Promise<number>} A port that was free at probe time.
- */
-function freePort() {
-   return new Promise((resolve, reject) => {
-      /** @type {import('node:net').Server} A throwaway server used to reserve a port. */
-      const probe = net.createServer();
-      probe.once('error', reject);
-      probe.listen(0, '127.0.0.1', () => {
-         /** @type {number} The port the OS assigned. */
-         const { port } = probe.address();
-         probe.close(() => resolve(port));
-      });
-   });
-}
 
 /**
  * Build the synthetic document the helper tool returns: 120 obviously fake embedded items, over 100 KB serialized.
@@ -395,6 +379,52 @@ export const FIXTURES = {
                   uuids: ['Actor.MOCKACTOR00000000'],
                   dryRun: true,
                },
+            });
+         },
+      },
+   ],
+   replace_document: [
+      {
+         label: 'ack of a replaced document with many changed fields',
+         budget: 'ACK_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(
+               okAck({
+                  uuid: 'Actor.MOCKACTOR00000000',
+                  changed: Array.from({ length: 40 }, (_, index) => `mockField${index}`),
+               }),
+            );
+            return client.callTool({
+               name: 'replace_document',
+               arguments: {
+                  uuid: 'Actor.MOCKACTOR00000000',
+                  data: '{"name":"MOCK_NAME","type":"npc"}',
+               },
+            });
+         },
+      },
+   ],
+   batch: [
+      {
+         label: 'ack of a 50-document batch',
+         budget: 'ACK_BATCH_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(
+               okAck({
+                  created: mockAckRows(20),
+                  updated: Array.from({ length: 15 }, (_, index) => ({
+                     uuid: `Actor.MOCKACTOR${String(index).padStart(8, '0')}`,
+                     changed: [
+                        'system.hp',
+                        'name',
+                     ],
+                  })),
+                  deleted: mockAckRows(15),
+               }),
+            );
+            return client.callTool({
+               name: 'batch',
+               arguments: { deletes: ['Actor.MOCKACTOR00000000'] },
             });
          },
       },
@@ -757,7 +787,7 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
    };
    try {
       /** @type {ReturnType<typeof createWiretapServer>} The sidecar providing the Socket.IO bridge. */
-      const server = createWiretapServer(0, await freePort(), 'mcp-only');
+      const server = createWiretapServer(0, await reservePort(), 'mcp-only');
       teardown.push(() => server.dispose());
       await server.ready;
       /** @type {GmAck} The ack the fake GM client answers invocations with. */

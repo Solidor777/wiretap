@@ -923,3 +923,63 @@ describe('releaseOwner', () => {
       expect(store.slice(OWNER_A, fresh).ok).toBe(false);
    });
 });
+
+describe('read: a whole entry under a hard byte bound', () => {
+   it('returns the stored text and its size to the owner', () => {
+      const { store } = makeStore();
+      const put = store.put(OWNER_A, '{"name":"MOCK_é"}');
+      const read = store.read(OWNER_A, put.handle, 1000);
+      expect(read).toEqual({
+         ok: true,
+         text: '{"name":"MOCK_é"}',
+         bytes: 18,
+      });
+   });
+
+   it('refuses another owner, an unknown handle and a non-text handle with one code', () => {
+      const { store } = makeStore();
+      const put = store.put(OWNER_A, 'MOCK_text');
+      for (const [owner, handle] of [
+         [OWNER_B, put.handle],
+         [OWNER_A, 'nope'],
+         [OWNER_A, 42],
+      ]) {
+         const read = store.read(owner, handle, 1000);
+         expect(read.ok).toBe(false);
+         expect(read.error.code).toBe('HANDLE_NOT_FOUND');
+      }
+   });
+
+   it('refuses an entry over the bound without returning any of its text', () => {
+      const { store } = makeStore();
+      const put = store.put(OWNER_A, 'a'.repeat(100));
+      const read = store.read(OWNER_A, put.handle, 99);
+      expect(read).toEqual({
+         ok: false,
+         error: {
+            code: 'HANDLE_TOO_LARGE',
+            message: expect.stringContaining('100'),
+         },
+      });
+      expect(JSON.stringify(read)).not.toContain('aaaa');
+      expect(store.read(OWNER_A, put.handle, 100).ok).toBe(true);
+   });
+
+   it('refuses an expired entry, and a read keeps an entry alive like a slice does', () => {
+      const { store, advance } = makeStore();
+      const put = store.put(OWNER_A, 'MOCK_text');
+      advance(HANDLE_IDLE_MS - 1);
+      expect(store.read(OWNER_A, put.handle, 1000).ok).toBe(true);
+      advance(HANDLE_IDLE_MS - 1);
+      expect(store.read(OWNER_A, put.handle, 1000).ok).toBe(true);
+      advance(HANDLE_IDLE_MS + 1);
+      expect(store.read(OWNER_A, put.handle, 1000).error.code).toBe('HANDLE_NOT_FOUND');
+   });
+
+   it('does not read a released owner', () => {
+      const { store } = makeStore();
+      const put = store.put(OWNER_A, 'MOCK_text');
+      store.releaseOwner(OWNER_A);
+      expect(store.read(OWNER_A, put.handle, 1000).error.code).toBe('HANDLE_NOT_FOUND');
+   });
+});

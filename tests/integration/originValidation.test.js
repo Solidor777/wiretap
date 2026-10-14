@@ -5,23 +5,7 @@ import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
 import { ALLOWED_ORIGINS } from '../../server/origins.ts';
-
-/**
- * Reserve a free loopback TCP port by listening on port 0 and releasing it.
- * @returns {Promise<number>} A port that was free at probe time.
- */
-function freePort() {
-   return new Promise((resolve, reject) => {
-      /** @type {import('node:net').Server} A throwaway server used to reserve a port. */
-      const probe = net.createServer();
-      probe.once('error', reject);
-      probe.listen(0, '127.0.0.1', () => {
-         /** @type {number} The port the OS assigned. */
-         const { port } = probe.address();
-         probe.close(() => resolve(port));
-      });
-   });
-}
+import { reservePort } from '../portPool.js';
 
 describe('origin validation', () => {
    /** @type {ReturnType<typeof createWiretapServer> | undefined} The server under test. */
@@ -45,7 +29,7 @@ describe('origin validation', () => {
     * @returns {Promise<void>} Resolves once both ports are bound.
     */
    async function start() {
-      mcpPort = await freePort();
+      mcpPort = await reservePort();
       server = createWiretapServer(0, mcpPort, 'mcp-only');
       await server.ready;
       socketPort = server.io.httpServer.address().port;

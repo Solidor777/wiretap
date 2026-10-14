@@ -56,6 +56,18 @@ export interface SliceSuccess {
 /** The outcome of reading a window. */
 export type SliceResult = SliceSuccess | Failure;
 
+/** A whole stored text, returned by `read`. */
+export interface ReadSuccess {
+   ok: true;
+   /** The stored text. */
+   text: string;
+   /** UTF-8 bytes of the stored text. */
+   bytes: number;
+}
+
+/** The outcome of reading a whole entry. */
+export type ReadResult = ReadSuccess | Failure;
+
 /** What `slice` reads. */
 export interface SliceOptions {
    /** Document paths resolved over the stored JSON; the viewed text becomes `{"values":…,"missing":…}`. */
@@ -88,6 +100,11 @@ export interface HandleStore {
    put: (ownerKey: string, text: string) => PutResult;
    /** Read a window of a stored value; only the owner that stored it can read it. */
    slice: (ownerKey: string, handle: unknown, options?: SliceOptions) => SliceResult;
+   /**
+    * Read a whole stored value for its owner, refusing one over `maxBytes` before any of its text is returned. Reading
+    * counts as a use, like a slice.
+    */
+   read: (ownerKey: string, handle: unknown, maxBytes: number) => ReadResult;
    /** Release every handle an owner holds; returns how many were released. Other owners' handles are untouched. */
    releaseOwner: (ownerKey: string) => number;
    /** The entry count and accounted bytes currently held. */
@@ -112,6 +129,8 @@ export interface BoundedText {
 interface HandleEntry {
    ownerKey: string;
    text: string;
+   /** UTF-8 bytes of the text. */
+   textBytes: number;
    /** Accounted bytes: the larger of the UTF-8 and UTF-16 size, plus the per-entry overhead. */
    bytes: number;
    /** Clock reading of the last use; non-decreasing in map order because a use re-inserts the entry last. */
@@ -388,6 +407,7 @@ export function createHandleStore(options: HandleStoreOptions = {}): HandleStore
          entries.set(handle, {
             ownerKey,
             text,
+            textBytes: bytes,
             bytes: accounted,
             lastAccess: now(),
          });
@@ -508,6 +528,27 @@ export function createHandleStore(options: HandleStoreOptions = {}): HandleStore
             result.truncated = true;
          }
          return result;
+      },
+
+      read(ownerKey: string, handle: unknown, maxBytes: number): ReadResult {
+         purgeExpired();
+         // The entry, when the handle exists.
+         const entry: HandleEntry | undefined = typeof handle === 'string' ? entries.get(handle) : undefined;
+         if (typeof handle !== 'string' || !entry || entry.ownerKey !== ownerKey) {
+            return notFound();
+         }
+         if (entry.textBytes > maxBytes) {
+            return fail(
+               'HANDLE_TOO_LARGE',
+               `The stored text has ${entry.textBytes} bytes, over the ${maxBytes} byte bound.`,
+            );
+         }
+         touch(handle, entry);
+         return {
+            ok: true,
+            text: entry.text,
+            bytes: entry.textBytes,
+         };
       },
 
       releaseOwner(ownerKey: string): number {

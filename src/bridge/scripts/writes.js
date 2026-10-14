@@ -22,10 +22,14 @@
  */
 
 import { getBudget } from '$shared/budgets.js';
-import { UNSAFE_SEGMENTS, findUnsafeValue, groupWrites } from '$shared/docPath.js';
+import { OPERATOR_VALUE_MESSAGE, UNSAFE_SEGMENTS, findUnsafeValue, groupWrites } from '$shared/docPath.js';
 import { cleanForLog } from '$shared/logText.js';
 import { exportDocument, resolveDocument } from '~/bridge/scripts/canonical.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
+import { applyIdempotency, withKeyLock } from '~/bridge/scripts/writeIdempotency.js';
+import { checkActAs, resolveActAs } from '~/bridge/scripts/writeActAs.js';
+import { FLAGS_KEY } from '$shared/writeKeys.js';
+import { cleanChanges } from '~/bridge/scripts/writeFields.js';
 import { guardWrite } from '~/bridge/scripts/writeGuard.js';
 
 /**
@@ -47,7 +51,7 @@ const ROW_TYPE_BYTES = 64;
  * @param {unknown} value - The `key` of Setting data, of a Setting document or of a key patch.
  * @returns {string | null} The key text, or null so the guard refuses the write.
  */
-function settingKeyOf(value) {
+export function settingKeyOf(value) {
    return typeof value === 'string' ? value : null;
 }
 
@@ -78,6 +82,8 @@ const FAILURE_TEXT_MAX_BYTES = 160;
  * @property {boolean} [keepId] - Keep the `_id` of each data object.
  * @property {boolean} [dryRun] - Validate and report; write nothing.
  * @property {boolean} [readback] - Add the canonical export of each created document as `exported`.
+ * @property {string} [idempotencyKey] - A key that makes a repeated call return the first call's documents.
+ * @property {string} [actAs] - The id of a user whose permission to create is checked in advance (advisory).
  */
 
 /**
@@ -128,10 +134,12 @@ function walkFailureTree(error) {
       return found;
    }
    /** @type {Array<{ node?: any, path: string, joint?: string }>} Entries still to visit; the next one is the last. */
-   const pending = [{
-      node: root,
-      path: ''
-   }];
+   const pending = [
+      {
+         node: root,
+         path: '',
+      },
+   ];
    /** @type {number} Count of failure nodes walked so far, bounded by the walk limit. */
    let visited = 0;
    while (pending.length > 0 && found.length < FAILURES_COLLECT_MAX && visited < FAILURE_NODES_MAX) {
@@ -164,13 +172,13 @@ function walkFailureTree(error) {
       if (joint !== '') {
          pending.push({
             path: entry.path,
-            joint
+            joint,
          });
       }
       for (const [key, child] of children.reverse()) {
          pending.push({
             node: child,
-            path: joinPath(entry.path, key)
+            path: joinPath(entry.path, key),
          });
       }
    }
@@ -179,14 +187,14 @@ function walkFailureTree(error) {
 
 /**
  * Collect the failures of a thrown validation error as path and message pairs. `getAllFailures()` is asked first
- * (`common/data/validation-failure.mjs:374`); on Foundry 14.365 it reports none for a real failure because its
+ * (`common/data/validation-failure.mjs:374`); on Foundry 14.364 it reports none for a real failure because its
  * aggregation drops every leaf, so the failure tree is walked then. An error with no failure at all is reported as one
  * failure at the prefix, with its own message.
  * @param {unknown} error - The thrown value.
  * @param {string} prefix - The path prefix, for example `[0]`.
  * @returns {ValidationFailure[]} The failures; never empty.
  */
-function failuresOf(error, prefix) {
+export function failuresOf(error, prefix) {
    /** @type {Array<{ path: string, message: string }>} The raw failures. */
    let raw = [];
    try {
@@ -209,7 +217,10 @@ function failuresOf(error, prefix) {
       });
    }
    return raw.map((failure) => ({
-      path: cleanForLog(failure.path === '' ? prefix : `${prefix}.${failure.path}`, FAILURE_TEXT_MAX_BYTES),
+      path: cleanForLog(
+         prefix === '' || failure.path === '' ? `${prefix}${failure.path}` : `${prefix}.${failure.path}`,
+         FAILURE_TEXT_MAX_BYTES,
+      ),
       message: cleanForLog(failure.message, FAILURE_TEXT_MAX_BYTES),
    }));
 }
@@ -221,7 +232,7 @@ function failuresOf(error, prefix) {
  * @param {number} total - How many were checked.
  * @returns {ScriptError} A `VALIDATION_FAILED` error holding the first 10 failures and the true count.
  */
-function validationError(failures, invalid, total) {
+export function validationError(failures, invalid, total) {
    return new ScriptError(
       'VALIDATION_FAILED',
       `Validation failed: ${failures.length} invalid field${failures.length === 1 ? '' : 's'} in ${invalid} of ` +
@@ -250,6 +261,29 @@ function checkObjects(data, label) {
       if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
          throw new ScriptError('ARGS_INVALID', `${label} ${index} must be an object.`);
       }
+   }
+}
+
+/**
+ * Refuse a data object whose keys or nesting are unsafe, or that spells an update operator anywhere (a `==` or `-=`
+ * key prefix, a `__$OPERATOR$__` object): operators exist only through the `op` field of an update patch.
+ * @param {unknown} item - A data object.
+ * @returns {void}
+ * @throws {ScriptError} `PATH_UNSAFE_VALUE` or `PATH_OPERATOR`.
+ */
+export function refuseUnsafeData(item) {
+   /** @type {ReturnType<typeof findUnsafeValue>} What makes the data unsafe, if anything. */
+   const unsafe = findUnsafeValue(item);
+   if (unsafe === 'operator') {
+      throw new ScriptError('PATH_OPERATOR', OPERATOR_VALUE_MESSAGE);
+   }
+   if (unsafe !== null) {
+      throw new ScriptError(
+         'PATH_UNSAFE_VALUE',
+         unsafe === 'key'
+            ? `Data keys may not use ${UNSAFE_SEGMENTS.join(', ')} or an Object.prototype name, dotted or not.`
+            : 'Data may be nested at most 32 levels.',
+      );
    }
 }
 
@@ -307,13 +341,58 @@ async function resolveCreateTarget(documentName, parentUuid, pack) {
 }
 
 /**
+ * Refuse `keepId` data whose `_id` is already taken in the collection it would land in. MEASURED on Foundry 14.364:
+ * the server does not refuse a repeated `_id`, it overwrites the stored document (world and embedded), while the
+ * client keeps its old copy, so the world and the client disagree afterwards.
+ * @param {string} documentName - The class created.
+ * @param {Awaited<ReturnType<typeof resolveCreateTarget>>} target - Where the documents land.
+ * @param {Record<string, unknown>[]} data - The data of each document.
+ * @returns {Promise<void>} Resolves when no `_id` is taken.
+ * @throws {ScriptError} `ARGS_INVALID` for an `_id` that exists, or that the call gives twice.
+ */
+async function refuseTakenIds(documentName, target, data) {
+   /** @type {Set<string>} The ids seen in this call. */
+   const seen = new Set();
+   /** @type {{ index?: { has: (id: string) => boolean }, getIndex?: Function } | undefined} The pack, if any. */
+   const compendium = target.pack === null ? undefined : game.packs.get(target.pack);
+   await compendium?.getIndex?.();
+   for (const item of data) {
+      /** @type {unknown} The id the data asks to keep. */
+      const id = item._id;
+      if (typeof id !== 'string' || id === '') {
+         continue;
+      }
+      /** @type {string} The id as it is shown in a message. */
+      const shown = cleanForLog(id, ECHO_MAX_BYTES);
+      if (seen.has(id)) {
+         throw new ScriptError('ARGS_INVALID', `keepId: the _id '${shown}' is given twice in this call.`);
+      }
+      seen.add(id);
+      /** @type {boolean} Whether a document of that class already has the id. */
+      const taken =
+         target.parent !== null
+            ? target.parent.getEmbeddedCollection(documentName).get(id) !== undefined
+            : compendium === undefined
+               ? game.collections.get(documentName)?.get(id) !== undefined
+               : compendium.index?.has(id) === true;
+      if (taken) {
+         throw new ScriptError(
+            'ARGS_INVALID',
+            `keepId: ${documentName} '${shown}' already exists and would be overwritten. Use update_documents or ` +
+               'replace_document, or leave out keepId.',
+         );
+      }
+   }
+}
+
+/**
  * Build the row that acknowledges one document.
  * @param {{ uuid: string | null, name?: unknown, key?: unknown, type?: unknown }} document - The document, or the
  * in-memory document of a dry run.
  * @param {boolean} dryRun - Whether nothing was written.
  * @returns {CreatedRow} The acknowledgement of the document.
  */
-function rowOf(document, dryRun) {
+export function rowOf(document, dryRun) {
    return {
       uuid: dryRun ? null : document.uuid,
       name: cleanForLog(String(document.name ?? document.key ?? ''), ROW_NAME_BYTES),
@@ -323,33 +402,47 @@ function rowOf(document, dryRun) {
 }
 
 /**
- * Create documents of one class: world documents, embedded documents under a parent, or documents in a pack. The
- * whole call is guarded and validated before the first write, and a dry run stops before it.
- * @param {CreateParams} params - What to create.
- * @returns {Promise<CreatedRow[]>} One row per document, in the order of `data`.
- * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED` or `WRITE_NOT_APPLIED`.
+ * @typedef {object} CreatePlan
+ * @property {string} documentName - The class created.
+ * @property {Awaited<ReturnType<typeof resolveCreateTarget>>} target - Where the documents land.
+ * @property {object[]} built - The in-memory documents the data builds.
+ * @property {Record<string, unknown>[]} payload - The data to send, copies that carry the idempotency record.
+ * @property {boolean} keepId - Whether the `_id` of each data object is kept; always true under an idempotency key,
+ * which gives each document the id its record names.
+ * @property {CreatedRow[] | null} replay - The rows of the documents an earlier call with the same idempotency key
+ * created; when set nothing is to be written.
+ * @property {object[]} replayDocuments - The live documents behind `replay`, in the same order.
  */
-export async function createDocuments({
+
+/**
+ * Check, guard and validate the creation of documents of one class without writing. The whole call is judged before
+ * any write: arguments, target, the write guard, the idempotency record, Foundry validation and the `actAs` check.
+ * @param {object} params - What to create.
+ * @param {string} params.documentName - The document class to create.
+ * @param {Record<string, unknown>[]} params.data - The data of each document.
+ * @param {string} [params.parentUuid] - The uuid of the parent when the documents are embedded.
+ * @param {string} [params.pack] - The id of the compendium pack when the documents are created in a pack.
+ * @param {boolean} [params.keepId] - Keep the `_id` of each data object.
+ * @param {string} [params.idempotencyKey] - The key that makes a repeated call return the first call's documents.
+ * @param {object | null} [params.actAsUser] - The user whose permission is checked in advance, if any.
+ * @param {string} [params.prefix] - The path prefix of reported failures, for example `creates[1]`.
+ * @returns {Promise<CreatePlan>} The plan to run.
+ * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED`, `ACT_AS_DENIED` or
+ * `IDEMPOTENCY_CONFLICT`.
+ */
+export async function prepareCreate({
    documentName,
    data,
    parentUuid,
    pack,
    keepId = false,
-   dryRun = false,
-   readback = false,
+   idempotencyKey,
+   actAsUser = null,
+   prefix = '',
 }) {
    checkObjects(data, 'documents');
    for (const item of data) {
-      /** @type {ReturnType<typeof findUnsafeValue>} What makes the data unsafe, if anything. */
-      const unsafe = findUnsafeValue(item);
-      if (unsafe !== null) {
-         throw new ScriptError(
-            'PATH_UNSAFE_VALUE',
-            unsafe === 'key'
-               ? `Data keys may not use ${UNSAFE_SEGMENTS.join(', ')} or an Object.prototype name, dotted or not.`
-               : 'Data may be nested at most 32 levels.',
-         );
-      }
+      refuseUnsafeData(item);
    }
    /** @type {Awaited<ReturnType<typeof resolveCreateTarget>>} Where the documents land. */
    const target = await resolveCreateTarget(documentName, parentUuid, pack);
@@ -359,6 +452,60 @@ export async function createDocuments({
       ...(documentName === 'Setting' ? { settingTargets: data.map((item) => settingKeyOf(item.key)) } : {}),
       inPack: target.inPack,
    });
+   if (keepId) {
+      await refuseTakenIds(documentName, target, data);
+   }
+   /** @type {Record<string, unknown>[]} The data with the idempotency record added. */
+   let records = data;
+   /** @type {boolean} Whether the documents are created with the ids the idempotency records name. */
+   let keptIds = keepId;
+   if (idempotencyKey !== undefined) {
+      if (target.pack !== null) {
+         throw new ScriptError('ARGS_INVALID', 'An idempotencyKey does not apply to documents created in a pack.');
+      }
+      if (CONFIG[documentName].documentClass.schema.getField(FLAGS_KEY) === undefined) {
+         // The record is a flag of the document; Foundry prunes it from a class with no `flags` field.
+         throw new ScriptError(
+            'ARGS_INVALID',
+            `An idempotencyKey does not apply to ${documentName}: it has no flags field to carry the record.`,
+         );
+      }
+      /** @type {ReturnType<typeof applyIdempotency>} The earlier documents, or the records to write. */
+      const idempotent = applyIdempotency({
+         key: idempotencyKey,
+         documentName,
+         parent: target.parent,
+         request: [
+            documentName,
+            parentUuid ?? null,
+            keepId,
+            data,
+         ],
+         data,
+         keepId,
+      });
+      if (idempotent.replay !== null) {
+         checkActAs(
+            actAsUser,
+            'create',
+            idempotent.replay.map((document, index) => ({
+               document,
+               data: data[index],
+            })),
+         );
+         return {
+            documentName,
+            target,
+            built: [],
+            payload: [],
+            keepId,
+            replay: idempotent.replay.map((document) => rowOf(document, false)),
+            replayDocuments: idempotent.replay,
+         };
+      }
+      records = idempotent.records;
+      keptIds = true;
+   }
    /** @type {Function} The configured document class. */
    const documentClass = CONFIG[documentName].documentClass;
    /** @type {object[]} The in-memory documents the data builds. */
@@ -367,10 +514,19 @@ export async function createDocuments({
    const failures = [];
    /** @type {number} How many entries failed. */
    let invalid = 0;
-   for (const [index, item] of data.entries()) {
+   /** @type {Record<string, unknown>[]} The data the caller gave, after cleaning, for the guard. */
+   const cleanedItems = [];
+   for (const [index, item] of records.entries()) {
       try {
          /** @type {Record<string, unknown>} The data cleaned the way the database backend cleans a creation. */
          const cleaned = documentClass.cleanData(foundry.utils.deepClone(item), { partial: true }, { creation: true });
+         // The idempotency record is Wiretap's own write and the guard must not judge it, so the caller's data is
+         // cleaned alone when the records differ from it.
+         cleanedItems.push(
+            records === data
+               ? cleaned
+               : documentClass.cleanData(foundry.utils.deepClone(data[index]), { partial: true }, { creation: true }),
+         );
          built.push(
             new documentClass(foundry.utils.deepClone(cleaned), {
                parent: target.parent,
@@ -384,28 +540,59 @@ export async function createDocuments({
          );
       } catch (error) {
          invalid += 1;
-         failures.push(...failuresOf(error, `[${index}]`));
+         failures.push(...failuresOf(error, `${prefix}[${index}]`));
       }
    }
+   // The cleaned data is judged again: whatever spelling reached an operator, it is an operator object now.
+   guardWrite({
+      documentName,
+      values: cleanedItems,
+      ...(documentName === 'Setting' ? { settingTargets: cleanedItems.map((item) => settingKeyOf(item.key)) } : {}),
+      inPack: target.inPack,
+   });
    if (failures.length > 0) {
       throw validationError(failures, invalid, data.length);
    }
-   if (dryRun) {
-      return built.map((document) => rowOf(document, true));
-   }
-   /** @type {Record<string, unknown>[]} Copies Foundry may mutate. */
-   const payload = data.map((item) => foundry.utils.deepClone(item));
+   checkActAs(
+      actAsUser,
+      'create',
+      built.map((document, index) => ({
+         document,
+         data: records[index],
+      })),
+   );
+   return {
+      documentName,
+      target,
+      built,
+      payload: records.map((item) => foundry.utils.deepClone(item)),
+      keepId: keptIds,
+      replay: null,
+      replayDocuments: [],
+   };
+}
+
+/**
+ * Write a prepared creation through the Foundry document APIs.
+ * @param {CreatePlan} plan - A plan from `prepareCreate` with no replay.
+ * @param {boolean} [readback] - Add the canonical export of each created document as `exported`.
+ * @returns {Promise<CreatedRow[]>} One row per created document, in the order of the data.
+ * @throws {ScriptError} `WRITE_NOT_APPLIED` when Foundry created fewer documents than asked.
+ */
+export async function runCreate(plan, readback = false) {
+   /** @type {Function} The configured document class. */
+   const documentClass = CONFIG[plan.documentName].documentClass;
    /** @type {{ uuid: string }[]} The documents that were created. */
-   const created = target.parent
-      ? await target.parent.createEmbeddedDocuments(documentName, payload, { keepId })
-      : await documentClass.createDocuments(payload, {
-         keepId,
-         ...(target.pack === null ? {} : { pack: target.pack }),
+   const created = plan.target.parent
+      ? await plan.target.parent.createEmbeddedDocuments(plan.documentName, plan.payload, { keepId: plan.keepId })
+      : await documentClass.createDocuments(plan.payload, {
+         keepId: plan.keepId,
+         ...(plan.target.pack === null ? {} : { pack: plan.target.pack }),
       });
-   if (created.length !== data.length) {
+   if (created.length !== plan.payload.length) {
       throw new ScriptError(
          'WRITE_NOT_APPLIED',
-         `${created.length} of ${data.length} documents were created; a hook or the system cancelled the rest.`,
+         `${created.length} of ${plan.payload.length} documents were created; a hook or the system cancelled the rest.`,
       );
    }
    return created.map((document) => {
@@ -420,6 +607,75 @@ export async function createDocuments({
       }
       return row;
    });
+}
+
+/**
+ * Create documents of one class: world documents, embedded documents under a parent, or documents in a pack. The
+ * whole call is guarded and validated before the first write, and a dry run stops before it. With an
+ * `idempotencyKey`, a repeated call returns the rows of the documents the first call created, and calls with one key
+ * run one after another.
+ * @param {CreateParams} params - What to create.
+ * @returns {Promise<CreatedRow[]>} One row per document, in the order of `data`.
+ * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED`, `ACT_AS_DENIED`,
+ * `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_UNAVAILABLE` or `WRITE_NOT_APPLIED`.
+ */
+export async function createDocuments(params) {
+   if (params.idempotencyKey === undefined) {
+      return createChecked(params);
+   }
+   return withKeyLock(`${params.documentName}|${params.parentUuid ?? ''}|${params.idempotencyKey}`, () =>
+      createChecked(params),
+   );
+}
+
+/**
+ * Check, then write or preview, one create call. `createDocuments` runs it, under the key lock when the call has an
+ * idempotency key.
+ * @param {CreateParams} params - What to create.
+ * @returns {Promise<CreatedRow[]>} One row per document, in the order of `data`.
+ * @throws {ScriptError} As `createDocuments`.
+ */
+async function createChecked({
+   documentName,
+   data,
+   parentUuid,
+   pack,
+   keepId = false,
+   dryRun = false,
+   readback = false,
+   idempotencyKey,
+   actAs,
+}) {
+   /** @type {CreatePlan} The checked plan. */
+   const plan = await prepareCreate({
+      documentName,
+      data,
+      parentUuid,
+      pack,
+      keepId,
+      idempotencyKey,
+      actAsUser: resolveActAs(actAs),
+   });
+   if (plan.replay !== null) {
+      return plan.replay.map((row, index) => {
+         /** @type {ReturnType<typeof exportDocument>} The export of the existing document, when asked for. */
+         const exported = readback && !dryRun ? exportDocument(plan.replayDocuments[index], {}) : { ok: false };
+         return {
+            ...row,
+            ...(dryRun
+               ? {
+                  dryRun: true,
+                  replay: true,
+               }
+               : {}),
+            ...(exported.ok ? { exported: exported.data } : {}),
+         };
+      });
+   }
+   if (dryRun) {
+      return plan.built.map((document) => rowOf(document, true));
+   }
+   return runCreate(plan, readback);
 }
 
 /**
@@ -441,6 +697,7 @@ export async function createDocuments({
  * @property {UpdateEntry[]} updates - One entry per document; a uuid may appear once.
  * @property {boolean} [dryRun] - Validate and report; write nothing.
  * @property {boolean} [readback] - Add the canonical export of each updated document as `exported`.
+ * @property {string} [actAs] - The id of a user whose permission to update is checked in advance (advisory).
  */
 
 /**
@@ -567,21 +824,41 @@ async function planUpdate(entry) {
 /**
  * Judge an update plan with the write guard.
  * @param {UpdatePlan} plan - The resolved update plan of one document.
+ * @param {boolean} dryRun - Whether the update is only previewed, which needs no `allowDelete` or `allowReplace`.
  * @returns {void}
  * @throws {ScriptError} `GATE_DENIED`.
  */
-function guardUpdate(plan) {
+function guardUpdate(plan, dryRun) {
    /** @type {string} The class of the document. */
    const documentName = plan.document.documentName;
+   // Each document written with its changes cleaned as the database backend cleans them, so the guard sees every
+   // operator spelling as an operator object.
+   /** @type {Array<{ document: object, changes: Record<string, unknown> }>} The documents and their changes. */
+   const targets = plan.embedded.flatMap((group) =>
+      group.entries.map((item) => ({
+         document: item.document,
+         changes: cleanChanges(item.document, item.changes),
+      })));
+   if (plan.paths.length > 0) {
+      targets.unshift({
+         document: plan.document,
+         changes: cleanChanges(plan.document, plan.changes),
+      });
+   }
    guardWrite({
       documentName,
-      paths: plan.patches.map((patch) => patch.path),
-      values: plan.patches.filter((patch) => patch.op !== 'delete').map((patch) => patch.value),
+      targets,
+      dryRun,
+      // Each patch is judged as the dotted-key object it writes (a delete writes null), so a password, ownership or
+      // flag-scope segment in the path counts, and a `flags` path with a value that is not an object is caught.
+      values: plan.patches.map((patch) => ({ [patch.path]: patch.op === 'delete' ? null : patch.value })),
       ...(documentName === 'Setting'
          ? {
             settingTargets: [
                settingKeyOf(plan.document.key),
-               ...plan.patches.filter((patch) => patch.path === 'key').map((patch) => settingKeyOf(patch.value)),
+               ...(plan.paths.length > 0 && 'key' in targets[0].changes
+                  ? [settingKeyOf(foundry.data.operators.DataFieldOperator.get(targets[0].changes.key))]
+                  : []),
             ],
          }
          : {}),
@@ -594,9 +871,10 @@ function guardUpdate(plan) {
  * @param {UpdatePlan} plan - The resolved update plan of one document.
  * @param {number} index - The position of the update in the call.
  * @param {ValidationFailure[]} failures - Receives the failures found.
+ * @param {string} [prefix] - The path prefix of reported failures, for example `updates`.
  * @returns {boolean} Whether the update failed validation.
  */
-function validateUpdate(plan, index, failures) {
+function validateUpdate(plan, index, failures, prefix = '') {
    /** @type {number} The failure count before this update. */
    const before = failures.length;
    if (plan.paths.length > 0) {
@@ -606,7 +884,7 @@ function validateUpdate(plan, index, failures) {
             strict: true,
          });
       } catch (error) {
-         failures.push(...failuresOf(error, `[${index}]`));
+         failures.push(...failuresOf(error, `${prefix}[${index}]`));
       }
    }
    for (const group of plan.embedded) {
@@ -617,7 +895,7 @@ function validateUpdate(plan, index, failures) {
                strict: true,
             });
          } catch (error) {
-            failures.push(...failuresOf(error, `[${index}].${group.collection}.${item._id}`));
+            failures.push(...failuresOf(error, `${prefix}[${index}].${group.collection}.${item._id}`));
          }
       }
    }
@@ -646,8 +924,8 @@ async function applyUpdate(plan) {
       const updated = await plan.document.updateEmbeddedDocuments(
          group.documentName,
          group.entries.map((item) => ({
-            _id: item._id,
             ...item.changes,
+            _id: item._id,
          })),
       );
       /** @type {Set<string>} The ids Foundry updated. */
@@ -664,29 +942,18 @@ async function applyUpdate(plan) {
 }
 
 /**
- * Build the error text of an update that failed after earlier updates were applied.
- * @param {unknown} error - What the failing update threw.
- * @param {number} index - The position of the failing update in the call.
- * @param {number} total - How many updates the call carried.
- * @param {UpdatedRow[]} applied - The rows of the updates already applied.
- * @returns {string} The text, at most 256 bytes: the failure first, then the uuids that were applied.
+ * Resolve, guard and validate updates without writing. Every update is resolved to a plan, the plans are judged by
+ * the write guard, validated by Foundry and checked for the `actAs` user, all before the first write.
+ * @param {UpdateEntry[]} updates - One entry per document.
+ * @param {object} [options] - How to check.
+ * @param {object | null} [options.actAsUser] - The user whose permission is checked in advance, if any.
+ * @param {string} [options.prefix] - The path prefix of reported failures, for example `updates`.
+ * @param {boolean} [options.dryRun] - Whether the updates are only previewed.
+ * @returns {Promise<UpdatePlan[]>} The plans, in the order given.
+ * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, a `PATH_*` code, `GATE_DENIED`, `VALIDATION_FAILED` or
+ * `ACT_AS_DENIED`.
  */
-function notAppliedMessage(error, index, total, applied) {
-   /** @type {string} The reason, cleaned and bounded. */
-   const reason = cleanForLog(String(error?.message ?? error), 80);
-   /** @type {string} The applied uuids, as many as fit. */
-   const uuids = applied.map((row) => row.uuid).join(', ');
-   return cleanForLog(`Update [${index}] failed (${reason}); ${applied.length} of ${total} applied: ${uuids}`, 256);
-}
-
-/**
- * Update documents with path-scoped patches. Every update is resolved, guarded and validated before the first write,
- * and a dry run stops before it.
- * @param {UpdateParams} params - What to update.
- * @returns {Promise<UpdatedRow[]>} One row per update, in the order given.
- * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, a `PATH_*` code, `GATE_DENIED` or `VALIDATION_FAILED`.
- */
-export async function updateDocuments({ updates, dryRun = false, readback = false }) {
+export async function prepareUpdates(updates, { actAsUser = null, prefix = '', dryRun = false } = {}) {
    checkObjects(updates, 'updates');
    /** @type {UpdatePlan[]} The plans, in the order given. */
    const plans = [];
@@ -710,20 +977,65 @@ export async function updateDocuments({ updates, dryRun = false, readback = fals
       plans.push(plan);
    }
    for (const plan of plans) {
-      guardUpdate(plan);
+      guardUpdate(plan, dryRun);
    }
    /** @type {ValidationFailure[]} Every failure found. */
    const failures = [];
    /** @type {number} How many updates failed. */
    let invalid = 0;
    for (const [index, plan] of plans.entries()) {
-      if (validateUpdate(plan, index, failures)) {
+      if (validateUpdate(plan, index, failures, prefix)) {
          invalid += 1;
       }
    }
    if (failures.length > 0) {
       throw validationError(failures, invalid, plans.length);
    }
+   for (const plan of plans) {
+      /** @type {Array<{ document: object, data: Record<string, unknown> }>} The documents the plan updates. */
+      const targets = plan.embedded.flatMap((group) =>
+         group.entries.map((item) => ({
+            document: item.document,
+            data: item.changes,
+         })),
+      );
+      if (plan.paths.length > 0) {
+         targets.unshift({
+            document: plan.document,
+            data: plan.changes,
+         });
+      }
+      checkActAs(actAsUser, 'update', targets);
+   }
+   return plans;
+}
+
+/**
+ * Build the error text of an update that failed after earlier updates were applied.
+ * @param {unknown} error - What the failing update threw.
+ * @param {number} index - The position of the failing update in the call.
+ * @param {number} total - How many updates the call carried.
+ * @param {UpdatedRow[]} applied - The rows of the updates already applied.
+ * @returns {string} The text, at most 256 bytes: the failure first, then the uuids that were applied.
+ */
+function notAppliedMessage(error, index, total, applied) {
+   /** @type {string} The reason, cleaned and bounded. */
+   const reason = cleanForLog(String(error?.message ?? error), 80);
+   /** @type {string} The applied uuids, as many as fit. */
+   const uuids = applied.map((row) => row.uuid).join(', ');
+   return cleanForLog(`Update [${index}] failed (${reason}); ${applied.length} of ${total} applied: ${uuids}`, 256);
+}
+
+/**
+ * Write prepared updates through the Foundry document APIs, one plan after another, or report them as a dry run.
+ * @param {UpdatePlan[]} plans - The plans from `prepareUpdates`.
+ * @param {object} [options] - How to run.
+ * @param {boolean} [options.dryRun] - Report the paths that would be written and write nothing.
+ * @param {boolean} [options.readback] - Add the canonical export of each updated document as `exported`.
+ * @returns {Promise<UpdatedRow[]>} One row per update, in the order given.
+ * @throws {ScriptError} `WRITE_NOT_APPLIED` when a later update fails after earlier ones were applied.
+ */
+export async function runUpdates(plans, { dryRun = false, readback = false } = {}) {
    /** @type {UpdatedRow[]} The acknowledgements. */
    const rows = [];
    for (const [index, plan] of plans.entries()) {
@@ -756,6 +1068,26 @@ export async function updateDocuments({ updates, dryRun = false, readback = fals
 }
 
 /**
+ * Update documents with path-scoped patches. Every update is resolved, guarded and validated before the first write,
+ * and a dry run stops before it. A database error at a later update leaves the earlier ones applied.
+ * @param {UpdateParams} params - What to update.
+ * @returns {Promise<UpdatedRow[]>} One row per update, in the order given.
+ * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, a `PATH_*` code, `GATE_DENIED`, `VALIDATION_FAILED`,
+ * `ACT_AS_DENIED` or `WRITE_NOT_APPLIED`.
+ */
+export async function updateDocuments({ updates, dryRun = false, readback = false, actAs }) {
+   /** @type {UpdatePlan[]} The checked plans. */
+   const plans = await prepareUpdates(updates, {
+      actAsUser: resolveActAs(actAs),
+      dryRun,
+   });
+   return runUpdates(plans, {
+      dryRun,
+      readback,
+   });
+}
+
+/**
  * Most rows a delete preview lists; the true total is reported beside them.
  * @type {number}
  */
@@ -777,6 +1109,7 @@ const PACK_UUID = /^Compendium\.[^.]+\.[^.]+$/;
  * @typedef {object} DeleteParams
  * @property {string[]} uuids - The documents to delete: world, embedded or pack documents.
  * @property {boolean} [dryRun] - List what would be deleted; delete nothing.
+ * @property {string} [actAs] - The id of a user whose permission to delete is checked in advance (advisory).
  */
 
 /**
@@ -809,7 +1142,7 @@ function previewRow(document) {
  * @returns {Promise<{ id: string, uuid: string, documentName: string }>} The live document.
  * @throws {ScriptError} `ARGS_INVALID` or `DOC_NOT_FOUND`.
  */
-async function resolveWritable(uuid) {
+export async function resolveWritable(uuid) {
    if (typeof uuid !== 'string' || PACK_UUID.test(uuid)) {
       throw new ScriptError('ARGS_INVALID', 'A compendium pack is not a document; give document uuids.');
    }
@@ -910,34 +1243,59 @@ function previewDeletion(documents) {
 }
 
 /**
- * Delete documents through the Foundry document APIs: world and pack documents by their class, embedded documents by
- * their parent. A document named together with one of its ancestors goes with the ancestor. The deletion is
- * irreversible. Every uuid is resolved and guarded before the first deletion, and a dry run stops before it.
- * @param {DeleteParams} params - What to delete.
- * @returns {Promise<CreatedRow[] | DeletePreview>} The rows `{ uuid, name, type }` of the deleted documents, or the
- * preview of a dry run.
- * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `DELETE_REFUSED` or `WRITE_NOT_APPLIED`.
+ * Resolve and guard a deletion without deleting: every uuid is resolved, judged by the write guard, checked against
+ * the rules that keep the world usable and against the `actAs` user.
+ * @param {unknown} uuids - The uuids the call asked to delete.
+ * @param {object | null} [actAsUser] - The user whose permission is checked in advance, if any.
+ * @param {boolean} [dryRun] - Whether the deletion is only previewed, which needs no `allowDelete` gate.
+ * @returns {Promise<object[]>} The live documents, in the order given.
+ * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `DELETE_REFUSED` or `ACT_AS_DENIED`.
  */
-export async function deleteDocuments({ uuids, dryRun = false }) {
+export async function prepareDeletes(uuids, actAsUser = null, dryRun = false) {
    /** @type {object[]} The documents to delete. */
    const documents = await resolveDeletions(uuids);
    for (const document of documents) {
       guardWrite({
          documentName: document.documentName,
+         operations: ['delete'],
+         dryRun,
          ...(document.documentName === 'Setting' ? { settingTargets: [settingKeyOf(document.key)] } : {}),
          inPack: Boolean(document.pack),
       });
    }
    checkUserDeletions(documents);
-   if (dryRun) {
-      return previewDeletion(documents);
-   }
-   /** @type {CreatedRow[]} The rows, read before the documents are gone. */
-   const rows = documents.map((document) => ({
+   checkActAs(
+      actAsUser,
+      'delete',
+      documents.map((document) => ({
+         document,
+         data: {},
+      })),
+   );
+   return documents;
+}
+
+/**
+ * Describe a prepared deletion as rows `{ uuid, name, type }`, read before the documents are gone.
+ * @param {object[]} documents - The documents to delete.
+ * @returns {CreatedRow[]} One row per document.
+ */
+export function deletionRows(documents) {
+   return documents.map((document) => ({
       uuid: document.uuid,
       name: cleanForLog(String(document.name ?? document.key ?? ''), ROW_NAME_MAX_BYTES),
       type: String(document.type ?? ''),
    }));
+}
+
+/**
+ * Group the documents of a deletion by the call that deletes them. A document named together with one of its
+ * ancestors goes with the ancestor and is left out.
+ * @param {object[]} documents - The documents to delete.
+ * @returns {Array<{ parent: object | null, documentName: string, pack: string | null, ids: string[] }>} One group
+ * per parent, class and pack.
+ */
+export function groupDeletions(documents) {
    /** @type {Set<string>} The uuids named, to find the documents an ancestor already covers. */
    const named = new Set(documents.map((document) => document.uuid));
    /** @type {object[]} The documents to delete directly. */
@@ -967,22 +1325,58 @@ export async function deleteDocuments({ uuids, dryRun = false }) {
       }
       groups.get(key).ids.push(document.id);
    }
+   return [...groups.values()];
+}
+
+/**
+ * Delete prepared documents through the Foundry document APIs: world and pack documents by their class, embedded
+ * documents by their parent.
+ * @param {object[]} documents - The documents from `prepareDeletes`.
+ * @returns {Promise<CreatedRow[]>} The rows of the deleted documents.
+ * @throws {ScriptError} `WRITE_NOT_APPLIED` when Foundry deleted fewer documents than asked.
+ */
+export async function runDeletes(documents) {
+   /** @type {CreatedRow[]} The rows, read before the documents are gone. */
+   const rows = deletionRows(documents);
+   /** @type {ReturnType<typeof groupDeletions>} The deleting calls. */
+   const groups = groupDeletions(documents);
+   /** @type {number} How many documents the groups name. */
+   const expected = groups.reduce((sum, group) => sum + group.ids.length, 0);
    /** @type {number} How many documents Foundry deleted. */
    let deleted = 0;
-   for (const group of groups.values()) {
+   for (const group of groups) {
       /** @type {object[]} The documents Foundry deleted in this call. */
       const result = group.parent
          ? await group.parent.deleteEmbeddedDocuments(group.documentName, group.ids)
          : await CONFIG[group.documentName].documentClass.deleteDocuments(group.ids, {
-              ...(group.pack === null ? {} : { pack: group.pack }),
-           });
+            ...(group.pack === null ? {} : { pack: group.pack }),
+         });
       deleted += result.length;
    }
-   if (deleted !== direct.length) {
+   if (deleted !== expected) {
       throw new ScriptError(
          'WRITE_NOT_APPLIED',
-         `${deleted} of ${direct.length} documents were deleted; a hook or the system cancelled the rest.`,
+         `${deleted} of ${expected} documents were deleted; a hook or the system cancelled the rest.`,
       );
    }
    return rows;
+}
+
+/**
+ * Delete documents through the Foundry document APIs: world and pack documents by their class, embedded documents by
+ * their parent. A document named together with one of its ancestors goes with the ancestor. The deletion is
+ * irreversible. Every uuid is resolved and guarded before the first deletion, and a dry run stops before it.
+ * @param {DeleteParams} params - What to delete.
+ * @returns {Promise<CreatedRow[] | DeletePreview>} The rows `{ uuid, name, type }` of the deleted documents, or the
+ * preview of a dry run.
+ * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `DELETE_REFUSED`, `ACT_AS_DENIED` or
+ * `WRITE_NOT_APPLIED`.
+ */
+export async function deleteDocuments({ uuids, dryRun = false, actAs }) {
+   /** @type {object[]} The documents to delete. */
+   const documents = await prepareDeletes(uuids, resolveActAs(actAs), dryRun);
+   if (dryRun) {
+      return previewDeletion(documents);
+   }
+   return runDeletes(documents);
 }

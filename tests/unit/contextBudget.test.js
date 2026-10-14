@@ -112,6 +112,7 @@ describe('context budgets of the real MCP server', () => {
       expect(report.failures).toEqual([]);
       expect(report.listing.map((tool) => tool.name).sort()).toEqual(
          [
+            'batch',
             'create_documents',
             'delete_documents',
             'describe_schema',
@@ -119,6 +120,7 @@ describe('context budgets of the real MCP server', () => {
             HELPER_TOOL_NAME,
             'list_document_types',
             'read_handle',
+            'replace_document',
             'search_documents',
             'update_documents',
          ].sort(),

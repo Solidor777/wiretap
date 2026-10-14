@@ -172,8 +172,8 @@ export const createDocumentsDefinition = {
    name: 'create_documents',
    version: '1.0.0',
    description:
-      'Create Foundry documents of one class. data: one JSON object text per document. parentUuid or pack for ' +
-      'embedded or pack documents. dryRun only validates.',
+      'Create Foundry documents. data: one JSON object text each. parentUuid or pack for embedded or pack. ' +
+      'idempotencyKey: a repeat returns the first call.',
    inputSchema: {
       type: 'object',
       properties: {
@@ -190,6 +190,11 @@ export const createDocumentsDefinition = {
          pack: { type: 'string' },
          keepId: { type: 'boolean' },
          dryRun: { type: 'boolean' },
+         idempotencyKey: {
+            type: 'string',
+            maxLength: 64,
+         },
+         actAs: { type: 'string' },
          paths: {
             type: 'array',
             maxItems: getBudget('PATHS_PER_CALL_MAX').value,
@@ -208,6 +213,7 @@ export const createDocumentsDefinition = {
    result: { budgetBytes: getBudget('ACK_BATCH_MAX_BYTES').value },
    requires: 'api',
    mutates: true,
+   handleArgs: ['data'],
 };
 
 /**
@@ -256,6 +262,7 @@ export const updateDocumentsDefinition = {
             },
          },
          dryRun: { type: 'boolean' },
+         actAs: { type: 'string' },
          paths: {
             type: 'array',
             maxItems: getBudget('PATHS_PER_CALL_MAX').value,
@@ -292,11 +299,112 @@ export const deleteDocumentsDefinition = {
             items: { type: 'string' },
          },
          dryRun: { type: 'boolean' },
+         actAs: { type: 'string' },
       },
       required: ['uuids'],
       additionalProperties: false,
    },
    result: { budgetBytes: getBudget('RESULT_HARD_CAP_DEFAULT_BYTES').value },
+   requires: 'api',
+   mutates: true,
+};
+
+/**
+ * The `replace_document` definition. `data` is JSON text because the argument-schema subset has no free-form object.
+ * @type {import('$shared/scripts.js').ScriptDefinition}
+ */
+export const replaceDocumentDefinition = {
+   name: 'replace_document',
+   version: '1.0.0',
+   description:
+      'Replace a document with data (JSON text) like a JSON import: top-level fields replace, hooks fire, _id, sort, ' +
+      'ownership and folder stay. dryRun only validates.',
+   inputSchema: {
+      type: 'object',
+      properties: {
+         uuid: { type: 'string' },
+         data: {
+            type: 'string',
+            maxLength: SCHEMA_BOUND_MAX,
+         },
+         dryRun: { type: 'boolean' },
+         actAs: { type: 'string' },
+         paths: {
+            type: 'array',
+            maxItems: getBudget('PATHS_PER_CALL_MAX').value,
+            items: {
+               type: 'string',
+               maxLength: getBudget('PATH_BYTES_MAX').value,
+            },
+         },
+      },
+      required: [
+         'uuid',
+         'data',
+      ],
+      additionalProperties: false,
+   },
+   result: { budgetBytes: getBudget('ACK_MAX_BYTES').value },
+   requires: 'api',
+   mutates: true,
+   handleArgs: ['data'],
+};
+
+/**
+ * The `batch` definition: creates, updates and deletes in one Foundry batch. The updates are flat patches like
+ * `update_documents`, so the schema stays within the argument-schema depth.
+ * @type {import('$shared/scripts.js').ScriptDefinition}
+ */
+export const batchDefinition = {
+   name: 'batch',
+   version: '1.0.0',
+   description:
+      'Batch create, update, delete in that order. NOT atomic: Foundry validates all, stops at the first failure; ' +
+      'earlier ones stay applied.',
+   inputSchema: {
+      type: 'object',
+      properties: {
+         creates: {
+            type: 'array',
+            maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
+            items: {
+               type: 'object',
+               properties: {
+                  documentName: { type: 'string' },
+                  data: { type: 'string' },
+                  parentUuid: { type: 'string' },
+               },
+            },
+         },
+         updates: {
+            type: 'array',
+            maxItems: UPDATE_ENTRIES_MAX,
+            items: {
+               type: 'object',
+               properties: {
+                  uuid: { type: 'string' },
+                  path: { type: 'string' },
+                  value: { type: 'string' },
+                  op: { type: 'string' },
+               },
+               required: [
+                  'uuid',
+                  'path',
+               ],
+            },
+         },
+         deletes: {
+            type: 'array',
+            maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
+            items: { type: 'string' },
+         },
+         dryRun: { type: 'boolean' },
+         actAs: { type: 'string' },
+      },
+      additionalProperties: false,
+   },
+   strictNested: true,
+   result: { budgetBytes: getBudget('ACK_BATCH_MAX_BYTES').value },
    requires: 'api',
    mutates: true,
 };

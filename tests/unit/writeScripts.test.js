@@ -51,7 +51,10 @@ beforeEach(() => {
       ],
       userId: 'MOCKGM0000000001',
    });
-   gates = {};
+   gates = {
+      allowDelete: true,
+      allowReplace: true,
+   };
    globalThis.game.settings.get = (module, key) => gates[key];
    actor = world.add('Actor', {
       name: 'MOCK_actor',
@@ -128,6 +131,8 @@ describe('shipped scripts', () => {
          'create_documents',
          'update_documents',
          'delete_documents',
+         'replace_document',
+         'batch',
       ]);
    });
 
@@ -458,11 +463,9 @@ describe('update_documents', () => {
       expect(actor.updateEmbeddedDocuments).toHaveBeenCalledTimes(1);
       const [name, entries] = actor.updateEmbeddedDocuments.mock.calls[0];
       expect(name).toBe('Item');
-      expect(entries[0]['system.a']).toEqual({
-         operator: 'replace',
-         operatorValue: [1],
-      });
-      expect(entries[0]['system.b'].operator).toBe('delete');
+      expect(entries[0]['system.a']).toBeInstanceOf(foundry.data.operators.ForcedReplacement);
+      expect(foundry.data.operators.DataFieldOperator.get(entries[0]['system.a'])).toEqual([1]);
+      expect(entries[0]['system.b']).toBeInstanceOf(foundry.data.operators.ForcedDeletion);
       expect(entries[1].name).toBe('MOCK_buckler');
    });
 
@@ -549,7 +552,7 @@ describe('update_documents', () => {
             'nope',
          ],
       });
-      expect(result[0].values).toEqual({ name: 'MOCK_actor' });
+      expect(result[0].values).toEqual({ name: 'MOCK_x' });
       expect(result[0].missing).toEqual(['nope']);
    });
 

@@ -9,13 +9,13 @@ import { checkDataBytes, checkReadbackPaths, parseJson, shapeRefusal } from '~/b
 import { ackUpdates, attachReadback } from '~/bridge/scripts/writeAck.js';
 
 /**
- * Group the patch entries by uuid, in first-use order, parsing each value as JSON.
+ * Group the patch entries by uuid, in first-use order, parsing each value as JSON. The caller bounds the size of the
+ * values (`checkDataBytes`), alone or together with other texts of the same call.
  * @param {Array<{ uuid: string, path: string, value?: string, op?: string }>} entries - The validated entries.
  * @returns {Array<{ uuid: string, patches: Array<{ path: string, value?: unknown, op?: string }> }>} The updates.
  * @throws {ScriptError} `ARGS_INVALID` for a value that is not JSON, or a value given with `op: 'delete'`.
  */
-function groupEntries(entries) {
-   checkDataBytes(entries.map((entry) => entry.value ?? ''));
+export function groupPatches(entries) {
    /** @type {Map<string, { uuid: string, patches: object[] }>} The updates by uuid. */
    const updates = new Map();
    for (const [index, entry] of entries.entries()) {
@@ -38,6 +38,18 @@ function groupEntries(entries) {
 }
 
 /**
+ * Bound the values of the patch entries as one total, then group them by uuid.
+ * @param {Array<{ uuid: string, path: string, value?: string, op?: string }>} entries - The validated entries.
+ * @returns {ReturnType<typeof groupPatches>} The updates.
+ * @throws {ScriptError} `ARGS_INVALID` for values over the data bound, a value that is not JSON, or a value given
+ * with `op: 'delete'`.
+ */
+export function groupEntries(entries) {
+   checkDataBytes(entries.map((entry) => entry.value ?? ''));
+   return groupPatches(entries);
+}
+
+/**
  * Update the documents and acknowledge them.
  * @param {Record<string, unknown>} args - The validated arguments.
  * @param {import('~/bridge/scripts/ctx.js').ScriptContext} ctx - The call context.
@@ -54,6 +66,7 @@ export async function updateDocumentsHandler(args, ctx) {
       updates,
       dryRun: args.dryRun === true,
       readback: args.paths !== undefined && args.dryRun !== true,
+      actAs: args.actAs,
    });
    /** @type {Record<string, unknown>[]} The acknowledgement rows. */
    const rows = ackUpdates(updated);

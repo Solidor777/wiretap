@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { getBudget } from '../../shared/budgets.js';
 import { compileSchema, VALUE_NODES_MAX } from '../../shared/schemaValidate.js';
-import { jsonSchemaToZodShape } from '../../server/toolRegistry.ts';
+import { argumentSchema, jsonSchemaToZodShape } from '../../server/toolRegistry.ts';
 
 /**
  * Compile a schema that must be accepted.
@@ -759,8 +759,7 @@ describe('compileSchema: the same schemas the sidecar converts', () => {
 describe('validate: the same arguments the sidecar accepts and refuses', () => {
    for (const { label, schema, values } of ACCEPTED_SCHEMAS) {
       it(`judges every ${label} fixture as zod does`, () => {
-         const shape = jsonSchemaToZodShape(schema).shape;
-         const sidecar = z.object(shape);
+         const sidecar = argumentSchema(jsonSchemaToZodShape(schema));
          const validate = compiled(schema);
          for (const value of values) {
             const expected = sidecar.safeParse(value);
@@ -967,13 +966,55 @@ describe('validate: results and errors', () => {
 
    it('lists a schema in the same form as the sidecar, for every accepted fixture', () => {
       for (const { label, schema } of ACCEPTED_SCHEMAS) {
-         const shape = jsonSchemaToZodShape(schema).shape;
-         const sidecar = toJsonSchemaCompat(z.object(shape), {
+         const sidecar = toJsonSchemaCompat(argumentSchema(jsonSchemaToZodShape(schema)), {
             strictUnions: true,
             pipeStrategy: 'input',
          });
          expect(compileSchema(schema).listed, label).toEqual(sidecar);
       }
+   });
+
+   it('lists a strict-nested schema without the nested additionalProperties, as the sidecar does', () => {
+      /** @type {object} A root with a nested entry object. */
+      const schema = {
+         type: 'object',
+         properties: {
+            entries: {
+               type: 'array',
+               maxItems: 3,
+               items: {
+                  type: 'object',
+                  properties: { a: { type: 'string' } },
+               },
+            },
+         },
+         additionalProperties: false,
+      };
+      const sidecar = toJsonSchemaCompat(argumentSchema(jsonSchemaToZodShape(schema, true)), {
+         strictUnions: true,
+         pipeStrategy: 'input',
+      });
+      expect(compileSchema(schema, { strictNested: true }).listed).toEqual(sidecar);
+      expect(JSON.stringify(sidecar).match(/additionalProperties/g)).toHaveLength(1);
+   });
+
+   it('refuses an undeclared key of a nested object only when strictNested is set, on both validators', () => {
+      /** @type {object} A root with a nested entry object. */
+      const schema = {
+         type: 'object',
+         properties: {
+            entry: {
+               type: 'object',
+               properties: { a: { type: 'string' } },
+            },
+         },
+      };
+      /** @type {object} Arguments with a typo in the entry. */
+      const typo = { entry: { a: 'x', b: 'y' } };
+      expect(compileSchema(schema).validate(typo).ok).toBe(true);
+      expect(compileSchema(schema, { strictNested: true }).validate(typo).ok).toBe(false);
+      expect(argumentSchema(jsonSchemaToZodShape(schema)).safeParse(typo).success).toBe(true);
+      expect(argumentSchema(jsonSchemaToZodShape(schema, true)).safeParse(typo).success).toBe(false);
    });
 
    it('does not throw when a getter on the arguments throws', () => {

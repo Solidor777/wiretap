@@ -17,23 +17,7 @@ import {
    PROTOCOL_MISMATCH,
    PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
-
-/**
- * Reserve a free loopback TCP port by listening on port 0 and releasing it.
- * @returns {Promise<number>} A port that was free at probe time.
- */
-function freePort() {
-   return new Promise((resolve, reject) => {
-      /** @type {import('node:net').Server} A throwaway server used to reserve a port. */
-      const probe = net.createServer();
-      probe.once('error', reject);
-      probe.listen(0, '127.0.0.1', () => {
-         /** @type {number} The port the OS assigned. */
-         const { port } = probe.address();
-         probe.close(() => resolve(port));
-      });
-   });
-}
+import { reservePort } from '../portPool.js';
 
 /**
  * Retry an async check every 20 ms until it returns a truthy value, failing after 1000 ms.
@@ -105,7 +89,7 @@ describe('endpoint routing over Socket.IO', () => {
     * @returns {Promise<number>} The Socket.IO port.
     */
    async function start() {
-      mcpPort = await freePort();
+      mcpPort = await reservePort();
       server = createWiretapServer(0, mcpPort, 'mcp-only');
       await server.ready;
       return server.io.httpServer.address().port;

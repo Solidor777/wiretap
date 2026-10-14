@@ -57,12 +57,14 @@ describe('the core read tools over the bridge', () => {
       /** @type {{ client: import('@modelcontextprotocol/sdk/client/index.js').Client }} The connected MCP client. */
       const { client } = await harness.connectClient();
       await expect.poll(() => harness.toolNames(client), { timeout: 1000 }).toEqual([
+         'batch',
          'create_documents',
          'delete_documents',
          'describe_schema',
          'get_document',
          'list_document_types',
          'read_handle',
+         'replace_document',
          'search_documents',
          'update_documents',
       ]);
@@ -77,8 +79,10 @@ describe('the core read tools over the bridge', () => {
          expect(tools.find((tool) => tool.name === name).annotations).toMatchObject({ readOnlyHint: true });
       }
       for (const name of [
+         'batch',
          'create_documents',
          'delete_documents',
+         'replace_document',
          'update_documents',
       ]) {
          expect(tools.find((tool) => tool.name === name).annotations).toMatchObject({ readOnlyHint: false });
@@ -113,7 +117,6 @@ describe('the core read tools over the bridge', () => {
             uuid: 'Actor.MOCKACTOR0000001',
             paths: ['system.hp'],
             ifModifiedSince: 12,
-            unknown: 'dropped',
          },
       });
       expect(JSON.parse(textOf(result))).toEqual(view);
@@ -259,15 +262,12 @@ describe('the core read tools over the bridge', () => {
             documentName: 'Actor',
             filters: ['system.rarity=common'],
             limit: 100,
-            maxBytes: 16000,
-            unknown: 'dropped',
          },
       });
       expect(JSON.parse(textOf(result))).toEqual({
          rows: [],
          total: 0,
       });
-      // maxBytes is not declared by search_documents, so it is dropped before the client is called.
       expect(gm.invokes[0].params).toEqual({
          name: 'search_documents',
          arguments: {
@@ -323,6 +323,17 @@ describe('the core read tools over the bridge', () => {
                   'fields',
                   0,
                ],
+            },
+         ],
+         [
+            'search_documents',
+            {
+               documentName: 'Actor',
+               maxBytes: 16000,
+            },
+            {
+               code: 'unrecognized_keys',
+               path: [],
             },
          ],
          [

@@ -28,6 +28,8 @@ export async function createDocumentsHandler(args, ctx) {
       keepId: args.keepId === true,
       dryRun: args.dryRun === true,
       readback: args.paths !== undefined && args.dryRun !== true,
+      idempotencyKey: args.idempotencyKey,
+      actAs: args.actAs,
    });
    /** @type {Record<string, unknown>[]} The acknowledgement rows. */
    const rows = ackDocuments(created);

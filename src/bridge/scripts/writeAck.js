@@ -101,6 +101,69 @@ function fit(entries, levels, build) {
 }
 
 /**
+ * Build the acknowledgement row of one created or deleted document at a level.
+ * @param {{ uuid: string | null, name: string, type: string, dryRun?: boolean }} entry -
+ * The created, deleted or previewed document.
+ * @param {number} level - The detail level; 0 is the most detailed.
+ * @returns {Record<string, unknown>} The uuid, name and type at the level, with `dryRun` when set.
+ */
+function documentRow(entry, level) {
+   /** @type {Record<string, unknown>} The acknowledgement row built from the document. */
+   const row = { uuid: entry.uuid };
+   if (NAME_CAPS[level] > 0) {
+      row.name = truncateUtf8(entry.name, NAME_CAPS[level]);
+   }
+   if (TYPE_CAPS[level] > 0) {
+      row.type = truncateUtf8(entry.type, TYPE_CAPS[level]);
+   }
+   if (entry.dryRun === true) {
+      row.dryRun = true;
+   }
+   return row;
+}
+
+/**
+ * Build the acknowledgement row of one updated document at a level: as many paths as fit one row, the rest counted
+ * in `more`; at the coarsest level only `changedCount`.
+ * @param {{ uuid: string, changed: string[], dryRun?: boolean, dropped?: number }} entry - The updated document.
+ * @param {number} level - The detail level; 0 is the most detailed.
+ * @returns {Record<string, unknown>} The uuid and the paths at the level, with `dryRun` and `dropped` when set.
+ */
+function updateRow(entry, level) {
+   /** @type {number} The most bytes one row may take. */
+   const rowMax = getBudget('ACK_MAX_BYTES').value;
+   /** @type {Record<string, unknown>} The acknowledgement row built from the document. */
+   const row = { uuid: entry.uuid };
+   if (level >= PATH_CAPS.length) {
+      row.changedCount = entry.changed.length;
+   } else {
+      /** @type {string[]} The paths listed. */
+      const listed = [];
+      row.changed = listed;
+      for (const path of entry.changed) {
+         listed.push(truncateUtf8(path, PATH_CAPS[level]));
+         if (jsonBytes({
+            ...row,
+            more: entry.changed.length
+         }) > rowMax) {
+            listed.pop();
+            break;
+         }
+      }
+      if (listed.length < entry.changed.length) {
+         row.more = entry.changed.length - listed.length;
+      }
+   }
+   if (entry.dryRun === true) {
+      row.dryRun = true;
+   }
+   if (typeof entry.dropped === 'number') {
+      row.dropped = entry.dropped;
+   }
+   return row;
+}
+
+/**
  * Build the acknowledgement rows of created or deleted documents: `{ uuid, name, type }`, with `dryRun: true` on a
  * dry run (the uuid is then null).
  * @param {Array<{ uuid: string | null, name: string, type: string, dryRun?: boolean }>} documents -
@@ -108,20 +171,7 @@ function fit(entries, levels, build) {
  * @returns {Record<string, unknown>[]} The rows, within the ack budgets.
  */
 export function ackDocuments(documents) {
-   return fit(documents, NAME_CAPS.length, (entry, level) => {
-      /** @type {Record<string, unknown>} The acknowledgement row built from the document. */
-      const row = { uuid: entry.uuid };
-      if (NAME_CAPS[level] > 0) {
-         row.name = truncateUtf8(entry.name, NAME_CAPS[level]);
-      }
-      if (TYPE_CAPS[level] > 0) {
-         row.type = truncateUtf8(entry.type, TYPE_CAPS[level]);
-      }
-      if (entry.dryRun === true) {
-         row.dryRun = true;
-      }
-      return row;
-   });
+   return fit(documents, NAME_CAPS.length, documentRow);
 }
 
 /**
@@ -132,36 +182,61 @@ export function ackDocuments(documents) {
  * @returns {Record<string, unknown>[]} The rows, within the ack budgets.
  */
 export function ackUpdates(updates) {
-   /** @type {number} The most bytes one row may take. */
-   const rowMax = getBudget('ACK_MAX_BYTES').value;
-   return fit(updates, PATH_CAPS.length + 1, (entry, level) => {
-      /** @type {Record<string, unknown>} The acknowledgement row built from the document. */
-      const row = { uuid: entry.uuid };
-      if (level >= PATH_CAPS.length) {
-         row.changedCount = entry.changed.length;
+   return fit(updates, PATH_CAPS.length + 1, updateRow);
+}
+
+/**
+ * Build the acknowledgement of a replaced document: one `{ uuid, changed }` row, with the changed top-level fields
+ * listed as far as the row bound allows and the rest counted in `more`.
+ * @param {{ uuid: string, changed: string[], dryRun?: boolean }} replaced - The replaced document.
+ * @returns {Record<string, unknown>[]} A list holding the one row, within the ack budgets.
+ */
+export function ackReplaced(replaced) {
+   return ackUpdates([replaced]);
+}
+
+/**
+ * Build the acknowledgement of a batch: the created, updated and deleted rows, all shaped together so the whole
+ * result stays within `ACK_BATCH_MAX_BYTES`. At the last resort the rows keep only their uuids and `omitted` counts
+ * the rows left out.
+ * @param {{ created: object[], updated: object[], deleted: object[], dryRun?: true }} result - The rows by kind.
+ * @returns {Record<string, unknown>} `{ created, updated, deleted }` (and `dryRun`, `omitted` when they apply).
+ */
+export function ackBatch(result) {
+   /** @type {Array<{ kind: 'created' | 'updated' | 'deleted' }>} Every row with its kind, in result order. */
+   const entries = [
+      ...result.created.map((entry) => ({
+         kind: 'created',
+         ...entry
+      })),
+      ...result.updated.map((entry) => ({
+         kind: 'updated',
+         ...entry
+      })),
+      ...result.deleted.map((entry) => ({
+         kind: 'deleted',
+         ...entry
+      })),
+   ];
+   /** @type {Record<string, unknown>[]} The rows shaped to fit. */
+   const rows = fit(entries, NAME_CAPS.length, (entry, level) =>
+      entry.kind === 'updated' ? updateRow(entry, Math.min(level, PATH_CAPS.length)) : documentRow(entry, level),
+   );
+   /** @type {Record<string, unknown>} The acknowledgement. */
+   const ack = {
+      ...(result.dryRun === true ? { dryRun: true } : {}),
+      created: [],
+      updated: [],
+      deleted: [],
+   };
+   for (const [index, row] of rows.entries()) {
+      if (row.omitted !== undefined) {
+         ack.omitted = row.omitted;
       } else {
-         /** @type {string[]} The paths listed. */
-         const listed = [];
-         row.changed = listed;
-         for (const path of entry.changed) {
-            listed.push(truncateUtf8(path, PATH_CAPS[level]));
-            if (jsonBytes({
-               ...row,
-               more: entry.changed.length
-            }) > rowMax) {
-               listed.pop();
-               break;
-            }
-         }
-         if (listed.length < entry.changed.length) {
-            row.more = entry.changed.length - listed.length;
-         }
+         ack[entries[index].kind].push(row);
       }
-      if (entry.dryRun === true) {
-         row.dryRun = true;
-      }
-      return row;
-   });
+   }
+   return ack;
 }
 
 /**

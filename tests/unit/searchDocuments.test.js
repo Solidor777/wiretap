@@ -139,13 +139,14 @@ describe('search_documents definition', () => {
       }
    });
 
-   it('drops an undeclared maxBytes argument: the page budget is not a caller choice', async () => {
+   it('refuses an undeclared maxBytes argument: the page budget is not a caller choice', async () => {
       installWorld({ documents: actors(3) }, vi.fn);
-      const plain = await search({ documentName: 'Actor' });
-      expect(await search({
-         documentName: 'Actor',
-         maxBytes: 16000,
-      })).toEqual(plain);
+      await expect(
+         search({
+            documentName: 'Actor',
+            maxBytes: 16000,
+         }),
+      ).rejects.toMatchObject({ code: 'ARGS_INVALID' });
    });
 });
 

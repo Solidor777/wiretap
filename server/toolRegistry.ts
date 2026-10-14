@@ -39,6 +39,8 @@ export interface RegistryTool {
    description: string;
    /** The argument shape converted from the received JSON Schema. */
    shape: ZodRawShape;
+   /** Whether the root declared `additionalProperties: false`, so an undeclared argument is refused, not dropped. */
+   strict: boolean;
    /** The script's own result budget in bytes. */
    budgetBytes: number;
    /** Where the script runs: any client endpoint, or only a DOM-capable one. */
@@ -47,6 +49,8 @@ export interface RegistryTool {
    mutates: boolean;
    /** The risk gate the tool declared; the sidecar pre-checks it against the routed endpoint's snapshot. */
    gate?: RequiredGate;
+   /** The text arguments that may be given as a handle reference; empty when the tool takes none. */
+   handleArgs: string[];
    /** A string that differs whenever any listed or routed property of the tool differs; used to detect changes. */
    signature: string;
    /** The argument schema as the SDK lists it; a call is refused when the picked endpoint declares another one. */
@@ -69,7 +73,7 @@ export type RegistryOutcome =
      };
 
 /** The outcome of converting a JSON Schema. */
-export type ShapeOutcome = { ok: true; shape: ZodRawShape } | { ok: false; reason: string };
+export type ShapeOutcome = { ok: true; shape: ZodRawShape; strict: boolean } | { ok: false; reason: string };
 
 /** The outcome of sanitizing one entry. */
 type ToolOutcome =
@@ -80,6 +84,8 @@ type ToolOutcome =
 interface ConvertState {
    /** Schema nodes converted so far, the root included. */
    nodes: number;
+   /** Whether every object below the root refuses an undeclared key, without saying so in the listed schema. */
+   strictNested: boolean;
 }
 
 // Longest tool label written to a log line, in UTF-8 bytes.
@@ -226,9 +232,20 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
          result = list;
          break;
       }
-      default:
-         result = z.object(convertObjectShape(node, depth, state));
+      default: {
+         // An object that declares `additionalProperties: false` refuses what it does not declare; any other drops it.
+         const object: z.ZodObject = z.object(convertObjectShape(node, depth, state));
+         if (ownValue(node, 'additionalProperties') === false) {
+            result = object.strict();
+         } else if (state.strictNested && depth > 1) {
+            // Strict to parse, but the listed schema omits `additionalProperties: false`, which would cost definition
+            // bytes in every entry object. Overriding the key with undefined drops it from the JSON output.
+            result = object.strict().meta({ additionalProperties: undefined } as never);
+         } else {
+            result = object;
+         }
          break;
+      }
    }
    // Every node's description is validated here. Only an object property's description is attached (by
    // `convertObjectShape`, which owns the optional wrapper); a description on the root or on array items is validated
@@ -290,6 +307,17 @@ function convertObjectShape(node: Record<string, unknown>, depth: number, state:
 }
 
 /**
+ * The zod schema that judges the arguments of a registry tool: its shape as an object, strict when the root declared
+ * `additionalProperties: false`.
+ * @param {{ shape: ZodRawShape, strict: boolean }} converted - The converted shape and whether the root is strict.
+ * @returns {z.ZodObject} The argument schema.
+ */
+export function argumentSchema(converted: { shape: ZodRawShape; strict: boolean }): z.ZodObject {
+   const object: z.ZodObject = z.object(converted.shape);
+   return converted.strict ? object.strict() : object;
+}
+
+/**
  * Convert the JSON Schema of a tool's arguments to a zod shape. Only a small, documented subset is supported: a root
  * `object` whose properties are `string` (with `enum`, `minLength`, `maxLength`), `number`, `integer` (with `minimum`,
  * `maximum`), `boolean`, `array` (with `items`, `minItems`, `maxItems`) or nested `object`, each with an optional
@@ -297,19 +325,24 @@ function convertObjectShape(node: Record<string, unknown>, depth: number, state:
  * patterns, formats, defaults, constants) refuses the schema: a pattern is attacker-supplied regular-expression work
  * and a combinator or reference cannot be bounded by the definition budget.
  * @param {unknown} schema - The untrusted JSON Schema.
+ * @param {boolean} [strictNested] - Whether every object below the root refuses an undeclared key.
  * @returns {ShapeOutcome} The shape, or the short reason the schema is refused.
  */
-export function jsonSchemaToZodShape(schema: unknown): ShapeOutcome {
+export function jsonSchemaToZodShape(schema: unknown, strictNested: boolean = false): ShapeOutcome {
    try {
       if (!isRecord(schema) || ownValue(schema, 'type') !== 'object') {
          throw new SchemaRefusal('the schema root must be an object schema');
       }
       // Run the whole-node checks once on the root, then take its property shape.
-      const state: ConvertState = { nodes: 0 };
+      const state: ConvertState = {
+         nodes: 0,
+         strictNested,
+      };
       const root: ZodType = convertNode(schema, 1, state);
       return {
          ok: true,
          shape: (root as z.ZodObject).shape,
+         strict: ownValue(schema, 'additionalProperties') === false,
       };
    } catch (cause) {
       if (cause instanceof SchemaRefusal) {
@@ -336,7 +369,8 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
       return validated;
    }
    // The normalized definition.
-   const { name, version, description, inputSchema, result, requires, mutates, gate } = validated.definition;
+   const { name, version, description, inputSchema, result, requires, mutates, gate, handleArgs, strictNested } =
+      validated.definition;
    if (requires === 'none') {
       return {
          ok: false,
@@ -349,12 +383,12 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
          reason: 'duplicate name in this registry',
       };
    }
-   const converted: ShapeOutcome = jsonSchemaToZodShape(inputSchema);
+   const converted: ShapeOutcome = jsonSchemaToZodShape(inputSchema, strictNested === true);
    if (!converted.ok) {
       return converted;
    }
    // The schema as the SDK lists it, which is what the client's context pays for.
-   const listedSchema: unknown = toJsonSchemaCompat(z.object(converted.shape), {
+   const listedSchema: unknown = toJsonSchemaCompat(argumentSchema(converted), {
       strictUnions: true,
       pipeStrategy: 'input',
    });
@@ -384,10 +418,12 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
          version,
          description,
          shape: converted.shape,
+         strict: converted.strict,
          budgetBytes: result.budgetBytes,
          requires,
          mutates,
          ...(requiredGate === undefined ? {} : { gate: requiredGate }),
+         handleArgs: handleArgs ?? [],
          signature: JSON.stringify([
             name,
             version,
@@ -397,8 +433,14 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
             requires,
             mutates,
             requiredGate ?? null,
+            handleArgs ?? [],
+            strictNested === true,
          ]),
-         schemaSignature: JSON.stringify(listedSchema),
+         schemaSignature: JSON.stringify([
+            listedSchema,
+            handleArgs ?? [],
+            strictNested === true,
+         ]),
       },
    };
 }

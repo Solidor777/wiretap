@@ -57,6 +57,22 @@ export function parseJson(text, label) {
 }
 
 /**
+ * Parse the JSON object text of one document.
+ * @param {string} text - The JSON object text.
+ * @param {string} label - What the text is called in an error, for example `data[1]`.
+ * @returns {Record<string, unknown>} The parsed data object.
+ * @throws {ScriptError} `ARGS_INVALID` when the text is not a JSON object.
+ */
+export function parseDataObject(text, label) {
+   /** @type {unknown} The parsed entry. */
+   const value = parseJson(text, label);
+   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new ScriptError('ARGS_INVALID', `${label} must be a JSON object.`);
+   }
+   return value;
+}
+
+/**
  * Parse the JSON object text of each document of a create call.
  * @param {string[]} texts - One JSON object text per document.
  * @returns {Record<string, unknown>[]} The parsed data objects, in argument order.
@@ -64,14 +80,7 @@ export function parseJson(text, label) {
  */
 export function parseDataObjects(texts) {
    checkDataBytes(texts);
-   return texts.map((text, index) => {
-      /** @type {unknown} The parsed entry. */
-      const value = parseJson(text, `data[${index}]`);
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-         throw new ScriptError('ARGS_INVALID', `data[${index}] must be a JSON object.`);
-      }
-      return value;
-   });
+   return texts.map((text, index) => parseDataObject(text, `data[${index}]`));
 }
 
 /**

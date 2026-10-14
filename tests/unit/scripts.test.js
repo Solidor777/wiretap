@@ -619,3 +619,73 @@ describe('parseRegistryPayload', () => {
       expect(outcome.reason).toContain('apiVersion');
    });
 });
+
+describe('validateScriptDefinition: handleArgs', () => {
+   /**
+    * A valid definition that takes a text and a list of texts.
+    * @param {unknown} handleArgs - The `handleArgs` to try.
+    * @returns {object} The definition.
+    */
+   function withHandleArgs(handleArgs) {
+      return {
+         name: 'mock_tool',
+         version: '1.0.0',
+         description: 'A synthetic tool.',
+         inputSchema: {
+            type: 'object',
+            properties: {
+               text: { type: 'string' },
+               count: { type: 'integer' },
+               texts: {
+                  type: 'array',
+                  maxItems: 5,
+                  items: { type: 'string' },
+               },
+               numbers: {
+                  type: 'array',
+                  maxItems: 5,
+                  items: { type: 'integer' },
+               },
+            },
+         },
+         result: { budgetBytes: 1000 },
+         requires: 'api',
+         mutates: false,
+         handleArgs,
+      };
+   }
+
+   it('keeps the names of text and text-list properties', () => {
+      const outcome = validateScriptDefinition(withHandleArgs([
+         'text',
+         'texts',
+      ]), 'shipped');
+      expect(outcome.ok, outcome.reason).toBe(true);
+      expect(outcome.definition.handleArgs).toEqual([
+         'text',
+         'texts',
+      ]);
+   });
+
+   it('leaves the field out when the definition has none', () => {
+      const outcome = validateScriptDefinition(withHandleArgs(undefined), 'shipped');
+      expect(outcome.ok).toBe(true);
+      expect(outcome.definition).not.toHaveProperty('handleArgs');
+   });
+
+   it.each([
+      ['not a list', 'text'],
+      ['an unknown property', ['nope']],
+      ['a number property', ['count']],
+      ['a list of numbers', ['numbers']],
+      ['a duplicate', ['text', 'text']],
+      ['a name that is not text', [1]],
+      ['more than four names', ['a', 'b', 'c', 'd', 'e']],
+      ['an empty list', []],
+      ['an inherited name', ['constructor']],
+   ])('refuses %s', (label, handleArgs) => {
+      const outcome = validateScriptDefinition(withHandleArgs(handleArgs), 'shipped');
+      expect(outcome.ok, label).toBe(false);
+      expect(outcome.reason).toMatch(/handleArgs/);
+   });
+});

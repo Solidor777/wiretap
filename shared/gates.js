@@ -22,6 +22,8 @@ import { GATE_DENIED } from './protocol.js';
  * @property {boolean} allowOwnershipWrites - Writes to the ownership of documents.
  * @property {boolean} allowCompendiumWrites - Writes to compendium packs and their documents.
  * @property {boolean} allowModuleConfigWrites - Writes to the module configuration setting.
+ * @property {boolean} allowDelete - Deleting documents (delete_documents and the deletes of a batch).
+ * @property {boolean} allowReplace - Replacing whole documents (replace_document).
  * @property {boolean} allowAgentScripts - Saving and running agent-saved scripts (arbitrary code).
  * @property {string[]} allowedPluginModules - Ids of the modules whose plugin skills and scripts are enabled.
  */
@@ -65,7 +67,7 @@ function entry(type, defaultValue, unlocks) {
 
 /**
  * The gate registry: the one definition of every gate name, type, default and unlock description. Every gate defaults
- * closed. There is deliberately no delete gate and no undo gate.
+ * closed. There is deliberately no undo gate.
  * @type {Readonly<Record<string, GateEntry>>}
  */
 export const GATES = Object.freeze({
@@ -76,6 +78,16 @@ export const GATES = Object.freeze({
    allowOwnershipWrites: entry('boolean', false, 'Changing the ownership of documents.'),
    allowCompendiumWrites: entry('boolean', false, 'Writing compendium packs and the documents inside them.'),
    allowModuleConfigWrites: entry('boolean', false, 'Writing the module configuration (enables and disables modules).'),
+   allowDelete: entry(
+      'boolean',
+      false,
+      'Deleting documents or removing embedded documents in any tool (not undoable).',
+   ),
+   allowReplace: entry(
+      'boolean',
+      false,
+      'Replacing documents or embedded collections; fields left out reset to defaults.',
+   ),
    allowAgentScripts: entry('boolean', false, 'Saving, disabling and running agent-saved scripts (arbitrary code).'),
    allowedPluginModules: entry(
       'moduleList',

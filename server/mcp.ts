@@ -25,7 +25,8 @@ import {
 import { describeCause } from './logText.ts';
 import { isMcpHostAllowed, isOriginAllowed } from './origins.ts';
 import { failureResult, withResultBudget, type ResultBudgetOptions, type ToolHandler } from './resultBudget.ts';
-import { type RegistryTool } from './toolRegistry.ts';
+import { resolveHandleArgs, type HandleInputOutcome } from './handleInput.ts';
+import { argumentSchema, type RegistryTool } from './toolRegistry.ts';
 
 /** The slice of the Foundry bridge the MCP layer needs. */
 interface FoundryBridge {
@@ -289,10 +290,35 @@ function makeRegistryToolHandler(
    enforcer: ResultBudgetOptions,
 ): ToolHandler<Record<string, unknown>> {
    return async (args, extra) => {
+      // The arguments sent to the client: those given, with the handle references of the tool's text arguments
+      // replaced by the stored texts. This runs before the call leaves the sidecar, so the client's gates, write guard
+      // and validation judge the resolved content like inline content.
+      let sent: Record<string, unknown> = args;
+      if (tool.handleArgs.length > 0) {
+         // The arguments with the references resolved, or the reason one cannot be.
+         const resolved: HandleInputOutcome = resolveHandleArgs(
+            enforcer.store,
+            enforcer.ownerKey,
+            args,
+            tool.handleArgs,
+         );
+         if (!resolved.ok) {
+            return {
+               content: [
+                  {
+                     type: 'text',
+                     text: `${resolved.error.code}: ${resolved.error.message}`,
+                  },
+               ],
+               isError: true,
+            };
+         }
+         sent = resolved.args;
+      }
       // The result and the picked endpoint's declaration of the tool.
       let outcome: Awaited<ReturnType<FoundryBridge['invokeTool']>>;
       try {
-         outcome = await bridge.invokeTool(tool.name, args, {
+         outcome = await bridge.invokeTool(tool.name, sent, {
             ...routeOptions(endpoint),
             listed: tool,
          });
@@ -690,7 +716,7 @@ export function startMcpServer(
                tool.name,
                {
                   description: tool.description,
-                  inputSchema: tool.shape,
+                  inputSchema: argumentSchema(tool),
                   // A script that does not mutate is read-only. `destructiveHint` is left to the protocol default
                   // (destructive) because nothing the client declares says a mutating script is not.
                   annotations: { readOnlyHint: !tool.mutates },

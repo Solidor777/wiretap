@@ -347,10 +347,12 @@ describe('resolvePath', () => {
          ],
       };
       expect(run(doc, 'items.0._id')).toEqual(NOT_FOUND);
-      expect(run({ items: [
-         { _id: '0' },
-         { _id: 'b' },
-      ] }, 'items.0._id')).toEqual(found('0'));
+      expect(run({
+         items: [
+            { _id: '0' },
+            { _id: 'b' },
+         ]
+      }, 'items.0._id')).toEqual(found('0'));
    });
 
    it('reads an own _id only: an inherited _id does not name an element', () => {
@@ -1163,9 +1165,7 @@ describe('groupWrites', () => {
          const nested = {
             a: [
                1,
-               {
-                  b: withOwnKey('__proto__', 1),
-               },
+               { b: withOwnKey('__proto__', 1) },
             ],
          };
          const result = groupWrites([{

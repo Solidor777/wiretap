@@ -16,23 +16,7 @@ import {
    BRIDGE_REGISTRY,
    PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
-
-/**
- * Reserve a free loopback TCP port by listening on port 0 and releasing it.
- * @returns {Promise<number>} A port that was free at probe time.
- */
-function freePort() {
-   return new Promise((resolve, reject) => {
-      /** @type {import('node:net').Server} A throwaway server used to reserve a port. */
-      const probe = net.createServer();
-      probe.once('error', reject);
-      probe.listen(0, '127.0.0.1', () => {
-         /** @type {number} The port the OS assigned. */
-         const { port } = probe.address();
-         probe.close(() => resolve(port));
-      });
-   });
-}
+import { reservePort } from '../portPool.js';
 
 /**
  * Connect a socket.io client to the sidecar and wait for the connection.
@@ -133,13 +117,13 @@ describe('createWiretapServer loopback binding', () => {
    });
 
    it('binds the Socket.IO server to 127.0.0.1 only', async () => {
-      server = createWiretapServer(0, await freePort(), 'mcp-only');
+      server = createWiretapServer(0, await reservePort(), 'mcp-only');
       await server.ready;
       expect(server.io.httpServer.address()).toMatchObject({ address: '127.0.0.1', family: 'IPv4' });
    });
 
    it('accepts a loopback connection and a socket.io client connects', async () => {
-      server = createWiretapServer(0, await freePort(), 'mcp-only');
+      server = createWiretapServer(0, await reservePort(), 'mcp-only');
       await server.ready;
       /** @type {number} The Socket.IO port assigned to the server. */
       const port = server.io.httpServer.address().port;
@@ -149,7 +133,7 @@ describe('createWiretapServer loopback binding', () => {
    });
 
    it('dispose closes the underlying HTTP server', async () => {
-      server = createWiretapServer(0, await freePort(), 'mcp-only');
+      server = createWiretapServer(0, await reservePort(), 'mcp-only');
       await server.ready;
       /** @type {import('node:http').Server} The HTTP server Socket.IO is attached to. */
       const httpServer = server.io.httpServer;
@@ -168,7 +152,7 @@ describe('createWiretapServer loopback binding', () => {
          context.skip();
          return;
       }
-      server = createWiretapServer(0, await freePort(), 'mcp-only');
+      server = createWiretapServer(0, await reservePort(), 'mcp-only');
       await server.ready;
       /** @type {number} The Socket.IO port assigned to the server. */
       const port = server.io.httpServer.address().port;
@@ -200,7 +184,7 @@ describe('createWiretapServer modes', () => {
    });
 
    it('full mode handles terminal launch and streams a command to exit', async () => {
-      server = createWiretapServer(0, await freePort(), 'full');
+      server = createWiretapServer(0, await reservePort(), 'full');
       await server.ready;
       client = await connect(server.io.httpServer.address().port);
       /** @type {Promise<{ code: number }>} Resolves with the terminal exit payload. */
@@ -210,7 +194,7 @@ describe('createWiretapServer modes', () => {
    });
 
    it('defaults to full mode', async () => {
-      server = createWiretapServer(0, await freePort());
+      server = createWiretapServer(0, await reservePort());
       await server.ready;
       /** @type {object[]} Terminal state payloads received. */
       const states = [];
@@ -221,7 +205,7 @@ describe('createWiretapServer modes', () => {
 
    it('mcp-only mode ignores terminal events and never reports terminal state', async () => {
       /** @type {number} The MCP port under test. */
-      const mcpPort = await freePort();
+      const mcpPort = await reservePort();
       server = createWiretapServer(0, mcpPort, 'mcp-only');
       await server.ready;
       /** @type {string[]} Terminal events that reached the client. */
@@ -244,7 +228,7 @@ describe('createWiretapServer modes', () => {
 
    it('mcp-only mode still routes an MCP tool call through the bridge to an identified GM', async () => {
       /** @type {number} The MCP port under test. */
-      const mcpPort = await freePort();
+      const mcpPort = await reservePort();
       server = createWiretapServer(0, mcpPort, 'mcp-only');
       await server.ready;
       client = await connect(server.io.httpServer.address().port);
@@ -263,7 +247,7 @@ describe('createWiretapServer modes', () => {
 
    it('mcp-only dispose releases the MCP port and the socket port', async () => {
       /** @type {number} The MCP port under test. */
-      const mcpPort = await freePort();
+      const mcpPort = await reservePort();
       server = createWiretapServer(0, mcpPort, 'mcp-only');
       await server.ready;
       /** @type {number} The Socket.IO port assigned to the server. */

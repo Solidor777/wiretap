@@ -67,6 +67,15 @@ describe('sanitizeRegistry: accepted tools', () => {
       expect(lines).toEqual([]);
    });
 
+   it('keeps handleArgs, and a tool that names a handle argument differs in both signatures', () => {
+      const plain = run([entry()]).outcome.tools[0];
+      const withHandle = run([entry({ handleArgs: ['text'] })]).outcome.tools[0];
+      expect(plain.handleArgs).toEqual([]);
+      expect(withHandle.handleArgs).toEqual(['text']);
+      expect(withHandle.signature).not.toBe(plain.signature);
+      expect(withHandle.schemaSignature).not.toBe(plain.schemaSignature);
+   });
+
    it('does not reserve create_documents: it is a script like any other', () => {
       expect(run([entry({ name: 'create_documents' })]).outcome.tools.map((tool) => tool.name)).toEqual([
          'create_documents',
@@ -577,6 +586,7 @@ describe('jsonSchemaToZodShape: supported constructs', () => {
       expect(jsonSchemaToZodShape({ type: 'object' })).toEqual({
          ok: true,
          shape: {},
+         strict: false,
       });
    });
 

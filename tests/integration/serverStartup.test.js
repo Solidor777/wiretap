@@ -4,6 +4,7 @@ import net from 'node:net';
 import { createWiretapServer } from '../../server/server.ts';
 import { startMcpServer } from '../../server/mcp.ts';
 import { awaitStartup } from '../../server/shutdown.ts';
+import { reservePort } from '../portPool.js';
 
 /**
  * Build a bridge that has no endpoint: no tools, no changes and an invoke that resolves to nothing.
@@ -35,19 +36,6 @@ function occupyPort() {
       holder.once('error', reject);
       holder.listen(0, '127.0.0.1', () => resolve(holder.address().port));
    });
-}
-
-/**
- * Reserve a free loopback TCP port by listening on port 0 and releasing it.
- * @returns {Promise<number>} A port that was free at probe time.
- */
-async function freePort() {
-   /** @type {number} A port held only for the duration of the probe. */
-   const port = await occupyPort();
-   /** @type {import('node:net').Server} The probe server. */
-   const probe = occupiers.pop();
-   await new Promise((resolve) => probe.close(resolve));
-   return port;
 }
 
 /**
@@ -84,7 +72,7 @@ afterEach(async () => {
 describe('startMcpServer ready', () => {
    it('resolves once the port is bound', async () => {
       /** @type {{ close: () => void, ready: Promise<void> }} The started MCP server. */
-      const mcp = startMcpServer(idleBridge(), await freePort());
+      const mcp = startMcpServer(idleBridge(), await reservePort());
       servers.push({ dispose: mcp.close });
       await expect(mcp.ready).resolves.toBeUndefined();
    });
@@ -107,7 +95,7 @@ describe('createWiretapServer ready', () => {
 
    it('rejects when the Socket.IO port is occupied', async () => {
       /** @type {{ ready: Promise<void>, dispose: () => void }} The server whose Socket.IO port is taken. */
-      const server = createWiretapServer(await occupyPort(), await freePort(), 'mcp-only');
+      const server = createWiretapServer(await occupyPort(), await reservePort(), 'mcp-only');
       servers.push(server);
       await expect(server.ready).rejects.toMatchObject({ code: 'EADDRINUSE' });
    });
@@ -166,7 +154,7 @@ describe('awaitStartup', () => {
    it('with a real occupied port: exits 1 and releases the other (MCP) port', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
       /** @type {number} The free MCP port that the failed server binds before disposing. */
-      const mcpPort = await freePort();
+      const mcpPort = await reservePort();
       /** @type {{ ready: Promise<void>, dispose: () => void }} The server whose Socket.IO port is taken. */
       const server = createWiretapServer(await occupyPort(), mcpPort, 'mcp-only');
       /** @type {import('vitest').Mock} The exit function. */

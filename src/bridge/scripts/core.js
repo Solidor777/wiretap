@@ -9,6 +9,8 @@ import { exportDocument, resolveDocument } from '~/bridge/scripts/canonical.js';
 import { describeSchema } from '~/bridge/scripts/schemaDescribe.js';
 import { searchDocuments } from '~/bridge/scripts/search.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
+import { batchDocuments } from '~/bridge/scripts/writeBatch.js';
+import { replaceDocument } from '~/bridge/scripts/writeReplace.js';
 import { createDocuments, deleteDocuments, updateDocuments } from '~/bridge/scripts/writes.js';
 
 /**
@@ -103,4 +105,6 @@ export const scriptCore = Object.freeze({
    createDocuments,
    updateDocuments,
    deleteDocuments,
+   replaceDocument,
+   batchDocuments,
 });

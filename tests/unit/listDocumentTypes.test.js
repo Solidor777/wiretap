@@ -59,11 +59,14 @@ describe('list_document_types definition', () => {
       expect(description.length).toBeLessThanOrEqual(getBudget('DESCRIPTION_TARGET_CHARS').value);
    });
 
-   it('accepts no argument', async () => {
-      await expect(callTool({
-         name: 'list_document_types',
-         arguments: { extra: 1 },
-      })).resolves.toBeTypeOf('object');
+   it('accepts no argument and refuses one', async () => {
+      await expect(callTool({ name: 'list_document_types' })).resolves.toBeTypeOf('object');
+      await expect(
+         callTool({
+            name: 'list_document_types',
+            arguments: { extra: 1 },
+         }),
+      ).rejects.toMatchObject({ code: 'ARGS_INVALID' });
    });
 });
 

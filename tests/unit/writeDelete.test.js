@@ -49,7 +49,10 @@ beforeEach(() => {
       users: USERS,
       userId: 'MOCKGM0000000001',
    });
-   gates = {};
+   gates = {
+      allowDelete: true,
+      allowReplace: true,
+   };
    globalThis.game.settings.get = (module, key) => gates[key];
    actor = world.add('Actor', {
       name: 'MOCK_actor',

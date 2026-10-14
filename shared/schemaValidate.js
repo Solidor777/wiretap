@@ -12,8 +12,9 @@
  * 100,000, an array must declare `maxItems` of at most `SCHEMA_ARRAY_ITEMS_MAX` (a budget), property names of
  * `[A-Za-z_][A-Za-z0-9_]{0,63}` that are not `Object.prototype` members. The sidecar imports these limits from here.
  *
- * Semantics follow zod's default object handling: an undeclared property is dropped from the validated copy (never an
- * error), a property absent or `undefined` is allowed unless listed in `required`, and `null` is a value of no type.
+ * Semantics follow zod's object handling: an undeclared property is dropped from the validated copy when the object
+ * does not declare `additionalProperties: false` (never an error), and is an error when it does (zod's `strict`). A
+ * property absent or `undefined` is allowed unless listed in `required`, and `null` is a value of no type.
  * `tests/unit/schemaValidate.test.js` holds the fixtures that both implementations must judge alike; a drift fails it.
  *
  * Value bound: a validation visits at most `VALUE_NODES_MAX` values, so an enormous array costs bounded work.
@@ -323,7 +324,7 @@ function compileNumber(node, integer) {
  * Compile an array node.
  * @param {Record<string, unknown>} node - The JSON Schema node to compile.
  * @param {number} depth - The nesting level of this node.
- * @param {{ nodes: number }} counter - The schema node counter.
+ * @param {{ nodes: number, strictNested?: boolean }} counter - The schema node counter and compile options.
  * @returns {CompiledNode} The compiled node.
  * @throws {SchemaRefusal} When the node uses a construct outside the supported subset.
  */
@@ -381,7 +382,7 @@ function compileArray(node, depth, counter) {
  * Compile an object node.
  * @param {Record<string, unknown>} node - The JSON Schema node to compile.
  * @param {number} depth - The nesting level of this node.
- * @param {{ nodes: number }} counter - The schema node counter.
+ * @param {{ nodes: number, strictNested?: boolean }} counter - The schema node counter and compile options.
  * @returns {CompiledNode} The compiled node.
  * @throws {SchemaRefusal} When the node uses a construct outside the supported subset.
  */
@@ -391,6 +392,8 @@ function compileObject(node, depth, counter) {
    if (additional !== undefined && additional !== false) {
       throw new SchemaRefusal('additionalProperties may only be false');
    }
+   /** @type {boolean} Whether an undeclared key is refused: declared, or any nested object when requested. */
+   const strict = additional === false || (counter.strictNested === true && depth > 1);
    /** @type {unknown} The declared properties; none when the schema declares no `properties`. */
    const properties = ownValue(node, 'properties') ?? {};
    if (!isRecord(properties)) {
@@ -427,6 +430,9 @@ function compileObject(node, depth, counter) {
       if (!isRecord(value)) {
          return problem(path || 'arguments', 'expected an object');
       }
+      if (strict && Object.keys(value).some((key) => !names.includes(key))) {
+         return problem(path || 'arguments', 'has a property that is not an argument');
+      }
       /** @type {Record<string, unknown>} The cleaned copy: declared properties only. */
       const cleaned = {};
       for (const field of fields) {
@@ -459,7 +465,7 @@ function compileObject(node, depth, counter) {
  * Compile one schema node; throws a SchemaRefusal for anything outside the supported subset.
  * @param {unknown} node - The JSON Schema node.
  * @param {number} depth - The nesting level of this node (the root object is 1).
- * @param {{ nodes: number }} counter - The schema node counter.
+ * @param {{ nodes: number, strictNested?: boolean }} counter - The schema node counter and compile options.
  * @returns {CompiledNode} The compiled node.
  * @throws {SchemaRefusal} When the node uses a construct outside the supported subset.
  */
@@ -585,6 +591,9 @@ function listedNode(node) {
          if (required.length > 0) {
             listed.required = required;
          }
+         if (ownValue(node, 'additionalProperties') === false) {
+            listed.additionalProperties = false;
+         }
          break;
       }
       default:
@@ -599,15 +608,20 @@ function listedNode(node) {
  * pays for): the client checks the size of that form, not of the raw schema, so it refuses what the sidecar refuses.
  * `tests/unit/schemaValidate.test.js` asserts `listed` equals the sidecar's listing for the parity fixtures.
  * @param {unknown} schema - The JSON Schema of the arguments.
+ * @param {{ strictNested?: boolean }} [options] - `strictNested`: every object below the root refuses an undeclared
+ * key, though the listed form does not say so (it would take definition budget).
  * @returns {CompileOutcome} The validator and listed form, or the short reason the schema is refused. Never throws.
  */
-export function compileSchema(schema) {
+export function compileSchema(schema, options = {}) {
    try {
       if (!isRecord(schema) || ownValue(schema, 'type') !== 'object') {
          throw new SchemaRefusal('the schema root must be an object schema');
       }
       /** @type {CompiledNode} The compiled root. */
-      const root = compileNode(schema, 1, { nodes: 0 });
+      const root = compileNode(schema, 1, {
+         nodes: 0,
+         strictNested: options.strictNested === true,
+      });
       return {
          ok: true,
          listed: {

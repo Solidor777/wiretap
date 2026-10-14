@@ -152,20 +152,21 @@ describe('scripts registered over the bridge', () => {
          expect(gm.invokes).toEqual([]);
       });
 
-      it('strips an argument the schema does not declare before sending', async () => {
+      it('refuses an argument the schema does not declare, before sending', async () => {
          harness = createHarness();
          await harness.start();
          const gm = await harness.connectGm();
          await gm.register([createDocumentsScript()]);
          const { client } = await harness.connectClient();
-         await client.callTool({
+         const refused = await client.callTool({
             name: 'create_documents',
             arguments: {
                ...createDocumentsArgs('MOCK_ACTOR'),
                extra: 'x',
             },
          });
-         expect(gm.invokes[0].params.arguments).toEqual(createDocumentsArgs('MOCK_ACTOR'));
+         expect(refused.isError).toBe(true);
+         expect(gm.invokes).toEqual([]);
       });
    });
 

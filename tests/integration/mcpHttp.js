@@ -6,6 +6,7 @@
 
 import http from 'node:http';
 import net from 'node:net';
+import { reservePort } from '../portPool.js';
 
 /** @type {Map<number, string>} The session id opened for each MCP port. */
 const SESSIONS = new Map();
@@ -113,23 +114,6 @@ export async function callCreateDocuments(mcpPort) {
       },
    });
    return response.result;
-}
-
-/**
- * Reserve a free loopback TCP port by listening on port 0 and releasing it.
- * @returns {Promise<number>} A port that was free at probe time.
- */
-export function freePort() {
-   return new Promise((resolve, reject) => {
-      /** @type {import('node:net').Server} A throwaway server used to reserve a port. */
-      const probe = net.createServer();
-      probe.once('error', reject);
-      probe.listen(0, '127.0.0.1', () => {
-         /** @type {number} The port the OS assigned. */
-         const { port } = probe.address();
-         probe.close(() => resolve(port));
-      });
-   });
 }
 
 /**

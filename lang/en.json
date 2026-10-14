@@ -66,6 +66,14 @@
                "Name": "Risk gate: write module configuration",
                "Hint": "Lets agents write the module configuration, which enables and disables modules."
             },
+            "AllowDelete": {
+               "Name": "Risk gate: delete documents",
+               "Hint": "Lets agents delete documents, with their embedded documents, through delete_documents and the deletes of a batch. It is also needed to remove embedded documents any other way: an update that removes an embedded collection or document, and a replace_document whose data leaves out embedded documents that exist (that replace also needs the replace gate). A deletion cannot be undone. Previews (dry runs) work without this gate."
+            },
+            "AllowReplace": {
+               "Name": "Risk gate: replace documents",
+               "Hint": "Lets agents replace whole documents through replace_document, and replace an embedded collection in an update. Fields the new data leaves out reset to their defaults. Embedded documents it leaves out are deleted, which also needs the delete gate. Previews (dry runs) work without this gate."
+            },
             "AllowAgentScripts": {
                "Name": "Risk gate: agent scripts",
                "Hint": "Lets agents save, disable and run scripts. A script is arbitrary code with GM authority and can call game.settings.set, so enabling this lets an agent change any gate; only enable it for agents you trust."

@@ -25,11 +25,13 @@ const BOOLEAN_GATES = [
    'allowOwnershipWrites',
    'allowCompendiumWrites',
    'allowModuleConfigWrites',
+   'allowDelete',
+   'allowReplace',
    'allowAgentScripts',
 ];
 
 describe('GATES registry', () => {
-   it('holds exactly the eight boolean gates and the plugin module list', () => {
+   it('holds exactly the ten boolean gates and the plugin module list', () => {
       expect(Object.keys(GATES).sort()).toEqual([...BOOLEAN_GATES, 'allowedPluginModules'].sort());
    });
 
@@ -58,8 +60,9 @@ describe('GATES registry', () => {
       expect(Object.isFrozen(GATES.allowedPluginModules.default)).toBe(true);
    });
 
-   it('has no gate for delete or undo', () => {
-      expect(GATES).not.toHaveProperty('allowDelete');
+   it('has a gate for delete and replace and none for undo', () => {
+      expect(GATES).toHaveProperty('allowDelete');
+      expect(GATES).toHaveProperty('allowReplace');
       expect(GATES).not.toHaveProperty('allowUndo');
    });
 });
@@ -75,6 +78,8 @@ describe('closedGateState', () => {
          allowOwnershipWrites: false,
          allowCompendiumWrites: false,
          allowModuleConfigWrites: false,
+         allowDelete: false,
+         allowReplace: false,
          allowAgentScripts: false,
          allowedPluginModules: [],
       });

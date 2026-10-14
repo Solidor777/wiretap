@@ -34,6 +34,11 @@
  * `gate`: optional risk gate (a name in `GATES`) that must be open on the executing endpoint.
  * `allowedPluginModules` is not a script gate.
  *
+ * `handleArgs`: optional list of 1 to 4 argument names (`HANDLE_ARGS_MAX`) whose text, or whose list of texts, may be
+ * given as a reference to a stored result (`handle:<id>`) instead of inline. The sidecar replaces the reference with
+ * the text the session's handle holds before it sends the call to the client (`server/handleInput.ts`). Each name must
+ * be a declared argument of type `string`, or an array of `string`. It is not part of the listed definition.
+ *
  * `moduleId`: the owning module id of a plugin script (required for that source, refused for the others).
  *
  * The total of `{name, description, inputSchema}` serialized is held to `DEFINITION_MAX_BYTES`.
@@ -65,6 +70,9 @@ import { CONTROL_PATTERN } from './logText.js';
  * @property {ScriptRequires} requires - Where the script runs.
  * @property {boolean} mutates - Whether the script changes the world.
  * @property {string} [gate] - A risk gate (a name in `GATES`) that must be open on the executing endpoint.
+ * @property {string[]} [handleArgs] - Names of the text arguments that may be given as a handle reference.
+ * @property {true} [strictNested] - Every object below the root refuses an undeclared key (not listed, so it costs no
+ * definition budget).
  * @property {string} [moduleId] - The owning module id of a plugin script.
  */
 
@@ -79,6 +87,12 @@ import { CONTROL_PATTERN } from './logText.js';
  * | { ok: false, reason: string }} ScriptOutcome
  * The validator's result: a fresh normalized definition and any warnings, or the reason for the refusal.
  */
+
+/**
+ * The most argument names a definition may list in `handleArgs`.
+ * @type {number}
+ */
+export const HANDLE_ARGS_MAX = 4;
 
 /**
  * The version of the registry payload and script definition contract; a payload with another value is refused.
@@ -211,6 +225,41 @@ function nameProblem(name, source, moduleId) {
 }
 
 /**
+ * Check the `handleArgs` of a definition against its argument schema.
+ * @param {unknown} handleArgs - The untrusted list.
+ * @param {Record<string, unknown>} inputSchema - The argument schema.
+ * @returns {string | null} The reason the list is refused, or null when it is acceptable.
+ */
+function handleArgsProblem(handleArgs, inputSchema) {
+   if (!Array.isArray(handleArgs) || handleArgs.length < 1 || handleArgs.length > HANDLE_ARGS_MAX) {
+      return `handleArgs must list 1 to ${HANDLE_ARGS_MAX} argument names`;
+   }
+   /** @type {unknown} The declared properties. */
+   const properties = ownValue(inputSchema, 'properties');
+   for (const [index, name] of handleArgs.entries()) {
+      if (typeof name !== 'string' || handleArgs.indexOf(name) !== index) {
+         return 'handleArgs must list each argument name once, as text';
+      }
+      /** @type {unknown} The declared schema of that argument. */
+      const declared = isRecord(properties) ? ownValue(properties, name) : undefined;
+      if (!isRecord(declared)) {
+         return 'handleArgs may only name a declared argument';
+      }
+      /** @type {unknown} The items of a list argument. */
+      const items = ownValue(declared, 'items');
+      if (
+         !(
+            ownValue(declared, 'type') === 'string' ||
+            (ownValue(declared, 'type') === 'array' && isRecord(items) && ownValue(items, 'type') === 'string')
+         )
+      ) {
+         return 'handleArgs may only name a text argument or a list of texts';
+      }
+   }
+   return null;
+}
+
+/**
  * Measure a tool definition as it is listed: UTF-8 bytes of `{name, description, inputSchema}`.
  * @param {string} name - The tool name.
  * @param {string} description - The one-line text the client lists.
@@ -263,6 +312,10 @@ export function validateScriptDefinition(input, source) {
       const gate = ownValue(input, 'gate');
       /** @type {unknown} The untrusted module id. */
       const moduleId = ownValue(input, 'moduleId');
+      /** @type {unknown} The untrusted list of arguments that may carry a handle. */
+      const handleArgs = ownValue(input, 'handleArgs');
+      /** @type {unknown} The untrusted nested-strictness flag. */
+      const strictNested = ownValue(input, 'strictNested');
       if (source === 'plugin' && !isModuleId(moduleId)) {
          return refuse('moduleId must be a module id for a plugin script');
       }
@@ -319,6 +372,14 @@ export function validateScriptDefinition(input, source) {
       if (typeof mutates !== 'boolean') {
          return refuse('mutates must be declared as true or false');
       }
+      /** @type {string | null} The reason `handleArgs` is refused, if it is. */
+      const badHandleArgs = handleArgs === undefined ? null : handleArgsProblem(handleArgs, inputSchema);
+      if (badHandleArgs !== null) {
+         return refuse(badHandleArgs);
+      }
+      if (strictNested !== undefined && strictNested !== true) {
+         return refuse('strictNested may only be true');
+      }
       if (
          gate !== undefined &&
          (typeof gate !== 'string' || !Object.hasOwn(GATES, gate) || gate === 'allowedPluginModules')
@@ -357,6 +418,8 @@ export function validateScriptDefinition(input, source) {
          requires,
          mutates,
          ...(gate === undefined ? {} : { gate }),
+         ...(handleArgs === undefined ? {} : { handleArgs: [...handleArgs] }),
+         ...(strictNested === undefined ? {} : { strictNested: true }),
       };
       return {
          ok: true,

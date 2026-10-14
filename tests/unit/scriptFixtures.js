@@ -5,11 +5,13 @@
 import { compileSchema } from '../../shared/schemaValidate.js';
 import { SCRIPT_API_VERSION, definitionBytes } from '../../shared/scripts.js';
 import {
+   batchDefinition,
    createDocumentsDefinition,
    deleteDocumentsDefinition,
    describeSchemaDefinition,
    getDocumentDefinition,
    listDocumentTypesDefinition,
+   replaceDocumentDefinition,
    searchDocumentsDefinition,
    updateDocumentsDefinition,
 } from '../../src/bridge/scripts/definitions.js';
@@ -87,6 +89,8 @@ export function shippedScripts() {
       createDocumentsDefinition,
       updateDocumentsDefinition,
       deleteDocumentsDefinition,
+      replaceDocumentDefinition,
+      batchDefinition,
    ].map((definition) => structuredClone(definition));
 }
 
