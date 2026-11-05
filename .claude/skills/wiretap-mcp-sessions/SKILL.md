@@ -150,7 +150,7 @@ declared gate that differs from the listed tool's → `GATE_DENIED` without send
 endpoint's snapshot; the result budget is the picked endpoint's `budgetBytes` (a different description or budget does not
 fail the call). A `requires: 'dom'` script is routed to a `dom: true` endpoint of the `agent` kind (or of the session's
 `?endpoint=` kind) only; see `wiretap-mcp-bridge`. The SDK validates the arguments against the listed shape (zod from the JSON Schema)
-before the handler runs, so a bad call never reaches the client, and strips undeclared arguments; the listed shape equals the picked
+before the handler runs, so a bad call never reaches the client, and refuses undeclared arguments when the definition has `additionalProperties: false` (`argumentSchema` in `server/toolRegistry.ts` builds the strict zod object; `handleArgs` and `strictNested` are part of `schemaSignature` but not of the listed schema; a `strictNested` tool's nested zod objects are strict with the JSON `additionalProperties` key overridden to `undefined`); the listed shape equals the picked
 endpoint's schema once the signatures match. The client's `callTool` handler validates the arguments again against its own declared schema (`shared/schemaValidate.js`). The result is shown
 as text (a string as is, anything else as JSON) behind the result enforcer. The production client registers its shipped scripts
 and sends its registry after every acknowledged identify and on each registry change (`wiretap-scripts`).
@@ -174,4 +174,5 @@ and sends its registry after every acknowledged identify and on each registry ch
   handle for an ended session, endpoint binding (rogue gate, other schema, picked budget, `TOOL_GONE`, pinned session
   whose endpoint dropped).
   A test that fakes timers must fake them after connecting the Socket.IO client.
-- `tests/integration/mcpHttp.js`: `INITIALIZE`, `freePort`, `raw` and a one-session-per-port raw helper.
+- `tests/integration/mcpHttp.js`: `INITIALIZE`, `raw` and a one-session-per-port raw helper; ports come from
+  `reservePort` of `tests/portPool.js` (see `wiretap-build-test`).

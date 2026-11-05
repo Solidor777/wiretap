@@ -34,8 +34,17 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 ## Rules
 
+- Tests that start a server on a port take it from `reservePort()` of `tests/portPool.js`, never from the OS: a port
+  reserved by listening on port 0 and releasing it comes from the dynamic range that outbound client sockets share
+  (Windows 49152 to 65535), and another worker's connection could take it before the real bind (`EADDRINUSE`, MEASURED
+  under four concurrent vitest runs). The pool is 32000 to 48999, one 300-port slice per vitest worker
+  (`VITEST_POOL_ID`), each candidate bound-checked; `tests/unit/portPool.test.js` fails when a port leaves the pool or
+  repeats. Direct `net.createServer().listen(0)` stays only where the test holds the port (`occupyPort`, `SuperviseServer`).
 - No e2e wait inside a loaded page longer than 1000 ms (`expect.poll`, `waitForFunction`, `toPass`, explicit
   `timeout:`). A longer wait is a defect to fix. World boot, login, reload, build and per-test limits are exempt.
+- `tests/e2e/writeTools.spec.js` covers the write tools on throwaway `Wiretap E2E ` documents: it opens gates only through its
+  `openGate` helper (restored in `afterEach`), registers page hooks (`preUpdateActor`, `preDeleteActor`) and removes them
+  in `finally`, and records every created document on the running list. See `wiretap-writes` for what each test asserts.
 - e2e needs Foundry on `:30000` with the module enabled and a GM user (see `tests/e2e/users.js`). Playwright's
   `webServer.command` is `node scripts/e2e-foundry-server.mjs` (`reuseExistingServer: true`, 120 s): if nothing
   answers on the port it runs `node main.js --dataPath=<userdata> --world=<world>` from the Foundry app dir, otherwise

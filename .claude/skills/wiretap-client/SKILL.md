@@ -9,7 +9,7 @@ paths:
 # Wiretap client (`src/`)
 
 Current-state reference; verify against code before relying on a detail. Core context: `wiretap-codebase-core`.
-For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelte` skills.
+For Svelte/Foundry syntax defer to the `web-ui:svelte-5`, `foundry-vtt:foundry-vtt`, `foundry-vtt:foundry-svelte` skills.
 
 ## Entry and lifecycle
 
@@ -54,8 +54,8 @@ For Svelte/Foundry syntax defer to the `svelte-5`, `foundry-vtt`, `foundry-svelt
 | `components/terminalFontSize.svelte.js` | `terminalFontSize` rune state; `FONT_SIZE_MIN 8`, `MAX 32`, `STEP 2`, `DEFAULT 16`; `clampFontSize` |
 | `bridge/TerminalConnection.svelte.js` | `TerminalConnection` class + `connection` singleton: Socket.IO client to the sidecar, terminal events, `onSocket` hook for sharing the socket |
 | `bridge/popoutState.svelte.js` | `popoutState` rune state `{ open }` |
-| `settings/gates.js` | `registerGateSettings()`: one world-scope, `restricted`, `config: true`, default-closed setting per `GATES` entry of `shared/gates.js` (iterated, no second list); a `boolean` gate is a Boolean, `allowedPluginModules` a String of comma-separated module ids (default `''`; Foundry has no list-of-strings setting editor). `gateLangKey(name, 'Name' \| 'Hint')` derives the `lang/en.json` key `WIRETAP.Settings.Gates.<Name with first letter upper-cased>.<Name\|Hint>`; the hints of `allowMacroExecution`, `allowAgentScripts` and `allowedPluginModules` state the arbitrary-code caveat |
-| `bridge/scripts/**` | The client script runtime: registry, `callTool` dispatcher, `ctx`, the shipped scripts `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents` and `delete_documents`, the canonical document export (see `wiretap-scripts`) |
+| `settings/gates.js` | `registerGateSettings()`: one world-scope, `restricted`, `config: true`, default-closed setting per `GATES` entry of `shared/gates.js` (iterated, no second list); a `boolean` gate is a Boolean, `allowedPluginModules` a String of comma-separated module ids (default `''`; Foundry has no list-of-strings setting editor). `gateLangKey(name, 'Name' \| 'Hint')` derives the `lang/en.json` key `WIRETAP.Settings.Gates.<Name with first letter upper-cased>.<Name\|Hint>`; the hints of `allowMacroExecution`, `allowAgentScripts` and `allowedPluginModules` state the arbitrary-code caveat; `allowDelete` and `allowReplace` (default closed, enforced by `guardWrite`, previews exempt) have their own hints, as every `GATES` entry must |
+| `bridge/scripts/**` | The client script runtime: registry, `callTool` dispatcher, `ctx`, the shipped scripts `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document` and `batch`, the canonical document export (see `wiretap-scripts`) |
 | `bridge/gates.js` | `readGateState()` (reads `game.settings` for every gate, a throwing read leaves the gate out, parses the module string, returns `sanitizeGateState(raw)`), `requireGate(name, moduleId?)` (`gateDenial(readGateState(), name, moduleId)`: reads this client's settings at call time, params never carry a gate value) and `gateNameFromSettingKey(key)` (gate name for a `wiretap.<gate>` key, else null) |
 | `test-probe/registerProbe.js` | e2e-only probe (must never ship in the production build); `_probe.scripts.registerE2e()` registers the e2e-only `e2e_gated` script |
 

@@ -12,10 +12,6 @@ paths:
   - "tests/unit/scriptShape.test.js"
   - "tests/unit/scriptCore.test.js"
   - "tests/unit/callTool.test.js"
-  - "tests/unit/write*.test.js"
-  - "tests/unit/mockWriteWorld.js"
-  - "tests/e2e/writeTools.spec.js"
-  - "tests/e2e/writeHelpers.js"
   - "tests/unit/canonical.test.js"
   - "tests/unit/getDocument.test.js"
   - "tests/unit/listDocumentTypes.test.js"
@@ -62,13 +58,13 @@ client-only, never on the wire). Every MCP tool except the sidecar's `read_handl
 | `search.js` | `searchDocuments(params, signal)`: candidates, canonical exclusions, filters, ordering, cursor, page bound, work caps; `FILTERS_MAX` |
 | `schemaWalk.js` | The field walker: `createWalkState`, `describeField`, `outlineFields`, `stepInto`; `SCHEMA_DEPTH_MAX` (3), `SCHEMA_NODES_MAX` (150), `OUTLINE_MAX` (80) |
 | `schemaDescribe.js` | `describeSchema(params, log)`: blank example, outlines, path subtree, size bound |
-| `definitions.js` | `listDocumentTypesDefinition`, `getDocumentDefinition`, `searchDocumentsDefinition`, `describeSchemaDefinition`, `createDocumentsDefinition`, `updateDocumentsDefinition`, `deleteDocumentsDefinition`; relative imports only, so the `tsx`-run measurement can load them through `tests/unit/scriptFixtures.js` |
-| `writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments`, `DELETE_PREVIEW_ROWS_MAX`: the write operations behind `ctx.core` |
-| `writeGuard.js` | `guardWrite(intent)`, `scanWriteValues`: the one choke point for the password rule, the `wiretap.*` deny and the category gates |
+| `definitions.js` | `listDocumentTypesDefinition`, `getDocumentDefinition`, `searchDocumentsDefinition`, `describeSchemaDefinition`, `createDocumentsDefinition`, `updateDocumentsDefinition`, `deleteDocumentsDefinition`, `replaceDocumentDefinition`, `batchDefinition`; relative imports only, so the `tsx`-run measurement can load them through `tests/unit/scriptFixtures.js` |
+| `writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments`, the planners `prepareCreate` / `prepareUpdates` / `prepareDeletes`, `DELETE_PREVIEW_ROWS_MAX`: the write operations behind `ctx.core` (phase B files `writeReplace.js`, `writeBatch.js`, `writeBatchSettle.js`, `writeActAs.js`, `writeIdempotency.js`, `replaceDocument.js`, `batch.js`: see `wiretap-writes`) |
+| `writeGuard.js`, `writeFields.js` | The write guard: see `wiretap-write-guard` |
 | `writeArgs.js`, `writeAck.js` | Argument helpers (`shapeRefusal`, `parseDataObjects`, `parseJson`, `checkDataBytes`, `checkReadbackPaths`) and ack shaping (`ackDocuments`, `ackUpdates`, `attachReadback`, `fitPreview`) |
 | `createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | The handlers of the write scripts (`updateDocuments.js` groups patch entries by uuid) |
 | `listDocumentTypes.js`, `getDocument.js`, `searchDocuments.js`, `describeSchema.js` | The handlers of the read scripts (the last two only call `ctx.core`) |
-| `index.js` | `SHIPPED_SCRIPTS` (static list: `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`), `registerShippedScripts(registry?)`; called by `hooks/OnceReady.js` for a GM before `initFoundryBridge` |
+| `index.js` | `SHIPPED_SCRIPTS` (static list: `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`), `registerShippedScripts(registry?)`; called by `hooks/OnceReady.js` for a GM before `initFoundryBridge` |
 
 ## Registration (`registry.js`)
 
@@ -122,150 +118,11 @@ at most `SCHEMA_ARRAY_ITEMS_MAX` (1000) on both sides. The sidecar imports the l
 
 ## Core write scripts
 
-`create_documents`, `update_documents` and `delete_documents`: `mutates: true`, `requires: 'api'`, no declared gate (one
-gate cannot cover them; the handlers enforce per category, see below), `result.budgetBytes` = `ACK_BATCH_MAX_BYTES`
-(4000). Listed 640 B, 709 B and 381 B (MEASURED by `tests/measure/measureContext.mjs`). Every argument is a flat
-schema: the subset has no free-form object, so a data object or a patch value travels as JSON text (`parseDataObjects`,
-`parseJson` in `writeArgs.js`; the text is bounded by `SCHEMA_BOUND_MAX` per item and `WRITE_DATA_MAX_BYTES` (200,000)
-per call; a parse failure is `ARGS_INVALID` naming the index).
-
-- `create_documents({ documentName, data[1..50], parentUuid?, pack?, keepId?, dryRun?, paths? })`: `data` is one JSON
-  object text per document. `parentUuid` creates embedded documents (`createEmbeddedDocuments`); `pack` creates in a
-  compendium (`documentClass.createDocuments(.., { pack })`); neither creates in the world. Result: one
-  `{ uuid, name, type }` per document (a dry run has `uuid: null` and `dryRun: true`), shaped by `writeAck.js`
-  `ackDocuments`. `paths` adds a read-back of those paths per created document (`attachReadback`;
-  `checkReadbackPaths` bounds them).
-- `update_documents({ updates[1..200], dryRun?, paths? })`: each entry is one patch `{ uuid, path, value?, op? }`;
-  entries with one `uuid` form that document's update. `value` is JSON text; `op` is `set` (default), `replace`
-  (Foundry's `ForcedReplacement`, the `_replace` operator) or `delete` (`ForcedDeletion`, `_del`; takes no `value`).
-  Paths below an embedded collection (`items.<id>.system.x`) are grouped into one `updateEmbeddedDocuments` call per
-  collection (`groupWrites` of `shared/docPath.js`); a wildcard, an unsafe segment or conflicting paths are `PATH_*`
-  errors. Result per document: `{ uuid, changed[] }`; `changed` lists the paths Foundry applied (empty when Foundry
-  changed nothing; a dry run lists the planned paths and adds `dryRun: true`).
-- `delete_documents({ uuids[1..50], dryRun? })`: deletes through `deleteDocuments` / `deleteEmbeddedDocuments`. A dry
-  run returns `{ dryRun: true, rows: [uuid, name, type][], total, cut? }` with the embedded cascade, at most
-  `DELETE_PREVIEW_ROWS_MAX` (500) rows and the default result cap; nothing is deleted. A compendium pack itself, the
-  signed-in user and the last game master are `DELETE_REFUSED`. There is no Wiretap gate for deletion; the description
-  says it is irreversible and the README gives the Claude Code `ask` rule.
-
-Write path (`writes.js`): arguments checked and targets resolved, `guardWrite` (`writeGuard.js`), Foundry validation
-without writing, `dryRun` stops, then the Foundry document API runs. The guard throws `GATE_DENIED` for the first of:
-a password-named field or path of a `User` (always), a `Setting` whose key (from the data, or from the existing
-document for a by-id update, normalized by `normalizeSettingKey`) is in the `wiretap.` namespace or cannot be read
-(always), then a closed gate on THIS client: `allowUserWrites` (User), `allowSettingWrites` (Setting),
-`allowModuleConfigWrites` (`core.moduleConfiguration`), `allowFileUpload` (a base64 data URI anywhere in the values),
-`allowOwnershipWrites` (an `ownership` key in values or paths) and `allowCompendiumWrites` (a `pack` or a document
-inside one). Validation uses `cleanData` and `validate({ changes, strict })` and collects failures with
-`failuresOf`: `getAllFailures()` first, and the failure tree of `getFailure()` when it is empty (on Foundry 14.365
-`getAllFailures()` returns `{}` for a real failure). `ScriptError.details = { failures, failureCount }` is acked by the
-bridge (at most 10 failures, path and message bounded) and `formatBridgeError` prints them in 512 B.
-- Codes: `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED` (one error for the whole call, nothing
-  written), `DELETE_REFUSED`, `WRITE_NOT_APPLIED` (Foundry accepted the call but a hook or the system cancelled it), and
-  the `PATH_*` codes of the read scripts.
-- Details: a Setting is judged by its `key` text alone (`settingKeyOf`; a `namespace` is never read, Foundry prunes it);
-  data keys and path segments are split on `.` and a `-=` / `==` operator prefix is dropped before the `ownership`
-  test (Foundry expands dotted keys); `findUnsafeValue` refuses any dotted segment that is an `UNSAFE_SEGMENTS` entry
-  or an `Object.prototype` name. `resolveWritable` refuses a compendium pack uuid and a non-document (update and
-  delete); an update refuses a document written twice, counted by canonical uuid with embedded documents included.
-  Created names are cleaned (`cleanForLog`, 128 B). A row with read-back stays within `ACK_MAX_BYTES` (`cut: true`).
-- A write across several documents is not atomic once Foundry starts it: an update that fails after earlier ones
-  applied is `WRITE_NOT_APPLIED` and names how many and which uuids were applied.
+In `wiretap-writes` (the scripts and `writes.js`) and `wiretap-write-guard` (the guard).
 
 ## Core read scripts
 
-Both are `mutates: false`, `requires: 'api'`, no gate. Definitions are in `definitions.js` (listed 243 B and 682 B,
-MEASURED by `tests/measure/measureContext.mjs`).
-
-- `list_document_types` (no arguments, `result.budgetBytes` = `DOCUMENT_TYPES_MAX_BYTES` 3000): `scriptCore.documentTypes()`
-  returns `{ system, world, embedded, packOnly?, subtypes, omitted? }` from `CONST` and `game.documentTypes` (the base type
-  left out; classes with no subtype are not in `subtypes`). While over the budget the longest subtype list is dropped and
-  its class named in `omitted`.
-- `get_document` (`result.budgetBytes` 16000): `uuid`, or `documentName` + `id` with `parentUuid` (embedded) or `pack`;
-  `mode` `compact` (default) or `full`; `fields` and `paths` (≤ 20 each); `derived`; `ifModifiedSince`; `maxBytes`
-  (integer 128..16000, declared only so the enforcer receives it; the handler ignores it). `paths`, `fields` and
-  `mode: 'full'` exclude each other, `derived` needs `paths` or `fields` (`ARGS_INVALID`). Order: combination check →
-  `ctx.core.readDocument` → `ifModifiedSince` (`{ unchanged: true }` when the export's `_stats.modifiedTime` is a finite
-  number `<=` the argument; never for an unreadable document) → `paths` (`{ values, missing }`) / `fields`
-  (`{ fields, missing }`) / full (the export) / compact with `keyPathsFor(game.system.id, documentName, type)`. A shape
-  refusal `<code>: <message>` is rethrown as a `ScriptError` with that code (`PATH_*`).
-- `canonical.js` `exportDocument`: `toCompendium(null, { clearSource: false, keepId: true, clearSort: false,
-  clearOwnership: false })` (or `toObject(false)` when derived), JSON round trip (a `Set` becomes an array), the
-  exclusions, `uuid` added; never throws (`DOC_EXCLUDED`, `DOC_UNREADABLE`). Exclusions: a `Setting` whose `key` is not
-  text, starts with `wiretap.` (case-insensitive), is in `SECRET_CORE_SETTINGS` (`core.rtcworldsettings`, the WebRTC TURN
-  credentials: `client/av/settings.mjs:97-102,162-167`) or matches `SECRET_SETTING_KEY` is refused before any export call;
-  `password` and `passwordSalt` are deleted from a `User` export, so a path to one is in `missing`. Redaction
-  (`redactNode`, in the one export function, so every read path inherits it): keys matching `SECRET_KEY`
-  (`/pass(word|phrase)?|secret|token|api[-_]?key|credential|private[-_]?key/i`) are dropped from a Setting `value` (JSON
-  text, parsed and re-serialized) and from every `flags` object of any export, to depth 24 and 50,000 nodes per walk
-  (separate budgets for the setting value and the rest; lists are walked in order and cut at the first member beyond a
-  bound; strings that hold JSON are parsed and redacted too, to 4 nesting levels (`REDACT_MAX_STRING_NESTING`); what lies beyond is dropped). Core schema fields and `system` data are not scanned (`prototypeToken` matches the pattern); the
-  limits are listed in docs/PLAN.md section 4.4. Any new read path (`search_documents`) must go through
-  `readDocument`/`exportDocument`. `resolveDocument` throws `ARGS_INVALID` (unclear reference) or `DOC_NOT_FOUND`; caller text echoed in
-  errors is cleaned and ≤ 48 B.
-- Codes of the read scripts (`ScriptError`): `ARGS_INVALID`, `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `DOC_UNREADABLE`, `PATH_NOT_FOUND`,
-  `PATH_EXCLUDED`, `PATH_EMBEDDED`, `PATH_FREE_FORM`, `PATH_UNSAFE_SEGMENT`, `PATH_INVALID`, `PATH_LIMIT`, `CURSOR_INVALID`,
-  `SEARCH_ABORTED`.
-- A full export over the 900,000 B client limit fails with `RESULT_TOO_LARGE`; over the call's cap (8,000 B or `maxBytes`)
-  the sidecar enforcer makes a handle.
-- Key-field lists: `keyFields.json` is generated by `tests/e2e/keyFields.measure.spec.js` (skipped unless
-  `WIRETAP_MEASURE_KEYFIELDS=1`) and reviewed; provenance in `docs/experiments/2026-10-m4-keyfields.md`.
-
-### search_documents
-
-`mutates: false`, `requires: 'api'`, `result.budgetBytes` = `SEARCH_PAGE_MAX_BYTES` (4000); listed 687 B. Arguments: `documentName`
-(required), `type`, `query` (name substring, case-insensitive, <= 64), `filters` (<= 5 strings `path=value`, each <= 256; a
-value matches when the scalar at the dotted path, as text, equals it; no wildcard), `pack`, `parentUuid` (exclusive),
-`fields` (<= 20 dotted paths of <= 64 B (`SEARCH_FIELD_PATH_MAX_BYTES`, rows echo them as keys; longer is `PATH_INVALID`)
-whose scalars are added to each row as a fourth element, strings <= 64 B), `limit` (1..100, default 20; the engine also
-clamps), `cursor` (<= 512; base64url of the name, one NUL and the uuid); there is no `maxBytes` (an undeclared argument is stripped by the schema validator). The engine
-refuses more than 5 filters with `ARGS_INVALID`. Result `{ rows: [uuid, name, type, values?][], total, cut?, scanned?,
-nextCursor? }`; a lone row whose `fields` overflow the page degrades to `[uuid, name, type]`.
-- Work bounds: the ordering key of every readable document comes from its live name; candidates after the cursor are examined
-  in key order up to `SEARCH_SCAN_MAX` (2000); `type`, `query` and `name`/`type`/`folder` filters read the live document; a
-  document is exported (once, kept on the candidate) only for a filter on another path or for a page row with `fields`,
-  at most `SEARCH_EXPORT_MAX` (300) per call. At a cap the call reports `cut: true` and `scanned` and `nextCursor` resumes
-  after the last candidate examined. `total` counts the matches among the candidates examined from the cursor on. Every
-  `SEARCH_BATCH_SIZE` (25) candidates the loop awaits a `MessageChannel` message (a macrotask) and throws `SEARCH_ABORTED`
-  when `ctx.signal` (passed by the handler) aborted.
-- Sources: world collection (`game.collections`), `parent.getEmbeddedCollection`, or `pack.getIndex({ fields })` with only the
-  filter and field paths (no document is loaded; `Setting` and `User` are refused with a pack). Index paths are bounded
-  (`indexPathsOf`: <= `SEARCH_INDEX_FIELDS_MAX` (5) distinct, <= `SEARCH_INDEX_SEGMENTS_MAX` (3) segments, no whole
-  `WHOLE_SUBTREE_ROOTS` subtree, else `ARGS_INVALID`; a segment matching `SECRET_KEY` is `PATH_EXCLUDED`; both before the
-  index is asked), because `getIndex` merges the fields into the
-  pack's shared index for the session (`compendium-collection.mjs:334-367`). A class that is not a world
-  collection needs `pack` or `parentUuid` (`ARGS_INVALID`).
-- Exclusions: a live document is skipped when `canonical.unreadable()` refuses it (a `wiretap.` Setting never appears in a
-  row, the total or any match) and filters and fields read the canonical `exportDocument`, so a User password path has no
-  value; a filter or field whose first segment is `password` or `passwordSalt` on a `User` is `PATH_EXCLUDED`.
-- Order and cursor: matches sort by the name cut to 40 B, then the uuid (code-unit order); the cursor is the base64url of
-  the key text (cut name, one NUL, uuid; no JSON escaping, so it stays within 512 characters) and the next page is every match with a greater key, so inserts and deletes do not shift it. The rows
-  are cut from the end until the serialized page is <= 4000 B (at least one row stays) and `nextCursor` follows the last row
-  kept. A cursor that does not decode is `CURSOR_INVALID`.
-
-### describe_schema
-
-`mutates: false`, `requires: 'api'`, `result.budgetBytes` = `DESCRIBE_SCHEMA_MAX_BYTES` (8000); listed 382 B. Arguments:
-`documentName` (required), `subtype` (the base type, else the first type, when omitted; an unknown one is `ARGS_INVALID`
-listing the valid ones within 256 B), `path` (<= 512, dotted).
-- Without `path`: `{ documentName, subtype, example, outline, systemOutline? }`. `example` is the canonical export of a
-  blank document built in memory (`new documentClass({ name: 'Example', type })` plus `MINIMAL_DATA` for Setting, Wall,
-  Tile and Drawing); a construction that throws gives `example: null` and `exampleNote`. `outline` is `[name, class,
-  document?]` of the class's top-level fields, `systemOutline` the same for the subtype's `system` schema.
-- With `path`: `stepInto` walks the schema (`TypeDataField` resolves by subtype; a list takes an integer index or `*` only,
-  else `PATH_NOT_FOUND`, as does a list without an element field; an embedded
-  collection or document is `PATH_EMBEDDED`, a free-form field `PATH_FREE_FORM`, a missing name `PATH_NOT_FOUND`, an unsafe
-  one `PATH_UNSAFE_SEGMENT`, an empty one or a wildcard outside a list `PATH_INVALID`), and the result is `{ path,
-  example?, schema, cut? }`, where `schema` is `describeField` of the reached field.
-- Walker output (`schemaWalk.js`): `{ class, required?, nullable?, readonly?, blank?, integer?, positive?, min?, max?, step?,
-  choices?, choicesMore?, categories?, free?, element?, types?, document?, type?, fields?, more?, cycle? }`. Kinds come from
-  the first class name in the prototype chain found in `KIND_BY_CLASS` (so subclasses need no entry). Free-form: ObjectField,
-  AnyField, JSONField, TypedObjectField (and subclasses), TypedSchemaField. Referenced by document name: collections,
-  EmbeddedDocumentField, foreign keys. Bounds: depth 3, 150 nodes, 16 choices, cycle guard on the schemas being expanded.
-- Size: the example is replaced by `exampleKeys` (`exampleCut`) and the outlines shortened until the result is <= 8000 B; a
-  path result drops the example first (`exampleCut`) and only then re-walks at depth 3, 2, 1, 0 (`cut: true`). A blank that
-  cannot be built is logged once through `ctx.log` (cleaned, <= 120 B of the cause) and the result keeps `example: null`.
-- Exclusions: the blank example goes through `exportDocument` (no User password field, no wiretap Setting), the User outline
-  and tree skip `password` and `passwordSalt`, and a path to either is `PATH_EXCLUDED`.
+Covers the four read scripts (list_document_types, get_document, search_documents, describe_schema): arguments, work bounds, exclusions and secret redaction in the canonical export, paging and cursors, the schema walker and error codes. Read references/core-read-scripts.md before changing any of them or src/bridge/scripts/canonical.js, search.js, schemaWalk.js or schemaDescribe.js, or adding a read script or any new read path.
 
 ## User-facing skill
 
@@ -275,7 +132,7 @@ listing the valid ones within 256 B), `path` (<= 512, dotted).
 ## Tests
 
 `schemaValidate`, `scriptRegistry`, `scriptShape` (MOCK_ fixtures with 120 embedded items; `modified` and `keyPaths`),
-`callTool`, `scriptCore`, `writeGuard`, `writeCreate`, `writeUpdate`, `writeDelete`, `writeScripts` (all over the mock world of `mockWriteWorld.js`, whose `MockValidationError` reproduces the 14.365 behaviour of an empty `getAllFailures()`), `canonical` and `getDocument` (mocked documents from `mockDocuments.js`: exclusions,
+`callTool`, `scriptCore`, `canonical` and `getDocument` (mocked documents from `mockDocuments.js`: exclusions,
 password path in `missing`, compact bound over every list of `keyFields.json`, projection, `items.*.name`, derived,
 `ifModifiedSince`, argument combinations), `listDocumentTypes`, `searchDocuments` (paging, cursor stability, clamps, filters, exclusions, index use), `schemaWalk` (every field class with `mockFields.js`), `describeSchema`, `shippedSkill`, `OnceReady`, `foundryBridge.scripts` (registry push, ack handling, callTool acks) and
 `foundryBridge.client` (write scripts through the bridge); `tests/integration/readTools.test.js` (both read scripts through the
@@ -293,3 +150,9 @@ headless setup and teardown steps). The registry allows `ChatMessage` (identifie
 prefix `wiretap-e2e.`), `User` (never the signed-in user or a game master), `Scene`, `Playlist`, `RollTable`,
 `JournalEntry`, `Macro`, `Cards`, `Actor`, `Item` and `Folder`, deleted in that order (`tests/unit/e2eRegistry.test.js`). `tests/e2e/registry.spec.js` covers the sweep and the refusal to delete a
 non-prefixed document.
+
+## Reference files
+
+| File | Holds | Read it when |
+|---|---|---|
+| references/core-read-scripts.md | The Core read scripts section with its search_documents and describe_schema subsections | changing the read scripts, the canonical export, search paging or the schema walker |

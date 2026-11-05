@@ -15,7 +15,7 @@ You implement one well-specified task in the Wiretap Foundry VTT module.
 1. Read `.claude/claude.md` and follow it exactly (style, typing, comments, documentation rules).
 2. Invoke the `wiretap-*` skill(s) covering every path you will touch: `wiretap-sidecar`, `wiretap-mcp-bridge`,
    `wiretap-client`, `wiretap-build-test`. If the task also changes `.js` / `.svelte` client code, also invoke
-   `svelte-5`, `foundry-vtt`, `foundry-svelte`.
+   `web-ui:svelte-5`, `foundry-vtt:foundry-vtt`, `foundry-vtt:foundry-svelte`.
 3. Invoke `superpowers:test-driven-development`: write the failing test first, see it fail, then implement.
 
 ## Rules

@@ -14,14 +14,14 @@ Foundry v14 ApplicationV2, with no TyphonJS / UI middleware.
 
 Before writing or changing ANY code, invoke these skills via the Skill tool, in order:
 
-1. `svelte-5` — the Svelte 5 syntax authority (runes, snippets, `mount()` / `unmount()`).
-2. `foundry-vtt` — the Foundry v14 API router; it points you to the right `foundry-*` specialty
+1. `web-ui:svelte-5` — the Svelte 5 syntax authority (runes, snippets, `mount()` / `unmount()`).
+2. `foundry-vtt:foundry-vtt` — the Foundry v14 API router; it points you to the right `foundry-*` specialty
    skill for the task (applications, hooks, data-models, config, etc.).
-3. `foundry-svelte` — the no-middleware Svelte 5 + ApplicationV2 integration patterns this module
+3. `foundry-vtt:foundry-svelte` — the no-middleware Svelte 5 + ApplicationV2 integration patterns this module
    uses (mount lifecycle, runes ↔ document reactivity bridges, Vite build config).
 
 When the work touches version compatibility, deprecations, or a v13→v14 delta, also invoke
-`foundry-versioning`.
+`foundry-vtt:foundry-versioning`.
 
 ## Rules
 

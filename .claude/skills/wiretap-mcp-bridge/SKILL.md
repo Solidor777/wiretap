@@ -1,12 +1,13 @@
 ---
 name: wiretap-mcp-bridge
-description: Wiretap MCP tools and Foundry bridge — the built-in tool (read_handle) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents and delete_documents among them), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
+description: Wiretap MCP tools and Foundry bridge — the built-in tool (read_handle) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents, delete_documents, replace_document and batch among them), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
 paths:
   - "server/mcp.ts"
   - "server/endpoints.ts"
   - "server/foundryBridge.ts"
   - "server/resultBudget.ts"
   - "server/handles.ts"
+  - "server/handleInput.ts"
   - "server/utf8.ts"
   - "src/bridge/foundryBridge.js"
   - "src/bridge/gates.js"
@@ -16,6 +17,7 @@ paths:
   - "tests/unit/mcp.test.js"
   - "tests/unit/endpoints.test.js"
   - "tests/unit/handles.test.js"
+  - "tests/unit/handleInput.test.js"
   - "tests/unit/resultBudget.test.js"
   - "tests/integration/resultHandles.test.js"
   - "tests/unit/foundryBridge.*.test.js"
@@ -47,65 +49,7 @@ way as the tool result.
 
 ## Pieces
 
-- `server/mcp.ts`
-  - The sidecar has no handler for a script tool such as `create_documents`: the endpoint registers it like any script (`requires: 'api'`,
-    `mutates: true`, `result.budgetBytes` 256). A registered script's ack result is shown as text (a string as is,
-    anything else as JSON, an ack with no result as `null`); the enforcer bounds it with the picked endpoint's budget.
-    The bridge interface `mcp.ts` needs is `invokeTool`, `tools` and `subscribe`.
-  - Sessions, `startMcpServer` (HTTP routing, body and connection limits, cap, `?endpoint=`), `buildServer`, `WIRETAP_INSTRUCTIONS`, the session manager, the `list_changed` debouncer, the registry sanitizer and registry tool calls are in `wiretap-mcp-sessions`. The only built-in tool registered per session is `read_handle`; the scripts of the routed endpoint are listed beside it with `annotations.readOnlyHint = !mutates` (`destructiveHint` is not set).
-- `server/endpoints.ts` — protocol v4 core, no sockets: `createEndpointRegistry(now?)` (`register` returns false when a
-  new socket would exceed `MAX_ENDPOINTS` (64) / `remove` / `list` / `firstOfKind(kind, { dom? })` (`dom: true` skips endpoints that did not identify with `dom: true`); an endpoint is `{ socketId, userId, userName, kind, dom, gateState, tools, registeredAt }` (`tools` is the sanitized `RegistryTool[]` the endpoint registered, empty until it registers; `setTools(socketId, tools)` replaces it and ignores an unregistered socket; `subscribe(listener)` is called synchronously after every endpoint-set, health or tools change and returns its unsubscribe; `gateState` is the sanitized risk-gate snapshot, see `wiretap-sidecar`; `setGateState(socketId, state)` replaces it and ignores an unregistered socket; a repeated `register` replaces it with the new identify's), insertion order is
-  the tiebreak, a repeated identify keeps position and `registeredAt`); every endpoint also has
-  `health: 'healthy' | 'unresponsive'` (`register` starts a new socket healthy and keeps the health of an already-registered socket, so a re-identify never restores routing; only a ping ack does; `get(socketId)`,
-  `setHealth(socketId, health)`; `firstOfKind` and so every route, `endpoint` override included, skips unresponsive
-  endpoints while `list()` still returns them); `validateIdentify(payload)`
-  (`PROTOCOL_MISMATCH` for a non-object, a `protocolVersion` other than `PROTOCOL_VERSION` (4), any malformed field, a
-  `userId` over 64 bytes or a `userName` over 128 bytes; `NOT_GM` for `isGM:false`; the optional `gateState` is passed through `sanitizeGateState`, never refused, and an absent or invalid one gives the all-closed snapshot); `ROUTE_ORDER = ['agent', 'human']` (the one place the default order is defined);
-  `createRouter(registry, { send, ping, timers?, log, logHealth?, newRequestId? })` whose `invoke(op, params, { endpoint?, requireGate?: { gate, moduleId? } })` is the gate enforcement point: it picks ONE endpoint (single `pick()`, no await before the check), judges `gateDenial(endpoint.gateState, gate, moduleId)` on that endpoint's own snapshot, throws `BridgeError` `GATE_DENIED` (message from `gateDenial`, at most 256 bytes) before sending when denied, and otherwise sends to that same endpoint (no endpoint = `NO_ENDPOINT` / `ENDPOINT_UNAVAILABLE`, never `GATE_DENIED`); its `invokeTool(name, args, { endpoint?, listed })` runs the `callTool` op for a registry tool: one `pick()`, the tool resolved by name on that endpoint (`TOOL_GONE` when absent or when it declares another argument schema, `GATE_DENIED` when its declared gate differs from `listed.gate`, otherwise its own gate judged on its snapshot) and returns `{ result, tool }` with the picked endpoint's declaration; its `tools({ endpoint? })` returns a copy of the tools of the endpoint a call would reach now (empty when none is eligible); its `gateState({ endpoint? })` is a display and diagnostic accessor only (fresh copy of the snapshot of the endpoint a call would reach now, all-closed when none is eligible; not a gate check), and `invoke` picks
-  the first healthy endpoint of the first kind in `ROUTE_ORDER` (an `endpoint` option restricts to that kind, no
-  fallback; when no healthy endpoint is eligible but a connected one of an eligible kind is unresponsive the call fails
-  at once with `ENDPOINT_UNAVAILABLE`, at most 256 bytes, and `NO_ENDPOINT` stays for no connected endpoint of the kind), generates a
-  UUID `requestId`, logs it, and resolves the ack `result` or throws a `BridgeError`;
-  `BridgeError { code, message, failures?, failureCount? }`; `EndpointGoneError` (thrown by a transport); `normalizeAckError`
-  (code kept only if `/^[A-Z][A-Z0-9_]{0,63}$/` and not reserved (`NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_GONE`,
-  `ENDPOINT_UNAVAILABLE`, `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH`, `NOT_GM`, `TOOL_GONE`; `GATE_DENIED` is not reserved, so a client may send it), else `OP_FAILED`; message and each failure path/message bounded to 512 bytes by
-  `truncateUtf8`; 10 failures max; `failureCount` is the larger of the sent count and the client's reported count);
-  `formatBridgeError` (whole text at most 512 bytes: `<code>: <message>`, then `path: message` failure lines, one per line,
-  as many as fit, then ` (+N more)` for the failures not shown). `truncateUtf8` returns `''` when the limit is below the
-  3-byte ellipsis. `NO_ENDPOINT` is at most 256 bytes and names the fix. A transport rejection with an
-  `EndpointTimeoutError` (no ack within 10 s) first runs the endpoint health check, then becomes `ENDPOINT_TIMEOUT` with
-  the message `Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.`. The
-  check pings the endpoint (`ping`, 1 s window in `foundryBridge.ts`; the router awaits it before throwing, so a timed-out call reports after up to 11 s: the 10 s ack window plus at most 1 s): an acked ping leaves it healthy; a failed ping
-  marks it unresponsive and starts one `timers.setInterval` probe (every `PROBE_INTERVAL_MS` = 5 s; defaults to the
-  global interval timers, looked up at call time) that pings it with at most one ping in flight and, on an ack,
-  restores it and clears the interval. Health log lines (failed ping, unresponsive, recovery) go to `logHealth` (default `log`); the bridge passes a `createLogThrottle` of 10 per minute (noun `endpoint health lines`), so a never-acking endpoint cannot flood the log. Concurrent timeouts on one endpoint share one check; a tick for a removed or
-  healthy endpoint clears the probe. `router.forget(socketId)` and `router.dispose()` clear probes, and nothing starts
-  after dispose. A call is sent exactly once; nothing retries it. The router has no clock (the registry takes `now`).
-  Other transport rejections never ping; every other transport rejection (an
-  `EndpointGoneError` or any error from the send) becomes `ENDPOINT_GONE` (the cause is logged, not returned). `requestId` is in the payload and sidecar log lines, not in error text or tool results.
-- `server/foundryBridge.ts` — `createFoundryBridge({ log? })` returns `{ handleConnection(socket), invoke, invokeTool, gateState, tools, subscribe, dispose }` (`invoke`, `invokeTool`, `gateState` and `tools` are the router's, `subscribe` the registry's). It keeps
-  a socket map, the registry and the router (the invoke and ping transports share one `emitWithAck` helper (`socket.timeout(ms).emit(event, [payload,] ack)`; the ack-callback error becomes an `EndpointTimeoutError`; invoke uses a 10 s window and tracks the call so a disconnect rejects it); a missing socket, a synchronous emit failure or a
-  disconnect while an invocation awaits its ack rejects with `EndpointGoneError`, the disconnect immediately; the
-  router's `ping` is the same helper with a 1 s window and no payload, untracked). The returned bridge also has `dispose()` (stops every
-  health probe; `createWiretapServer.dispose()` calls it).
-  `handleConnection` handles `BRIDGE_IDENTIFY` `(payload, ack?)`: validate, register (a new socket beyond 64 endpoints is
-  refused with `ENDPOINT_LIMIT`) or, when refused, drop any earlier entry of the socket (`dropEndpoint`: registry remove plus `router.forget`, so no probe survives) and log
-  `Wiretap sidecar | refused identify from <id>: <code>` (at most 10 such lines per minute in total via `createLogThrottle`, followed by one
-  `N further identify refusals suppressed` line after the window; clock injectable as `options.now`; the ack is never
-  throttled), then call `ack` with
-  `{ ok: true }` or `{ ok: false, error: { code, message } }` (an absent ack callback is tolerated); `disconnect`
-  calls `dropEndpoint(socket.id)` (removes the endpoint and stops its probe).
-  `handleConnection` also handles `BRIDGE_REGISTRY` through `pushRegistry`: a registered endpoint may push at most `REGISTRY_PUSHES_PER_SECOND_MAX` (2) registries per one-second window; later pushes are coalesced (the replaced push is acked `{ ok: true, coalesced: true }`) and the latest is applied when the window ends by a per-socket timer, cleared on disconnect, a dropped endpoint and `dispose`.
-  `handleConnection` also handles `BRIDGE_GATE_STATE` `(payload, ack?)`: only a socket with a live registry entry may set a snapshot (`registry.setGateState(socket.id, sanitizeGateState(payload))`, ack `{ ok: true }`; a non-object payload therefore closes every gate); any other socket (never identified, refused, disconnected) changes nothing, is logged as `Wiretap sidecar | refused gate state from <id>: NOT_GM` through its own `createLogThrottle` (10 per minute, noun `gate state refusals`, separate from the identify throttle) and acked `{ ok: false, error: { code: NOT_GM, message } }`. `handleConnection` also handles `BRIDGE_REGISTRY` `(payload, ack?)`: only a socket with a live registry entry may push a tool list (any other socket is logged as `refused registry from <id>: NOT_GM` through a throttle and acked `{ ok: false, error: { code: NOT_GM, message } }`); the payload goes through `sanitizeRegistry`, replaces the endpoint's whole list (an empty array clears it) and is acked `{ ok: true, accepted, refused }`; a non-array payload or a throw clears the endpoint's tools and acks `{ ok: false, error: { code: OP_FAILED, message } }`. A gated tool calls `bridge.invoke(op, params, { requireGate })` (the router's `invoke`, see above); `bridge.gateState({ endpoint? })` is for display and diagnostics only (a later `invoke` may pick another endpoint). The whole `BRIDGE_GATE_STATE` handler runs in try/catch: on any throw the endpoint's snapshot becomes all-closed, the failure is logged without the snapshot and the sender is acked `{ ok: false, error: { code: OP_FAILED, message } }`. The sidecar snapshot is a pre-check only: the identify is self-declared (same-machine processes are trusted), so the executing browser re-enforces every gate from its own world settings. Snapshots are never in a tool result, error text or log line. `createWiretapServer` returns the bridge as `bridge` so tests can pass the `endpoint` option
-  (an MCP session picks its endpoint kind with `?endpoint=` on the initialize URL). **`requires` routing (D25):** for a registry tool call whose listed script has `requires: 'dom'`, `pick` considers `DOM_ROUTE_ORDER` (`['agent']`; the session's `endpoint` kind replaces it) and only `dom: true` endpoints; with none it throws `NO_ENDPOINT` (no new code) whose message names the DOM requirement and the kind (for example `No DOM-capable 'agent' GM endpoint is connected: ...`, at most 256 bytes), or `ENDPOINT_UNAVAILABLE` when a DOM-capable endpoint of that kind is connected but unresponsive. `api` scripts follow `ROUTE_ORDER`. `invokeTool` also throws `TOOL_GONE` when the picked endpoint declares another `requires` or `mutates` for the name than the listed script.
-- `src/bridge/foundryBridge.js` — `initFoundryBridge(connection)` (called from `OnceReady`) attaches to the shared
-  socket via `TerminalConnection.onSocket`; its op table holds `callTool` only (the world mutations run in script handlers on a GM client).
-  On each (re)connect it emits the identify (protocol v4; `gateState: readGateState()` read at emit time from `src/bridge/gates.js`; `kind` from the `wiretap.endpointKind` client setting, `dom: true`)
-  with an ack callback and sets `bridgeState.identified` (exposed as `api.bridge.identified`) true only on an ok ack
-  while the socket is connected; a disconnect or refused ack sets it false and a refusal is logged with the sidecar's
-  message. Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`. It also listens for `BRIDGE_PING` and
-  acks `{ ok: true }` regardless of identify state (no ack, or a non-function ack, is ignored); the sidecar's health
-  check relies on this.
+Covers `server/mcp.ts`, `server/endpoints.ts` (registry, router, health, error normalization), `server/foundryBridge.ts` and `src/bridge/foundryBridge.js`. Read references/bridge-pieces.md before changing any of those files.
 
 ## Client gate enforcement (`src/bridge/gates.js`, `src/settings/gates.js`)
 
@@ -138,83 +82,17 @@ way as the tool result.
 
 ## Result enforcer, handles and `read_handle`
 
-Every registered tool runs through `withResultBudget(handler, { store, ownerKey, ownerLive?, budgetBytes? })`
-(`server/resultBudget.ts`); `buildServer` applies it to `read_handle`, any `tools` entry and every registry script (`makeRegistryToolHandler`). Budgets
-count raw UTF-8 text bytes, not JSON-escaped wire bytes.
-
-- **Limit.** The hard cap is 8,000 bytes; a valid integer `maxBytes` in the call arguments (>= 1) replaces it, clamped to
-  16,000 (an invalid `maxBytes` is ignored); the tool's own `budgetBytes` lowers it further (the smaller of the two).
-  The SDK strips arguments a tool's `inputSchema` does not declare (measured), so `maxBytes` reaches the enforcer and
-  handler only for a tool that declares an optional integer `maxBytes` (that adds to its definition size); `read_handle`
-  declares it (128..16000). The measured size is the UTF-8 bytes of the text content items (other non-image items as their
-  JSON, then `structuredContent` as JSON); at or below the limit the result is returned unchanged, one byte over becomes
-  a handle. The write scripts declare `result.budgetBytes` = `ACK_BATCH_MAX_BYTES` (4,000); the script shapes its ack to fit, so a handle is the fallback only. `get_document` declares 16,000 and `maxBytes` (integer 128..16000), so a full read over 8,000 B is a handle unless the caller raises `maxBytes`; `list_document_types` declares `DOCUMENT_TYPES_MAX_BYTES` (3,000), `search_documents` `SEARCH_PAGE_MAX_BYTES` (4,000; it declares no `maxBytes`) and `describe_schema` `DESCRIBE_SCHEMA_MAX_BYTES` (8,000).
-- **Over the limit.** When `ownerLive` is given and returns false (the owning MCP session ended), nothing is stored and the result is the error `SESSION_ENDED: ...`. Otherwise the parts are joined with `\n` and stored (`HandleStore.put`); the result is a single text item
-  `{"handle","bytes","summary"}` (any image items are kept; `structuredContent` is dropped), at most 256 bytes
-  (`ACK_MAX_BYTES`). `bytes` is the stored size (`put().bytes`, parts plus the joining newlines). `summarizeResult(text)`
-  is deterministic: a JSON object gives `{kind:'object', n, keys (first 8 in JS property order, integer-like keys first,
-  each <= 32 B), counts (array length or key count of those keys), omitted?, name?, type?}` (strings <= 32 B; a key
-  that equals an earlier listed key once shortened is skipped and counted in `omitted`), a JSON array
-  `{kind:'array', n}`, anything else `{kind:'text', n}` (characters). Only a single-part result without
-  `structuredContent` is summarized from its JSON; multi-part or structured results are described as `{kind:'text', n}`.
-  `formatHandleResponse` drops count entries, then keys, then `name`, then `type` until the text fits. A result over the
-  entry cap or the whole store becomes an error (`HANDLE_TOO_LARGE: ...`); `summarizeResult` runs only after a
-  successful `put`.
-- **Never fails open.** A handler throw is caught: a `BridgeError` passes as `formatBridgeError` (`<code>: <message>`, capped to
-  512 bytes), anything else becomes `Tool failed.` and the real message goes to `console.warn`
-  (`Wiretap sidecar | tool failed: ...`; control characters, line breaks and U+2028/2029 replaced by spaces, cause cut to
-  512 bytes). `makeRegistryToolHandler` returns only `BridgeError`s as results and rethrows anything else. Everything after the handler (shape check, image checks, serialization, `byteLength`, `put`) runs in
-  one `try`; a result that is null, has no `content` array, has a content item without a string `type`, a text item
-  without string text, or cannot be serialized becomes `Tool returned an invalid result.` (logged the same way).
-- **Errors and images.** An `isError` result is rewritten as one text item capped to 512 bytes (`ERROR_MAX_BYTES`) and is
-  never a handle. `IMAGE_LIMIT: ...` (an error result) is returned for: more than one image; a `mimeType` other than
-  exactly `image/png`; `data` that is not a string, is longer than 1,000,000 characters (`IMAGE_DATA_MAX_BYTES`) or
-  does not match `^[A-Za-z0-9+/]*={0,2}$` (whitespace is refused); a PNG header (IHDR, first 32 base64 characters) that
-  cannot be read; a longest side over 1280 px. The result leaves the enforcer rebuilt (`rebuildItem`): image items as exactly
-  `{type, data, mimeType}`, text items as exactly `{type, text}`, other item types whole (they are measured as their
-  JSON), and the result as `{content, structuredContent?}` only (inline path) or the handle text plus rebuilt images
-  (handle-ack path); `_meta`, `annotations` and unknown fields are dropped. `IMAGE_DEFAULT_MAX_PIXELS` (480,000 px) is a capture-time default and is
-  not enforced here.
-- **Store** (`server/handles.ts`, `createHandleStore({ now?, maxTotalBytes?, idleMs?, maxEntryBytes?, maxCount? })`; `releaseOwner(ownerKey)` removes every entry of that owner).
-  Memory only: no file-system import, no timers, no deletion API. Ids are 16 random bytes in base64url (22 characters).
-  The default clock is `performance.now()`. Each entry is accounted as `max(UTF-8 bytes, 2 * length) + 256`
-  (`HANDLE_ENTRY_OVERHEAD_BYTES`) inside the 64,000,000-byte total across all owners; a value over 8,000,000 UTF-8 bytes
-  (`HANDLE_ENTRY_MAX_BYTES`) or over the total gets `HANDLE_TOO_LARGE`; at most 1,024 entries (`HANDLE_MAX_COUNT`). LRU
-  eviction (global across owners, so one owner's puts can evict another's) frees
-  count and bytes; a use (successful `slice`) re-inserts the entry last, so map order is `lastAccess`
-  order and `purgeExpired` walks from the front and stops at the first live entry (`idle >= idleMs` expires; 30 minutes
-  default; run on every `put` and `slice`). `slice(ownerKey, handle, { paths?, offset?, length?, maxBytes? })` checks
-  ownership, then validates `offset`/`length`, and only a fully successful read touches the entry. It returns
-  `{ok, text, offset, length, total, truncated?}` counted in UTF-16 code units; `maxBytes` (default 8,000, at most
-  16,000) bounds the UTF-8 size of `text`. The window scan is O(maxBytes): it walks code points, never ends inside a
-  surrogate pair, moves an `offset` on a low surrogate back one unit (the returned `offset` is the real start), and
-  takes the whole pair for `length: 1` at a high surrogate; if not even the next character fits `maxBytes` it returns
-  `HANDLE_WINDOW_TOO_SMALL`. With `paths` the entry is parsed again (nothing cached), `resolvePaths` runs, and
-  `boundedStringify({values, missing}, maxBytes)` (iterative, stops once the output exceeds the limit) builds the view;
-  a longer result is cut to the limit and `truncated: true` is returned, so a `paths` result is one window whose cut
-  depends on the call's `maxBytes`; its tail is reachable only by narrowing `paths`. Measured cost of one `paths` read
-  (parse plus 20 wildcard paths): ~17 ms for an 8 MB long-string document, ~185 ms for 7.7 MB of 106,000 small objects. Grammar
-  errors keep their `PATH_*` codes, non-JSON text gives `HANDLE_NOT_JSON`. Unknown, expired, evicted and other-owner
-  handles all give `HANDLE_NOT_FOUND: Handle not found or expired.` A bad `offset`/`length` gives `HANDLE_BAD_RANGE`.
-- **Owner key.** Each MCP session owns its handles: `buildServer` passes the session id as `ownerKey` to both
-  `makeReadHandleHandler` and `withResultBudget`, so a session reads only handles its own calls stored (another
-  session's handle gives `HANDLE_NOT_FOUND`). `HandleStore.releaseOwner(ownerKey)` drops every handle of one owner; the
-  session manager's `onEnd` calls it when a session ends (DELETE, idle expiry, cap eviction, dispose). Eviction by the
-  count and byte limits stays global across owners (`docs/TODO.md`). `startMcpServer` creates the store once per server (or
-  takes `options.handleStore`); `options.instructions` replaces `WIRETAP_INSTRUCTIONS`; `tools` are
-  `ToolRegistration` entries (`name`, `description`, `inputSchema` zod shape, `handler`, `budgetBytes?`) registered on every
-  session; tests use it for test-local tools (no production test tool exists).
-- **`read_handle`** (`makeReadHandleHandler(store, ownerKey)`): args `handle` (string <= 64), `paths` (<= 20 strings),
-  `offset`, `length`, `maxBytes` (128..16000, the whole result's limit, default 8,000; the handler also answers a smaller value with
-  `HANDLE_WINDOW_TOO_SMALL`, so the result is always a window plus a footer within the limit). Result content: the window text,
-  then a footer item `{"offset","length","total"}` (plus `"truncated":true` for a cut `paths` result); the window is
-  limited to `maxBytes - 64` bytes so both items stay within the limit. A store failure is an `isError` result
-  `<code>: <message>`. Its definition is inside the budgets (name 11 chars, description <= 160, definition <= 800 B;
-  asserted in `tests/integration/resultHandles.test.js` and, with the other budgets, in `tests/unit/contextBudget.test.js`).
-- **`server/utf8.ts`** holds `truncateUtf8`, shared by `endpoints.ts`, `resultBudget.ts`, `mcp.ts` and `server.ts`.
+Covers the result enforcer (`withResultBudget`), byte limits, handles, the handle store, owner keys and `read_handle`. Read references/result-enforcer-handles.md before changing result budgets, handles or `read_handle`.
 
 ## Security boundary
 
 Loopback-only HTTP; the `Mcp-Session-Id` is a random UUID and not a credential (same-machine processes are trusted); browser requests with a foreign `Origin` are refused on both the socket handshake and `/mcp` (and a
 foreign `Host` on `/mcp`), while requests without `Origin` are trusted as same-machine processes; GM-only execution (a v4 identify with `isGM: true` is the only way to register an endpoint). A shared-secret handshake on the sidecar socket is a
 tracked, unimplemented follow-up.
+
+## Reference files
+
+| File | Holds | Read it when |
+|---|---|---|
+| references/bridge-pieces.md | The Pieces section: mcp.ts, endpoints.ts, foundryBridge.ts, src/bridge/foundryBridge.js | changing MCP, router, endpoint registry, health or the bridge handshake |
+| references/result-enforcer-handles.md | The Result enforcer, handles and read_handle section | changing result budgets, handles or read_handle |
