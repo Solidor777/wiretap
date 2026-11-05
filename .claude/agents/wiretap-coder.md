@@ -36,3 +36,8 @@ You implement one well-specified task in the Wiretap Foundry VTT module.
 - **Spec coverage:** each requirement → where it is implemented
 - **Skills/docs updated:** list
 - **Concerns / deviations / open questions:** list (empty if none)
+
+**Report handoff:** your final message IS your report: the last thing you emit is returned to whoever dispatched you
+(the controller / main session) as your result, and the controller acts on it directly. Do not hand it off with
+`SendMessage` or address it to anyone; just emit it as your final assistant message. Never end your turn on a tool
+call: if your last action was a tool use, you have not reported yet and are not done.

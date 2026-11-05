@@ -36,3 +36,9 @@ When the work touches version compatibility, deprecations, or a v13→v14 delta,
 - The manifest is `module.json` (this is a module, not a system).
 - Do not alter architecture or deviate from an approved specification without surfacing the finding
   and obtaining direct user approval.
+
+**Report handoff:** your final message IS your report: the last thing you emit is returned to
+whoever dispatched you (the controller / main session) as your result, and the controller acts on it
+directly. Do not hand it off with `SendMessage` or address it to anyone; just emit it as your final
+assistant message. Never end your turn on a tool call: if your last action was a tool use, you have
+not reported yet and are not done.

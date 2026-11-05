@@ -97,13 +97,15 @@
 |---|---|---|
 | `foundry-module-dev` | all | Client `.js` / `.svelte` implementation |
 | `wiretap-coder` | all | Everything else: `server/`, `shared/`, tests, build config; TDD; returns a structured report |
-| `wiretap-spec-reviewer` | Read, Grep, Glob, Bash (tests only) | Spec/plan completeness: nothing skipped, downgraded, or extra |
-| `wiretap-code-reviewer` | Read, Grep, Glob | Bugs, security, conventions, simplification |
+| `wiretap-spec-reviewer` | Read, Grep, Glob, Bash (tests only), Skill, Write (review file only) | Spec/plan completeness: nothing skipped, downgraded, or extra |
+| `wiretap-code-reviewer` | Read, Grep, Glob, Skill, Write (review file only) | Bugs, security, conventions, simplification |
 
 - **Implementation:** from `superpowers:subagent-driven-development` / `executing-plans` (on a Fable-class model, `mainline-plan-execution`), dispatch the coder matching the work: `foundry-module-dev` for client UI code, `wiretap-coder` otherwise. Invoke `dispatching-sdd-agents` before the first dispatch; these agents are the implementers and reviewers for every task, and its tiers choose only the model and effort they run at.
 - **Per-task review:** after each task run `wiretap-spec-reviewer`, then `wiretap-code-reviewer`. Fix findings through the coder and re-review, three fix rounds at most per task; if round 3's re-review still leaves findings open, stop and report to the user with a diagnosis.
+- **Escalation:** a coder that reports BLOCKED, or DONE_WITH_CONCERNS citing complexity, is re-dispatched one rung up the `dispatching-sdd-agents` ladder (Sonnet high, then Opus high). If Opus high blocks too, report to the user.
+- **Final review:** one whole-branch review by `sdd-final-reviewer` after the last task. It starts without any `CLAUDE.md`, so its dispatch carries the project rules that apply.
 - **High-risk work** (security boundary, process spawn, protocol/API changes): use `buddy-checking` with the two wiretap reviewers as its reviewers. The ordinary single-review path is `superpowers:requesting-code-review` with `wiretap-code-reviewer`.
-- Reviewers never edit. Findings go back to the coder.
+- Reviewers never edit. Findings go back to the coder. A reviewer can write one review file and nothing else: name the file in the dispatch when a durable copy is wanted. Its final message is still the whole report.
 
 ## Code Style
 

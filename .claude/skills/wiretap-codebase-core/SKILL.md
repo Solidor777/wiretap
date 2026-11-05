@@ -88,4 +88,5 @@ Repo root holds config and entry files only; launcher scripts are in `scripts/`.
 ## Agents
 
 `wiretap-coder` (implementation), `wiretap-spec-reviewer` (spec/plan completeness), `wiretap-code-reviewer` (quality
-and security). `foundry-module-dev` remains the specialist for `.js` / `.svelte` client work. Reviewers are read-only.
+and security). `foundry-module-dev` remains the specialist for `.js` / `.svelte` client work. Reviewers never
+edit; each can write the one review file its dispatch names.
