@@ -11,10 +11,11 @@
  * 4. The Wiretap setting rule: a `Setting` whose key lies in the `wiretap.` namespace is refused, whatever the gates
  * (`denyWiretapSettingWrite`); a `Setting` write with no resolvable key is refused.
  * 5. The category gates, judged from THIS client's world settings at call time (`requireGate`): User documents,
- * Setting documents, the module configuration setting, base64 data URIs, ownership changes, compendium writes and,
- * for a call that is not a `dryRun`, deleting (`allowDelete`) and replacing (`allowReplace`) documents. The risky
- * operations come from the `operations` the caller names and from the operators of the cleaned `targets`, judged by
- * the schema field they land on (`writeFields.js`).
+ * Setting documents, the module configuration setting, base64 data URIs, ownership changes, macro code
+ * (`allowMacroExecution`: a Macro `command`, a Macro `type` set to `script`, an Adventure's stored `macros`, all code
+ * a user later runs), compendium writes and, for a call that is not a `dryRun`, deleting (`allowDelete`) and replacing
+ * (`allowReplace`) documents. The risky operations come from the `operations` the caller names and from the operators
+ * of the cleaned `targets`, judged by the schema field they land on (`writeFields.js`).
  *
  * The first refusal is thrown as a `GATE_DENIED` script error whose text names the rule or the gate.
  */
@@ -57,6 +58,53 @@ const MODULE_CONFIGURATION_KEY = 'core.moduleconfiguration';
  * @type {string}
  */
 const OWNERSHIP_KEY = 'ownership';
+
+/**
+ * The Macro type whose `command` runs as code; a `chat` Macro sends its command as a chat message.
+ * @type {string}
+ */
+const SCRIPT_MACRO_TYPE = 'script';
+
+/**
+ * Tell whether any of some objects holds a top-level key whose first segment, read by `keyNames`, is a name. A dotted
+ * key counts by its first segment because Foundry expands it into that field.
+ * @param {Record<string, unknown>[]} objects - Data objects, patch objects or cleaned changes.
+ * @param {string} name - The top-level field a key must write, such as `command`.
+ * @returns {boolean} True when a key writes the field.
+ */
+function writesField(objects, name) {
+   return objects.some((object) => Object.keys(object).some((key) => keyNames(key)[0] === name));
+}
+
+/**
+ * Tell whether a write sets macro code, which runs when a user executes the macro: a Macro `command` (any value and
+ * any op), a Macro `type` changed to `script` in the cleaned changes (stored text becomes code; a deleted `type`
+ * resets to `chat`), or an Adventure's stored `macros` (importing the adventure creates those Macros).
+ * @param {WriteIntent} intent - What the call is about to write.
+ * @returns {boolean} True when the write needs `allowMacroExecution`.
+ */
+function writesMacroCode(intent) {
+   /** @type {Record<string, unknown>[]} The raw values and the cleaned changes of every target. */
+   const objects = [
+      ...(intent.values ?? []),
+      ...(intent.targets ?? []).map((target) => target.changes),
+   ];
+   if (intent.documentName === 'Adventure') {
+      return writesField(objects, 'macros');
+   }
+   if (intent.documentName !== 'Macro') {
+      return false;
+   }
+   return (
+      writesField(objects, 'command') ||
+      (intent.targets ?? []).some((target) =>
+         Object.entries(target.changes).some(
+            ([key, value]) =>
+               keyNames(key)[0] === 'type' &&
+               foundry.data.operators.DataFieldOperator.get(value) === SCRIPT_MACRO_TYPE,
+         ))
+   );
+}
 
 /**
  * Tell whether the names of a key or path hold the reserved flag scope: `flags` followed by `wiretap`.
@@ -224,7 +272,7 @@ function requireOpen(name) {
  * @param {WriteIntent} intent - What the call is about to write.
  * @returns {void}
  * @throws {ScriptError} `GATE_DENIED`: an operator spelling, a password field, the reserved flag scope, a Wiretap
- * setting, or a closed gate (a category gate, `allowDelete` or `allowReplace`).
+ * setting, or a closed gate (a category gate, `allowMacroExecution` for macro code, `allowDelete` or `allowReplace`).
  */
 export function guardWrite(intent) {
    /** @type {string} The class written. */
@@ -303,6 +351,9 @@ export function guardWrite(intent) {
    }
    if (scan.ownership) {
       requireOpen('allowOwnershipWrites');
+   }
+   if (writesMacroCode(intent)) {
+      requireOpen('allowMacroExecution');
    }
    if (intent.inPack === true) {
       requireOpen('allowCompendiumWrites');

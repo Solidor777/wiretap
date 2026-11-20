@@ -71,7 +71,12 @@ function entry(type, defaultValue, unlocks) {
  * @type {Readonly<Record<string, GateEntry>>}
  */
 export const GATES = Object.freeze({
-   allowMacroExecution: entry('boolean', false, 'Running macros through execute_macro (arbitrary code).'),
+   allowMacroExecution: entry(
+      'boolean',
+      false,
+      'Running macros through execute_macro, and writing macro code: a Macro command, a Macro type set to script, an '
+         + 'Adventure\'s stored macros (arbitrary code).',
+   ),
    allowUserWrites: entry('boolean', false, 'Creating, updating and deleting User documents, roles included.'),
    allowSettingWrites: entry('boolean', false, 'Writing Setting documents and world or user settings.'),
    allowFileUpload: entry('boolean', false, 'Base64 data in file-path fields and the file upload tool.'),

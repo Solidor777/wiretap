@@ -430,5 +430,14 @@ export function buildSchema(documentName, classes, children) {
    if (documentName === 'Token') {
       fields.delta = new EmbeddedDocumentField(classes.ActorDelta);
    }
+   if (documentName === 'Macro') {
+      // The code a script Macro runs (`common/documents/macro.mjs`).
+      fields.command = new DataField();
+   }
+   if (documentName === 'Adventure') {
+      // Foundry's `macros` is a SetField of Macro data models (`common/documents/adventure.mjs`); an array of the same
+      // element stands in for the set.
+      fields.macros = new ArrayField(new EmbeddedDataField(classes.Macro));
+   }
    return new SchemaField(fields);
 }

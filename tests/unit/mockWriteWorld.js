@@ -148,6 +148,19 @@ export const SCHEMA_KEYS = {
 };
 
 /**
+ * The initial values an import gives the fields its data omits, per class, as the schema's `initial` options do. A
+ * Macro's `type` starts as `chat` and its `command` as empty text (`common/documents/macro.mjs`), so a replacement
+ * always holds a command.
+ * @type {Record<string, Record<string, unknown>>}
+ */
+export const IMPORT_INITIALS = {
+   Macro: {
+      type: 'chat',
+      command: '',
+   },
+};
+
+/**
  * Clean data the way the database backend does before a creation: expand dotted keys, then prune the top-level keys
  * the class schema does not hold.
  * @param {string} documentName - The document class.
@@ -307,6 +320,7 @@ export function installWriteWorld(fn, options = {}) {
                new MockDoc(
                   cleanFor(documentName, {
                      ...importDefaults,
+                     ...IMPORT_INITIALS[documentName],
                      ...source,
                   }),
                   context,
@@ -530,6 +544,8 @@ export function installWriteWorld(fn, options = {}) {
       'JournalEntry',
       'Token',
       'ActorDelta',
+      'Macro',
+      'Adventure',
    ];
    /** @type {Record<string, Record<string, string>>} The embedded collections of every class but the Actor. */
    const childrenOf = {
@@ -557,6 +573,7 @@ export function installWriteWorld(fn, options = {}) {
          'Setting',
          'User',
          'JournalEntry',
+         'Macro',
       ],
       EMBEDDED_DOCUMENT_TYPES: [
          'ActiveEffect',
@@ -571,6 +588,8 @@ export function installWriteWorld(fn, options = {}) {
          'User',
          'JournalEntry',
          'Scene',
+         'Macro',
+         'Adventure',
       ],
       USER_ROLES: {
          NONE: 0,
