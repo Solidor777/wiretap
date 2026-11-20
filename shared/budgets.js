@@ -167,6 +167,12 @@ export const BUDGETS = table([
    budget('WRITE_DOCUMENTS_MAX', 50, 'count', BUDGET_SEVERITY.HARD),
    // Total JSON text of the data one create or update call carries; a larger call is refused before it is parsed.
    budget('WRITE_DATA_MAX_BYTES', 200000, 'bytes', BUDGET_SEVERITY.HARD),
+   // The result of `open_sheet` or `close_sheet`.
+   budget('SHEET_RESULT_MAX_BYTES', 128, 'bytes', BUDGET_SEVERITY.HARD),
+   // The result of `roll`.
+   budget('ROLL_RESULT_MAX_BYTES', 512, 'bytes', BUDGET_SEVERITY.HARD),
+   // The result of `draw_table` (1 KB).
+   budget('DRAW_RESULT_MAX_BYTES', 1000, 'bytes', BUDGET_SEVERITY.HARD),
 ]);
 
 /**

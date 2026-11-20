@@ -296,6 +296,24 @@ const EXPECTED = [
       'bytes',
       'hard',
    ],
+   [
+      'SHEET_RESULT_MAX_BYTES',
+      128,
+      'bytes',
+      'hard',
+   ],
+   [
+      'ROLL_RESULT_MAX_BYTES',
+      512,
+      'bytes',
+      'hard',
+   ],
+   [
+      'DRAW_RESULT_MAX_BYTES',
+      1000,
+      'bytes',
+      'hard',
+   ],
 ];
 
 describe('getBudget', () => {
