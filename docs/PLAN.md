@@ -281,8 +281,8 @@ Budgets are the result cap in serialized bytes. "Replaces" counts the calls a ge
 | `get_document(uuid, paths? \| fields? \| mode?)` | Compact view by default; path slices (§2.8); full export | api | 2 KB compact; hard cap otherwise | — | — |
 | `update_documents(updates[], dryRun?)` | Path-scoped writes incl. embedded paths and `op` (§2.8) | api | 256 B ack per document | per category | read + update + re-read |
 | `delete_documents(uuids[], dryRun?)` | Document deletion through Foundry document calls (D12) | api | 256 B ack; `dryRun` lists names | `allowDelete` (D12a) | — |
-| `open_sheet(uuid, userId?)` | Render a sheet on the agent endpoint, or on a live user's client via the `wiretap.openSheet` query | dom | 128 B `{ok, appId}` | — | — |
-| `close_sheet(uuid)` | Close it (READ `client/applications/api/application.mjs:950` `close`) | dom | 128 B | — | — |
+| `open_sheet(uuid, userId?)` | Render a sheet on the client of the connected user named by `userId` via the `wiretap.openSheet` query, else on the client running the call; never broadcast | api | 128 B `{ok, appId}` | — | — |
+| `close_sheet(uuid, userId?)` | Close it the same way, via the `wiretap.closeSheet` query (READ `client/applications/api/application.mjs:950` `close`) | api | 128 B | — | — |
 | `element_size(uuid, selector)` | `{x, y, w, h, scrollW, scrollH, visible}` of a selector inside the rendered sheet (`element` getter READ `application.mjs:327`) | dom | 256 B | — | screenshot |
 | `sheet_layout(uuid, depth=2, maxNodes=40)` | Compact tree `[selector, w, h, overflow]` of the sheet parts | dom | 4 KB | — | screenshot + N sizes |
 | `screenshot(uuid, selector?, maxSide=800)` | PNG, explicit last resort; default ≤ 800×600, hard max 1280 px longest side, one image per call | dom + runner | 1 image | — | — |
@@ -438,7 +438,7 @@ World-scope settings, `restricted: true` (GM only), `config: true`, all default 
 
 | Gate | Unlocks | Notes |
 |---|---|---|
-| `allowMacroExecution` | `execute_macro`; any write that sets a Macro's `command` | Arbitrary code; see the known limit below |
+| `allowMacroExecution` | `execute_macro`; any write that sets a Macro's `command`, changes a Macro's `type` to script, or writes an Adventure's stored `macros` | Arbitrary code; see the known limit below |
 | `allowDelete` | `delete_documents` | Irreversible; `dryRun` previews; Claude Code `ask` rules are a second layer |
 | `allowReplace` | `replace_document` | Overwrites the document; omitted fields reset to defaults |
 | `allowUndo` | `undo_last` | Replays inverse operations; each inverse also passes its original category gate |
@@ -589,14 +589,18 @@ the tool description); irreversible deletes (D12a, `dryRun`).
 
 **Goal:**
 
-- `open_sheet(uuid, userId?)` via the `wiretap.openSheet` user query (human clients) or a local render (agent
-  endpoint). The query handler checks that the sender is a GM and that the target has OBSERVER.
-- `close_sheet(uuid)`.
-- `roll(formula)`.
-- `draw_table(uuid)`.
-- `execute_macro` (gate `allowMacroExecution`).
+- `open_sheet(uuid, userId?)`, a normal (`api`) tool: with `userId`, via the `wiretap.openSheet` user query on that
+  connected user's client; without it, a local render on the client running the call. It never broadcasts. The query
+  handler checks that the sender is a GM and that the target has OBSERVER.
+- `close_sheet(uuid, userId?)`, the same way: with `userId`, via the `wiretap.closeSheet` user query on that user's
+  client (the handler checks that the sender is a GM); without it, on the client running the call.
+- `roll(formula, toChat=false)`.
+- `draw_table(uuid, toChat?)`, `toChat` default false.
+- `execute_macro(uuid, actorUuid?, tokenUuid?)` (gate `allowMacroExecution`): `actorUuid` and `tokenUuid` name the
+  Actor and the Token (on the scene the executing client views) the macro acts on.
 - A write that sets a Macro's `command` (create, update, replace or batch) also needs `allowMacroExecution`: the
-  command is code that runs when a user executes the macro.
+  command is code that runs when a user executes the macro. So do an update that changes a Macro's `type` to script
+  (stored text becomes code) and a write of an Adventure's stored `macros` (importing it creates them).
 
 `undo_last` is built once, in M17. All as M14 scripts. `screenshot` is in M15b (it needs the agent runner). **Depends on:** M2, M5, M14. **Tests:** unit
 (query handler checks); integration; e2e with a GM tab and a `wtx-player` context: the sheet opens on the player
@@ -774,8 +778,7 @@ active GM and runs `activeGM` automation headless (D4).
 
 ### M15b — Script library: DOM scripts
 
-**Goal:** the `dom` rows of §2.9: `element_size`, `sheet_layout`, `inspect_sheet`, `screenshot` (and `open_sheet` /
-`close_sheet` on the agent endpoint). **Depends on:** M6, M9, M14. E9 input: offscreen sheets render headless with
+**Goal:** the `dom` rows of §2.9: `element_size`, `sheet_layout`, `inspect_sheet`, `screenshot`. **Depends on:** M6, M9, M14. E9 input: offscreen sheets render headless with
 `core.noCanvas` (actor 850×925 in 50 ms on the shell, item 700×650); the depth-2 `sheet_layout` prototype (401–441 B)
 reached only the window header and content wrappers, so this milestone measures depths 3–6 on titan sheets and sets
 the default depth to the shallowest that reaches the sheet's own parts within 4 KB. **In:** `ctx.dom`
