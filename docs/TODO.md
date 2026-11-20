@@ -59,8 +59,11 @@
       exists; the result enforcer checks only the longest side (1280 px), the 1,000,000-character data size and the
       PNG type, never the area
 
-- [ ] Set `destructiveHint` for scripts that delete: a script definition has no field that declares a script
-      destructive, so the sidecar sets only `readOnlyHint`; add the field when `delete_documents` is built
+- [ ] Make `destructiveHint` accurate for additive scripts: a definition has no field that declares a mutating script
+      non-destructive, so the sidecar sets only `readOnlyHint` (`server/mcp.ts`) and every mutating script, including
+      `create_documents`, keeps the MCP default `destructiveHint: true`. That is right for `delete_documents`,
+      `replace_document` and `batch`; adding a definition field (shared contract, both validators, registry signature)
+      would let `create_documents` say false
 - [ ] Plugin and agent-saved script routes: `validateScriptDefinition` already applies the 64-character
       `<moduleId>__<skill>` and `agent__<name>` rules but refuses both sources as not supported until their routes exist
       (docs/PLAN.md M7, M16)
@@ -115,7 +118,6 @@
 ## Carried-over cleanups
 
 - [x] Sidecar: kill a running PTY on server shutdown — `dispose()` on the manager + SIGINT/SIGTERM teardown in `index.ts` (Windows console-window-close / CTRL_CLOSE still uncatchable by Node)
-- [ ] Sidecar `index.ts`: log "listening" on the `'listening'` event, not synchronously after start
 - [ ] Status badge accessibility: add `role="status"` / `aria-live="polite"` (fits #3 UX polish)
 - [ ] Optional shared-secret handshake for the sidecar socket (defense in depth)
 - [ ] Configurable terminal working directory (`terminalCwd`)
@@ -138,18 +140,41 @@
 
 - [ ] A script that declares a `gate` is gated by the `callTool` dispatcher (`requireGate`, ack `GATE_DENIED`). Each
       core operation in `ctx.core` that touches a gated category must also call `requireGate` itself, because a script
-      can call a core operation outside the gate of its own category. The write operations do (`guardWrite`); any
-      further gated core operation (for example `replace_document`, `batch`) must too.
-- [ ] `guardWrite` applies `denyWiretapSettingWrite` to create, update and delete of Settings. The remaining Setting
-      write paths (`replace_document`, `batch`, settings skills) must go through `guardWrite` as they land, each with a
-      test that it refuses `wiretap.*`.
+      can call a core operation outside the gate of its own category. The write operations, `replace_document` and
+      `batch` do (`guardWrite`); any further gated core operation must too.
+- [ ] `guardWrite` applies `denyWiretapSettingWrite` to create, update, replace, batch and delete of Settings. A
+      further Setting write path (a settings skill) must go through `guardWrite` as it lands, with a test that it
+      refuses `wiretap.*`.
 - [ ] The argument-schema subset has no free-form object node, so `create_documents` and `update_documents` take JSON
       text for data and values. A bounded free-form node (depth and byte limits on both validators, parity fixtures)
       would remove the text round trip; it changes the shared schema contract on both sides.
 - [ ] Folder types with no world collection (`ActiveEffect`, `Adventure`) can be created but not deleted (see
       `docs/POST_WORK_FINDINGS.md`); `create_documents` does not refuse them. Decide whether it should.
-- [ ] `delete_documents` is irreversible and has no Wiretap gate; the confirmation is the Claude Code ask rule in the
-      README. Consider a one-line check in the Wiretap skill or a `setup` helper that writes the rule.
+- [ ] Idempotency covers `create_documents` only; `batch` and `replace_document` take no key (a replace repeated with the
+      same data is naturally idempotent). Decide whether `batch` creates need one.
+- [ ] `replace_document` supports primary document classes only; replacing an embedded document goes through
+      `update_documents` paths. Decide whether embedded replace is wanted.
+- [ ] `batch` has no `pack` or `keepId` on creates and cannot refer to a document an earlier operation creates; the flat
+      schema is forced by the 800 B definition and depth 4 limits.
+- [ ] `batch` entries are strict through the unlisted `strictNested` flag, but `required` on entries, an `op` enum and
+      `maxLength` bounds are not in the schema: they would list at 915 B plus about 70 B against the 800 B definition
+      limit (MEASURED). The handler checks them. Decide whether to raise `DEFINITION_MAX_BYTES`.
+- [ ] `batch` cannot re-check compendium pack operations after a failure (the ghost and phantom repair reads the world
+      database only).
+- [ ] The idempotency record stamp (`u`, `d`) keeps mistakes out; two GM clients creating with one key at once are not
+      coordinated (the lock is per client). Decide whether a cross-client guard is wanted.
+- [ ] `delete_documents` is irreversible; besides the `allowDelete` gate the confirmation is the Claude Code ask rule in
+      the README. Consider a one-line check in the Wiretap skill or a `setup` helper that writes the rule.
 - [ ] `list_endpoints` must not serialize `Endpoint` objects directly: gate state is shown only as one compact line.
+- [ ] owner: decide whether these writes need a gate; none is gated now. An author or user field a caller can set to
+      any user id: ChatMessage `author`, Macro `author`, Drawing `author`, Note author, `Setting.user`,
+      `FogExploration.user`.
+- [ ] owner: decide whether `_stats.createdTime` should be writable. The idempotency retention reads it, so a caller
+      who rewrites it can make a record look expired or fresh.
+- [ ] owner: decide whether `folder` and `sort` need a gate; both are writable through any path or data.
+- [ ] Integration tests wait for the GM identify and for an invocation with polls capped at 1,000 ms
+      (`tests/integration/serverModes.test.js` and the other sidecar tests); under a CPU overload far beyond a normal run
+      (four concurrent vitest runs on 24 cores) they expire. Make them wait on the event itself, or decide that the
+      overload case is out of scope.
 
 - [ ] Settings menu beyond serverUrl/terminalCommand, keybindings, fonts, compendium packs

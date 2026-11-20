@@ -18,6 +18,6 @@ the current code (the `wiretap-*` skills under `.claude/skills/` describe the cu
 | Path | Contents |
 |---|---|
 | [`CLOSED_BUGS.md`](CLOSED_BUGS.md) | Fixed bugs with their cause, fix and measurements. |
-| [`specs/`](specs/) | Design specs, one per feature (dated `YYYY-MM-DD-wiretap-<topic>-design.md`); the source for the matching plan. |
+| [`specs/`](specs/) | Design specs, one per feature (dated `YYYY-MM-DD-wiretap-<topic>-design.md`); the source for the matching plan. Also `2026-10-completed-milestone-specs.md` (specifications of completed and dropped milestones, moved out of PLAN.md) and `2026-10-d21-agent-script-permissions-analysis.md` (D21 analysis). |
 | [`plans/`](plans/) | Step-by-step implementation plans written from the specs (dated `YYYY-MM-DD-wiretap-<topic>.md`). |
-| [`experiments/`](experiments/) | Measured results of experiments and live checks: `2026-10-m0-results.md` (M0, Foundry behaviour), `2026-10-m3-results.md` (M3, live MCP sessions with `claude`), `2026-10-m4-keyfields.md` (M4, provenance of the compact-view key-field lists). |
+| [`experiments/`](experiments/) | Measured results of experiments and live checks: `2026-10-m0-results.md` (M0, Foundry behaviour), `2026-10-m3-results.md` (M3, live MCP sessions with `claude`), `2026-10-m4-keyfields.md` (M4, provenance of the compact-view key-field lists), `2026-10-context-cost-model.md` (context cost measurements behind the budgets), `2026-10-m0-raw-socket-boundary.md` (why raw-socket writes are not used). |

@@ -181,17 +181,49 @@ method `405`.
   operators, wildcards and conflicting paths are refused with their `PATH_*` code, and it returns `{uuid, changed}` per
   document (`changed` is empty when Foundry applied nothing). `delete_documents` takes `uuids` (1 to 50) and `dryRun`;
   a dry run returns `{dryRun, rows: [uuid, name, type][], total, cut?}` including embedded cascades within 8,000 bytes,
-  and a compendium pack itself cannot be deleted. Deletion is irreversible and has no Wiretap gate: put
-  `"ask": ["mcp__wiretap__delete_documents"]` in the Claude Code permissions to confirm each call. Every call is
+  and a compendium pack itself cannot be deleted. Deletion is irreversible and needs the `allowDelete` gate
+  (closed by default); put `"ask": ["mcp__wiretap__delete_documents"]` in the Claude Code permissions to confirm each
+  call as well. Every call is
   guarded as a whole before the first write: a User write needs `allowUserWrites` (password fields are refused
   whatever the gate, and the signed-in user and the last game master cannot be deleted), a Setting write needs
   `allowSettingWrites` and never a `wiretap.*` key (a by-id write is judged by the key of the existing document), the
   module configuration setting also needs `allowModuleConfigWrites`, a base64 data URI needs `allowFileUpload`, an
-  `ownership` field or path needs `allowOwnershipWrites`, and a pack or a document inside one needs
-  `allowCompendiumWrites`. Foundry validates the input without writing (`DataModelValidationError.getAllFailures()`);
+  `ownership` field or path needs `allowOwnershipWrites`, a pack or a document inside one needs
+  `allowCompendiumWrites`, deleting documents needs `allowDelete` (so does any update or replace that removes embedded documents, such as a
+  `replace_document` whose data leaves them out or an update with `op` `replace` or `delete` on an embedded field) and
+  replacing a document needs `allowReplace` (a
+  `dryRun` preview needs neither, and a replace preview reports `dropped`). `keepId` is refused when the `_id` exists. Foundry validates the input without writing (`DataModelValidationError.getAllFailures()`);
   a failure returns `VALIDATION_FAILED` with at most 10 failures and their true count in 512 bytes, and nothing is
   written. `dryRun` validates and returns the would-be result and calls no create, update or delete API. A write is
   not atomic across documents once Foundry starts it; a hook that cancels part of a call reports `WRITE_NOT_APPLIED`.
+- **Replacing, batching, `actAs`, idempotency and handle inputs.** An argument a tool does not declare (for example a
+  misspelled `dryrun`) is refused with `ARGS_INVALID` instead of being ignored. `replace_document` takes `uuid` and `data`
+  (one JSON object text, the shape of a full read) plus `dryRun`, `actAs` and `paths`. It follows Foundry's JSON import
+  (`Document.fromImport`, then `update(data, { diff: false, recursive: false })`) but fires the `preUpdate*` and
+  `update*` hooks. Every top-level field the data omits is reset to its default (omitted `items` or `effects` are
+  emptied, omitted `flags` wipes other modules' flags), so send a full read with your change in it, and use
+  `update_documents` for a sparse change. `_id`, `sort`, `ownership` and `folder` are preserved, the module's own
+  `flags.wiretap` records are carried over, Users are refused, and only primary document classes are handled. `batch`
+  takes `creates` (`{documentName, data, parentUuid?}`), `updates` (flat patches as in `update_documents`), `deletes`,
+  `dryRun` and `actAs`, and sends them to `foundry.documents.modifyBatch` in that order. Foundry validates every
+  operation first and writes nothing when one fails; it then applies them one by one and stops at the first failure, so
+  a batch is NOT atomic and the earlier operations stay applied. Operations Foundry drops (an update that changes nothing,
+  or one a hook cancels) report `changed: []`; a shortfall is `WRITE_NOT_APPLIED` with how many operations were applied,
+  unchanged, cancelled, failed or not written. Every operation passes the same write guard as the single tools, `_id` is
+  never a writable path, and the ack of a 50-document batch is at most 4,000 bytes. `create_documents` accepts
+  `idempotencyKey` (1 to 64 of `A-Z a-z 0-9 . _ : -`): the key is stored as the module flag `flags.wiretap.idem` on each
+  created document, a repeat of the same request within one day returns the first call's rows and creates nothing, and
+  the same key with other data (or after one of its documents was deleted) is `IDEMPOTENCY_CONFLICT`. A collection of
+  more than 20,000 documents is refused with `IDEMPOTENCY_UNAVAILABLE`. The whole `flags.wiretap` scope, and any write
+  that would erase `flags`, is refused (`GATE_DENIED`). `actAs` (a user id) on every write tool is best-effort and
+  advisory: after the gates have been judged, Foundry is asked whether that user could make the same change
+  (`Document#canUserModify` with the action `create`, `update` or `delete`); if not, the call is refused with
+  `ACT_AS_DENIED` and nothing is written. The write still runs as the game master's client, so `actAs` can only add a
+  refusal. A `data` text of `create_documents` or `replace_document` may be `handle:<id>` of a stored result (the JSON
+  text of one document, for example a `get_document` full read from the same session): the sidecar replaces it with the
+  stored text before the call reaches the Foundry client, so the client's gates and write guard judge the resolved
+  content. Each text is at most 100,000 bytes and all together 200,000; an unknown, expired or foreign handle is
+  `HANDLE_NOT_FOUND`, a larger one `HANDLE_TOO_LARGE`, and a stored text that is not one document `HANDLE_NOT_DOCUMENT`.
 - **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
   alone does not count). At most 32 sessions are held; an `initialize` beyond that is refused with `503` and a
   `Retry-After` header and no held session is ended, so one client cannot push another's session out. The idle sweep (one
@@ -208,7 +240,8 @@ method `405`.
 `skills/wiretap/SKILL.md` is a short user-facing skill that tells an agent which Wiretap tools exist
 (`mcp__wiretap__list_document_types`, `mcp__wiretap__get_document`, `mcp__wiretap__search_documents`,
 `mcp__wiretap__describe_schema`, `mcp__wiretap__create_documents`, `mcp__wiretap__update_documents`,
-`mcp__wiretap__delete_documents`, `mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
+`mcp__wiretap__delete_documents`, `mcp__wiretap__replace_document`, `mcp__wiretap__batch`,
+`mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
 copy the `skills/wiretap` directory into the `.claude/skills/` directory of the project that runs `claude` (a skill for
 one project), or into `~/.claude/skills/` (a skill for every project), so that the file is
 `.claude/skills/wiretap/SKILL.md`, then start a new `claude` session. A symbolic link to the directory works the same
@@ -338,9 +371,9 @@ entry; a disconnect removes it. Limits: `userId` is at most 64 bytes and `userNa
 
 **Risk gates.** A gate is a world-scope GM setting that unlocks a class of dangerous operation. The registry is
 `shared/gates.js` (`GATES`): the boolean gates `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`,
-`allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites` and `allowAgentScripts`
-(all default `false`) and `allowedPluginModules` (an array of module ids, default empty). There is no delete gate and no
-undo gate. The client reports its gate values as a snapshot object with exactly those keys: in the identify's optional
+`allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites`, `allowDelete`,
+`allowReplace` and `allowAgentScripts` (all default `false`) and `allowedPluginModules` (an array of module ids, default
+empty). There is no undo gate. The client reports its gate values as a snapshot object with exactly those keys: in the identify's optional
 `gateState`, and again by emitting `bridge:gateState` with the snapshot as the payload (ack callback optional) whenever
 a gate changes. The sidecar sanitizes every snapshot: only the registry names are read, each only as an own property and
 only with its registry type (booleans; `allowedPluginModules` is at most 64 entries, each a Foundry module id of 1 to 64
@@ -402,6 +435,8 @@ default; each unlocks a class of dangerous operation for agents:
 | `allowOwnershipWrites` | Changing the ownership of documents |
 | `allowCompendiumWrites` | Writing compendium packs and their documents |
 | `allowModuleConfigWrites` | Writing the module configuration (enables and disables modules) |
+| `allowDelete` | Deleting documents with `delete_documents` or the deletes of a `batch` (previews need no gate) |
+| `allowReplace` | Replacing whole documents with `replace_document` (previews need no gate) |
 | `allowAgentScripts` | Saving, disabling and running agent-saved scripts (arbitrary code) |
 | `allowedPluginModules` | Plugin skills and scripts of the module ids listed (comma-separated; empty by default) |
 
