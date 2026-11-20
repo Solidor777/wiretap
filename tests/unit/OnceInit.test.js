@@ -21,7 +21,10 @@ describe('onceInit settings registration', () => {
       vi.mocked(reidentifyBridge).mockClear();
       registered = new Map();
       globalThis.__WIRETAP_PROBE__ = false;
-      globalThis.CONFIG = { ui: {} };
+      globalThis.CONFIG = {
+         ui: {},
+         queries: {},
+      };
       globalThis.foundry.applications = {
          sidebar: {
             AbstractSidebarTab: class {},
@@ -67,6 +70,16 @@ describe('onceInit settings registration', () => {
       onceInit();
       registered.get('endpointKind').onChange('agent');
       expect(reidentifyBridge).toHaveBeenCalledTimes(1);
+   });
+
+   it('registers both sheet user queries for every user', () => {
+      globalThis.game.user = {
+         id: 'MOCKPLAYER000001',
+         isGM: false,
+      };
+      onceInit();
+      expect(CONFIG.queries['wiretap.openSheet']).toBeTypeOf('function');
+      expect(CONFIG.queries['wiretap.closeSheet']).toBeTypeOf('function');
    });
 
    it('exposes api.bridge.identified reflecting the bridge state', () => {

@@ -1,6 +1,7 @@
 import { bridgeState, reidentifyBridge } from '~/bridge/foundryBridge.js';
 import WiretapSidebarTab from '~/apps/WiretapSidebarTab.js';
 import { registerGateSettings } from '~/settings/gates.js';
+import { registerSheetQueries } from '~/bridge/sheetQuery.js';
 import { TERMINAL_THEME_CHOICES, terminalTheme } from '~/components/terminalThemes.svelte.js';
 import {
    terminalFontSize,
@@ -94,6 +95,10 @@ export default function onceInit() {
 
    // The risk gates: one GM-only world setting per entry of the shared GATES registry, all closed by default.
    registerGateSettings();
+
+   // The sheet user queries, on every client: a player's client must be able to receive them. Each handler refuses a
+   // sender who is not a GM.
+   registerSheetQueries();
 
    // Whether this client is a person's tab or an agent-runner browser; sent in the bridge identify. Not shown in the
    // settings UI: the agent runner sets it programmatically.
