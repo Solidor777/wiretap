@@ -208,6 +208,12 @@ export function createPieceChannel(socket) {
     * @throws {ScriptError} `PIECE_REFUSED` on a refusal; `SCRIPT_TIMEOUT` on a timeout or disconnect.
     */
    const emitPiece = async (piece, waitMs) => {
+      // Socket.IO buffers an emit made while disconnected and keeps its ack timer running, so the wait would last the
+      // whole `waitMs`, and the buffered piece would go to the next connection, which expects no pieces
+      // (`emit` and `_registerAckCallback` in socket.io-client `build/esm/socket.js`).
+      if (!socket.connected) {
+         throw new ScriptError('SCRIPT_TIMEOUT', 'The sidecar is disconnected; the backup piece was not sent.');
+      }
       /** @type {unknown} The sidecar's ack. */
       let answer;
       try {

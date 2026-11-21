@@ -15,8 +15,9 @@ import { BACKUP_PIECE_MAX_BYTES } from '$shared/backup.js';
 
 /**
  * Build a fake Socket.IO socket that records `timeout(ms).emitWithAck` calls and exposes its listeners.
- * @returns {{ emitted: RecordedEmit[], listeners: Record<string, Function[]>, on: Function, timeout: Function,
- * fire: (event: string, ...args: unknown[]) => void }} A socket whose emits wait until the test settles them.
+ * @returns {{ connected: boolean, emitted: RecordedEmit[], listeners: Record<string, Function[]>, on: Function,
+ * timeout: Function, fire: (event: string, ...args: unknown[]) => void }} A connected socket whose emits wait until
+ * the test settles them.
  */
 function makeFakeSocket() {
    /** @type {RecordedEmit[]} Every emit, in order. */
@@ -24,6 +25,7 @@ function makeFakeSocket() {
    /** @type {Record<string, Function[]>} Listeners keyed by event. */
    const listeners = {};
    return {
+      connected: true,
       emitted,
       listeners,
       on(event, fn) {
@@ -125,6 +127,23 @@ describe('piece channel send', () => {
       expect(timeout).toBeInstanceOf(ScriptError);
       expect(timeout.code).toBe('SCRIPT_TIMEOUT');
       expect(timeout.message).toBe('The sidecar did not confirm a backup piece in time.');
+   });
+
+   it('send and end fail at once with nothing emitted while the socket is disconnected', async () => {
+      const socket = makeFakeSocket();
+      socket.connected = false;
+      const channel = createPieceChannel(socket);
+      const sent = channel.send('r1', 0, new Uint8Array(1), 60_000);
+      const ended = channel.end('r1', 1, 1, 1, 60_000);
+      expect(socket.emitted).toHaveLength(0);
+      for (const failed of [
+         await rejection(sent),
+         await rejection(ended),
+      ]) {
+         expect(failed).toBeInstanceOf(ScriptError);
+         expect(failed.code).toBe('SCRIPT_TIMEOUT');
+         expect(failed.message).toBe('The sidecar is disconnected; the backup piece was not sent.');
+      }
    });
 
    it('end emits the end marker with pieces and bytes', async () => {
