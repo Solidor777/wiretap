@@ -276,9 +276,9 @@ method `405`.
   cut). **Asking the human before `delete_pack`.** Measured here (integration and e2e tests): the sidecar lists
   `delete_pack` with `_meta["anthropic/requiresUserInteraction"]: true` whatever the GM client's definition says.
   Documented by Claude Code, not tested in this project: Claude Code shows the permission prompt of such a tool on
-  every call, in every permission mode (`acceptEdits`, `auto` and `bypassPermissions` included), and an allow rule that
-  matches the tool does not skip it ([Claude Code MCP docs](https://code.claude.com/docs/en/mcp), "Require approval for
-  a specific tool"; the third-party guide <https://wikidocs.net/458156> gives v2.1.199 as the first version). That
+  every call, even in the `acceptEdits`, `auto` and `bypassPermissions` modes, and an allow rule that matches the tool
+  does not skip it ([Claude Code MCP docs](https://code.claude.com/docs/en/mcp), "Require approval for a specific
+  tool"). Unverified: the first Claude Code version that honours the entry (the official page names none). That
   prompt is shown by Claude Code, so another MCP client or a local process is not prompted; the `allowPackDeletion`
   gate stays Wiretap's own control (the residual risk).
 - **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
@@ -563,7 +563,7 @@ default; each unlocks a class of dangerous operation for agents:
 | `allowModuleConfigWrites` | Writing the module configuration (enables and disables modules) |
 | `allowDelete` | Deleting documents with `delete_documents` or the deletes of a `batch` (previews need no gate) |
 | `allowReplace` | Replacing whole documents with `replace_document` (previews need no gate) |
-| `allowPackDeletion` | Deleting an unlocked world compendium pack and every document in it with `delete_pack`, irreversibly (previews need no gate) |
+| `allowPackDeletion` | Deleting an unlocked world compendium pack and every document in it with `delete_pack`, irreversibly (previews need no gate); arbitrary-code paths (`execute_macro`, plugin and agent scripts) can delete a pack without it |
 | `allowBackupAnyFolder` | Writing, listing, restoring and deleting backup files in a folder other than the default (`.wiretap/backups` in the module folder) or the Backup folder setting |
 | `allowAgentScripts` | Saving, disabling and running agent-saved scripts (arbitrary code) |
 | `allowedPluginModules` | Plugin skills and scripts of the module ids listed (comma-separated; empty by default) |

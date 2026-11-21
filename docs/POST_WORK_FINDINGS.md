@@ -160,7 +160,8 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
 - Title: A deleted pack leaves its key in `compendiumConfiguration`. Summary: after `delete_pack` removes a world pack
   on the live world (14.364), the core world setting `compendiumConfiguration` still holds an entry for the deleted
   pack id, `{"folder":null,"locked":false}`. Inferred, not measured: a pack created later with the same name reads
-  that entry. Status: MEASURED in the M18 pack e2e run (`tests/e2e/packTools.spec.js`). The product's `delete_pack`
+  that entry, and with it any folder, lock or ownership a GM had set on the old pack (whether the entry also carries
+  `ownership` is not checked; the `create_pack` ack would not show it). Status: MEASURED in the M18 pack e2e run (`tests/e2e/packTools.spec.js`). The product's `delete_pack`
   still leaves the key (Foundry's own delete does the same; `deleteCompendium` does not touch the setting), while the
   e2e running list cleans its own: its teardown and sweep remove the key of each e2e pack they delete, and the census
   reports a stale `world.wiretap-e2e-*` key (`tests/e2e/registryCore.js`).
@@ -170,9 +171,11 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   `tests/integration/userInteractionMeta.test.js` proves the MCP SDK client receives it and
   `tests/e2e/packTools.spec.js` sees it in the live listing. What the docs state (READ,
   https://code.claude.com/docs/en/mcp, "Require approval for a specific tool"): Claude Code shows such a tool's
-  permission prompt on every call, in every permission mode including `bypassPermissions`, and an allow rule that
-  matches it does not skip the prompt; the third-party guide https://wikidocs.net/458156 gives v2.1.199 as the first
-  version (that page refused an automated fetch, so the version is not checked here). What stays unverified here: that
+  permission prompt on every call, even in the `acceptEdits`, `auto` and `bypassPermissions` modes, and an allow rule
+  that matches it does not skip the prompt. The page names no first version; a web-search summary attributed
+  "v2.1.199 or later" to a GitHub issue quoting the docs, and the third-party guide it pointed to
+  (https://wikidocs.net/458156) refused an automated fetch, so no minimum version is known here. The same summary said
+  `dontAsk` denies such a call instead of prompting (not checked). What stays unverified here: that
   this project's own Claude Code shows the prompt on a `delete_pack` call, and whether Claude Desktop honours the
   entry at all (an open issue reports that it may drop per-tool `_meta`). Another MCP client or a local process is not
   prompted; the `allowPackDeletion` gate is the Wiretap-side control either way. Status: UNVERIFIED.
