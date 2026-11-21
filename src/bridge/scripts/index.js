@@ -1,6 +1,7 @@
 import { createDocumentsHandler } from '~/bridge/scripts/createDocuments.js';
 import { batchHandler } from '~/bridge/scripts/batch.js';
 import { closeSheetHandler } from '~/bridge/scripts/closeSheet.js';
+import { createPackHandler } from '~/bridge/scripts/createPack.js';
 import {
    batchDefinition,
    createDocumentsDefinition,
@@ -13,6 +14,7 @@ import {
    updateDocumentsDefinition,
 } from '~/bridge/scripts/definitions.js';
 import { deleteDocumentsHandler } from '~/bridge/scripts/deleteDocuments.js';
+import { deletePackHandler } from '~/bridge/scripts/deletePack.js';
 import { describeSchemaHandler } from '~/bridge/scripts/describeSchema.js';
 import { drawTableDefinition, rollDefinition } from '~/bridge/scripts/diceDefinitions.js';
 import { drawTableHandler } from '~/bridge/scripts/drawTable.js';
@@ -21,6 +23,7 @@ import { getDocumentHandler } from '~/bridge/scripts/getDocument.js';
 import { listDocumentTypesHandler } from '~/bridge/scripts/listDocumentTypes.js';
 import { executeMacroDefinition } from '~/bridge/scripts/macroDefinitions.js';
 import { openSheetHandler } from '~/bridge/scripts/openSheet.js';
+import { createPackDefinition, deletePackDefinition } from '~/bridge/scripts/packDefinitions.js';
 import { replaceDocumentHandler } from '~/bridge/scripts/replaceDocument.js';
 import { rollHandler } from '~/bridge/scripts/roll.js';
 import { searchDocumentsHandler } from '~/bridge/scripts/searchDocuments.js';
@@ -88,6 +91,14 @@ export const SHIPPED_SCRIPTS = Object.freeze([
    {
       definition: executeMacroDefinition,
       handler: executeMacroHandler,
+   },
+   {
+      definition: createPackDefinition,
+      handler: createPackHandler,
+   },
+   {
+      definition: deletePackDefinition,
+      handler: deletePackHandler,
    },
 ]);
 

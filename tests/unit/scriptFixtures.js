@@ -17,6 +17,7 @@ import {
 } from '../../src/bridge/scripts/definitions.js';
 import { drawTableDefinition, rollDefinition } from '../../src/bridge/scripts/diceDefinitions.js';
 import { executeMacroDefinition } from '../../src/bridge/scripts/macroDefinitions.js';
+import { createPackDefinition, deletePackDefinition } from '../../src/bridge/scripts/packDefinitions.js';
 import { closeSheetDefinition, openSheetDefinition } from '../../src/bridge/scripts/sheetDefinitions.js';
 
 /**
@@ -99,6 +100,8 @@ export function shippedScripts() {
       rollDefinition,
       drawTableDefinition,
       executeMacroDefinition,
+      createPackDefinition,
+      deletePackDefinition,
    ].map((definition) => structuredClone(definition));
 }
 
