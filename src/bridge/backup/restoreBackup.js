@@ -279,6 +279,20 @@ function failedRow(uuid, error) {
 }
 
 /**
+ * Build the error a restore stopped by its time limit throws, naming the documents already written.
+ * @param {RestoreState} state - The restore state.
+ * @returns {ScriptError} `SCRIPT_TIMEOUT` with the count of written documents (0 on a dry run).
+ */
+function timeoutError(state) {
+   /** @type {number} The documents written so far. */
+   const applied = state.dryRun ? 0 : state.rows.created.length + state.rows.replaced.length;
+   return new ScriptError(
+      'SCRIPT_TIMEOUT',
+      `The restore stopped at its time limit after ${applied} documents; it is partly applied.`,
+   );
+}
+
+/**
  * Restore the documents of a backup. See the file header.
  * @param {RestoreParams} params - The header, the uuids to restore, `dryRun` and the time limit.
  * @param {{ requestId: string, pieces: { receive: (requestId: string) => object } }} invocation - The op invocation,
@@ -330,7 +344,16 @@ export async function restoreBackup(params, invocation) {
           * The next piece, or the end marker with the piece and byte counts the sidecar sent.
           * @type {{ data?: Uint8Array, end?: true, pieces?: number, bytes?: number, ack: Function }}
           */
-         const piece = await receiver.next(Math.max(1, deadline - Date.now()));
+         let piece;
+         try {
+            piece = await receiver.next(Math.max(1, deadline - Date.now()));
+         } catch (error) {
+            // The wait lasts until the deadline, so the receiver's own timeout means the time limit passed.
+            if (error instanceof ScriptError && error.code === 'SCRIPT_TIMEOUT') {
+               throw timeoutError(state);
+            }
+            throw error;
+         }
          if (piece.end) {
             if (piece.pieces !== pieceCount || piece.bytes !== byteCount || reader.pending() > 0) {
                throw new ScriptError(
@@ -345,12 +368,7 @@ export async function restoreBackup(params, invocation) {
          byteCount += piece.data.byteLength;
          for (const bytes of reader.push(piece.data)) {
             if (Date.now() > deadline) {
-               /** @type {number} The documents written so far. */
-               const applied = dryRun ? 0 : state.rows.created.length + state.rows.replaced.length;
-               throw new ScriptError(
-                  'SCRIPT_TIMEOUT',
-                  `The restore stopped at its time limit after ${applied} documents; it is partly applied.`,
-               );
+               throw timeoutError(state);
             }
             lineNumber += 1;
             /** @type {import('$shared/backup.js').BackupLine | null} The entry. */

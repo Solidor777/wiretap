@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BACKUP_INCOMPLETE } from '$shared/backup.js';
 import { GATE_DENIED } from '$shared/protocol.js';
 import { restoreBackup } from '~/bridge/backup/restoreBackup.js';
+import { ScriptError } from '~/bridge/scripts/registry.js';
 import { installWriteWorld } from './mockWriteWorld.js';
 
 /** @type {ReturnType<typeof installWriteWorld>} The mocked world. */
@@ -36,6 +37,7 @@ beforeEach(() => {
    gates = {
       allowDelete: true,
       allowReplace: true,
+      allowOwnershipWrites: true,
    };
    globalThis.game.settings.get = (module, key) => gates[key];
 });
@@ -73,7 +75,35 @@ function headerOf(extra = {}) {
 }
 
 /**
- * Build the backup line of an actor.
+ * Build the ownership a backup export keeps on every document that has the field (`clearOwnership: false` in
+ * `src/bridge/scripts/canonical.js`); a live document carries the same value until someone changes it.
+ * @returns {Record<string, number>} A fresh ownership object: no default access, the mocked GM as owner.
+ */
+function ownershipOf() {
+   return {
+      default: 0,
+      MOCKGM0000000001: 3,
+   };
+}
+
+/**
+ * Add a live actor to the mocked world, with the ownership a backup of it would carry.
+ * @param {string} id - The document id the live actor gets.
+ * @param {Record<string, unknown>} [extra] - Source fields that replace or add to the defaults.
+ * @returns {object} The live mock actor.
+ */
+function addActor(id, extra = {}) {
+   return world.add('Actor', {
+      _id: id,
+      name: `MOCK_live_${id}`,
+      type: 'npc',
+      ownership: ownershipOf(),
+      ...extra,
+   });
+}
+
+/**
+ * Build the backup line of an actor, shaped as the backup export writes it.
  * @param {string} id - The id of the actor the line holds.
  * @param {Record<string, unknown>} [extra] - Data fields that replace or add to the defaults.
  * @param {Record<string, unknown>} [lineExtra] - Line fields that replace or add to the defaults.
@@ -87,6 +117,7 @@ function actorLine(id, extra = {}, lineExtra = {}) {
          _id: id,
          name: `MOCK_${id}`,
          type: 'npc',
+         ownership: ownershipOf(),
          ...extra,
       },
       ...lineExtra,
@@ -192,11 +223,7 @@ async function failure(call) {
 
 describe('restoreBackup: the stream', () => {
    it('registers the receiver before its first await', async () => {
-      world.add('Actor', {
-         _id: 'MOCKACTOR0000001',
-         name: 'MOCK_live',
-         type: 'npc',
-      });
+      addActor('MOCKACTOR0000001');
       const { invocation, receiver, acks } = invocationOf(piecesOf([actorLine('MOCKACTOR0000001')]));
       const pending = restoreBackup({
          header: headerOf(),
@@ -293,15 +320,71 @@ describe('restoreBackup: the stream', () => {
       expect(error.message).toBe('The restore stopped at its time limit after 1 documents; it is partly applied.');
       expect(receiver.close).toHaveBeenCalledTimes(1);
    });
+
+   it('stops with SCRIPT_TIMEOUT naming the applied documents when the deadline passes while waiting for a piece',
+      async () => {
+         /** @type {number} The mocked clock. */
+         let now = 1_000_000;
+         vi.spyOn(Date, 'now').mockImplementation(() => now);
+         /** @type {Uint8Array} The one piece the receiver hands out. */
+         const data = encoder.encode(piecesOf([actorLine('MOCKDELETED00001')])[0]);
+         /** @type {boolean} Whether the piece was handed out. */
+         let handed = false;
+         /** @type {object} A fake receiver whose wait times out when the time left is shorter than a piece takes. */
+         const receiver = {
+            next: vi.fn(async (waitMs) => {
+               if (!handed) {
+                  handed = true;
+                  return {
+                     seq: 0,
+                     data,
+                     // The time limit passes after the piece is applied, while the next one is awaited.
+                     ack: () => {
+                        now += 2_000;
+                     },
+                  };
+               }
+               if (waitMs < 1_000) {
+                  throw new ScriptError('SCRIPT_TIMEOUT', 'The restore waited too long for the next piece.');
+               }
+               throw new Error('the wait was not short');
+            }),
+            close: vi.fn(),
+         };
+         for (const [
+            dryRun,
+            applied,
+         ] of [
+            [
+               false,
+               1,
+            ],
+            [
+               true,
+               0,
+            ],
+         ]) {
+            handed = false;
+            const error = await failure(() => restoreBackup({
+               header: headerOf(),
+               timeoutMs: 1_000,
+               dryRun,
+            }, {
+               requestId: REQUEST_ID,
+               pieces: { receive: () => receiver },
+            }));
+            expect(error.code).toBe('SCRIPT_TIMEOUT');
+            expect(error.message).toBe(
+               `The restore stopped at its time limit after ${applied} documents; it is partly applied.`,
+            );
+         }
+         expect(receiver.close).toHaveBeenCalledTimes(2);
+      });
 });
 
 describe('restoreBackup: applying lines', () => {
    it('replaces an existing document and re-creates a deleted one with its id', async () => {
-      const live = world.add('Actor', {
-         _id: 'MOCKACTOR0000001',
-         name: 'MOCK_live',
-         type: 'npc',
-      });
+      const live = addActor('MOCKACTOR0000001');
       const result = await restoreLines([
          actorLine('MOCKACTOR0000001'),
          actorLine('MOCKDELETED00001'),
@@ -314,6 +397,7 @@ describe('restoreBackup: applying lines', () => {
       expect(result.dryRun).toBeUndefined();
       expect(live.update).toHaveBeenCalledTimes(1);
       expect(world.byUuid.get('Actor.MOCKDELETED00001')?.id).toBe('MOCKDELETED00001');
+      expect(world.byUuid.get('Actor.MOCKDELETED00001')._source.ownership).toEqual(ownershipOf());
       expect(result.rows).toEqual([
          [
             'Actor.MOCKDELETED00001',
@@ -403,11 +487,7 @@ describe('restoreBackup: applying lines', () => {
 
    it('fails one document denied by a gate with the gate named, and applies the others', async () => {
       gates.allowReplace = false;
-      world.add('Actor', {
-         _id: 'MOCKACTOR0000001',
-         name: 'MOCK_live',
-         type: 'npc',
-      });
+      addActor('MOCKACTOR0000001');
       const result = await restoreLines([
          actorLine('MOCKACTOR0000001'),
          actorLine('MOCKDELETED00001'),
@@ -422,13 +502,29 @@ describe('restoreBackup: applying lines', () => {
       expect(Buffer.byteLength(result.rows[0][2])).toBeLessThanOrEqual(160);
    });
 
+   it('fails a re-created document with GATE_DENIED while allowOwnershipWrites is closed, and applies the others',
+      async () => {
+         gates.allowOwnershipWrites = false;
+         const live = addActor('MOCKACTOR0000001');
+         const result = await restoreLines([
+            actorLine('MOCKACTOR0000001'),
+            actorLine('MOCKDELETED00001'),
+         ]);
+         // The replaced actor's ownership equals the live value, so it needs no ownership gate.
+         expect(result.replaced).toBe(1);
+         expect(result.created).toBe(0);
+         expect(result.failed).toBe(1);
+         expect(live.update).toHaveBeenCalledTimes(1);
+         expect(world.byUuid.has('Actor.MOCKDELETED00001')).toBe(false);
+         expect(result.rows[0][0]).toBe('Actor.MOCKDELETED00001');
+         expect(result.rows[0][1]).toBe('failed');
+         expect(result.rows[0][2]).toContain(GATE_DENIED);
+         expect(result.rows[0][2]).toContain('allowOwnershipWrites');
+      });
+
    it('a dry run writes nothing and reports the gate denials the real run would meet', async () => {
       gates.allowReplace = false;
-      world.add('Actor', {
-         _id: 'MOCKACTOR0000001',
-         name: 'MOCK_live',
-         type: 'npc',
-      });
+      addActor('MOCKACTOR0000001');
       const result = await restoreLines([
          actorLine('MOCKACTOR0000001'),
          {
@@ -461,17 +557,8 @@ describe('restoreBackup: applying lines', () => {
    });
 
    it('carries a live secret flag into the replaced document and counts a lost one', async () => {
-      const live = world.add('Actor', {
-         _id: 'MOCKACTOR0000001',
-         name: 'MOCK_live',
-         type: 'npc',
-         flags: { mockmodule: { apiKey: 'MOCK_KEY_0000' } },
-      });
-      world.add('Actor', {
-         _id: 'MOCKACTOR0000002',
-         name: 'MOCK_live_two',
-         type: 'npc',
-      });
+      const live = addActor('MOCKACTOR0000001', { flags: { mockmodule: { apiKey: 'MOCK_KEY_0000' } } });
+      addActor('MOCKACTOR0000002');
       /** @type {Array<Array<string | number>>} The redacted path of every line. */
       const secretPaths = [
          [
@@ -493,14 +580,11 @@ describe('restoreBackup: applying lines', () => {
 
    it('applies only the asked uuids, maps an embedded uuid to its line, and skips the ones not in the backup',
       async () => {
-         const live = world.add('Actor', {
-            _id: 'MOCKACTOR0000001',
-            name: 'MOCK_live',
-            type: 'npc',
-         });
+         const live = addActor('MOCKACTOR0000001');
          world.addChild(live, 'Item', {
             _id: 'MOCKITEM00000001',
             name: 'MOCK_item',
+            ownership: ownershipOf(),
          });
          const result = await restoreLines([
             actorLine('MOCKACTOR0000001', {
@@ -508,6 +592,7 @@ describe('restoreBackup: applying lines', () => {
                   {
                      _id: 'MOCKITEM00000001',
                      name: 'MOCK_item',
+                     ownership: ownershipOf(),
                   },
                ],
             }),
@@ -570,11 +655,7 @@ describe('restoreBackup: applying lines', () => {
          /** @type {string} The actor id of this line. */
          const id = `MOCKMIXED${String(index).padStart(7, '0')}`;
          if (index % 3 === 0) {
-            world.add('Actor', {
-               _id: id,
-               name: `MOCK_${id}`,
-               type: 'npc',
-            });
+            addActor(id);
             lines.push(actorLine(id));
          } else if (index % 3 === 1) {
             lines.push(actorLine(id));
