@@ -317,7 +317,8 @@ backup's.
 **Recycle bin only.** Wiretap never deletes a file permanently: `delete_backup`, and a partial file left by a failed
 backup, go through the recycle bin (the `trash` package). If the recycle bin refuses, the file stays. `delete_backup`
 then fails with `TRASH_FAILED` naming the file. A failed backup keeps its own error code (for example
-`BACKUP_INCOMPLETE` or `ENDPOINT_GONE`), and its message ends by naming the partial file, as the sidecar log does.
+`BACKUP_INCOMPLETE` or `ENDPOINT_GONE`); when the recycle bin refuses its partial file, the message ends by naming
+that file, as the sidecar log does.
 Limit, per the `trash` README: a sidecar running as the Windows
 SYSTEM account (or another service account) sends files to that account's recycle bin, not the signed-in user's.
 

@@ -23,7 +23,7 @@ document, so none are stated here; the count at the time this file was written i
 | M6 Sheets and gameplay | Done | 2026-11-20 | `fab9300` (plan); `823e070`, `3aeba20`, `c601f8b`, `e5da1ff`, `acec4dd`, `f3b7d38` (tasks 1 to 6); `bbbdcd1`, `4dbf3bf`, `15984e8`, `f08ec17`, `11940fe`, `44c9ac5`, `7fe13ce`, `c3f5129` (buddy-check fixes and plan edits); `8c58704`, `6bc5b2a`, `9e245a2` (e2e); `6a3f7cb`, `717da53` (docs); `418e6f9`, `7887884` (final-review minors) | [`plans/2026-11-20-wiretap-m6-sheets-gameplay.md`](plans/2026-11-20-wiretap-m6-sheets-gameplay.md); as-built notes below; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro` in `src/bridge/scripts/`; 15 tools, 8,149 B of definitions |
 | M21 Document backups | Done | 2026-11-21 | `253257f`, `3914297` (design and plan); `393ac25`, `302d9f9`, `517fb81`, `723a3ad`, `76b9ad8`, `9a6f979`, `a8b78d1`, `9c30bb4`, `e4c2085`, `b61251f`, `cd2967a`, `d5b3960`, `da9bd16`, `fa9e809` (features and fixes); `80403c5`, `79f94ac`, `8f820be`, `f9bc54a` (tests); merges `1881516`, `8570e4f`, `18fc7b1`, `f5409a4`, `ec5a77e`, `8433951`, `176d540`, `eb570e0`, `b70cbc1`, `640f155`; `docs: close M21; progress, README and skills` | [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md), [`plans/2026-11-21-wiretap-m21-backups.md`](plans/2026-11-21-wiretap-m21-backups.md); as-built notes below; `backup_documents`, `list_backups`, `restore_backup`, `delete_backup` in `server/backupTools.ts`; 19 tools, 10,426 B of definitions |
 
-Current suite (MEASURED 2026-11-21, `npm test`): 123 test files passed, 2770 tests passed, 2 skipped (2772). Headless
+Current suite (MEASURED 2026-11-21, `npm test`): 123 test files passed, 2779 tests passed, 2 skipped (2781). Headless
 e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless
 `WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs and the M21 specs `backupTools.spec.js` and `gates.spec.js` were run
 on their own (see M6 and M21 below). A full e2e run after M6 has not been made.
@@ -559,7 +559,7 @@ recycle-bin removal):**
   `gates.spec.js` 4 passed. The largest live pack, `titan-vttrpg-compendium.effects` (199 index entries), measured as
   a dry run 256 documents, 419,426 bytes, in 58 to 63 ms. Inferred: about 9 s of export per 64,000,000 bytes,
   extrapolated linearly from that rate.
-- Unit suite after M21 (MEASURED, `npm test`): 123 files, 2770 passed, 2 skipped.
+- Unit suite after M21 (MEASURED, `npm test`): 123 files, 2779 passed, 2 skipped.
 - Designer decisions made during the run (each the designer's call under the user's delegation, not the user's own
   choice):
   - The 800-byte definition budget wins over "every argument has a short describe"; seven arguments carry no describe

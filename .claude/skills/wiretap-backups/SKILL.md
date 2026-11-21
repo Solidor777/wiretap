@@ -133,7 +133,8 @@ parts fit, the file store and the client halves.
   handler as `invocation.pieces`): `send(requestId, seq, data, waitMs)` and `end(requestId, seq, pieces, bytes,
   waitMs)` emit `bridge:backupPiece` with `socket.timeout(waitMs).emitWithAck` and resolve on `{ ok: true }`; a
   refusal throws `PIECE_REFUSED` naming the sidecar's code (cut by `cleanForLog` to 64 bytes), a timeout or
-  disconnect `SCRIPT_TIMEOUT`. `receive(requestId)` opens a receiver; the one `bridge:restorePiece` listener checks
+  disconnect `SCRIPT_TIMEOUT`; a send while `socket.connected` is false throws `SCRIPT_TIMEOUT` at once and emits
+  nothing (Socket.IO would buffer it and send it to the next connection). `receive(requestId)` opens a receiver; the one `bridge:restorePiece` listener checks
   each piece's shape (`data` an `ArrayBuffer`, as Socket.IO delivers binary in the browser, or a `Uint8Array`) and
   refuses at once a malformed piece, a piece with no open receiver and a piece that arrives while one is unacked.
   `next(waitMs)` resolves with the held or next piece, or rejects `SCRIPT_TIMEOUT`; the piece's `ack(refusal?)`
@@ -158,7 +159,9 @@ parts fit, the file store and the client halves.
   (`{ uuid, documentName, pack?, data, secretPaths? }` and a newline) through `createPieceWriter`, then sends the end
   marker, and returns the counts with `world` (`game.world.id`, `game.version`, `game.system.id`,
   `game.system.version`). Each document is checked against the deadline (`timeoutMs`); past it is `SCRIPT_TIMEOUT`
-  ("nothing was saved"). Each ack wait is the time left. Documents never pass through the agent's context.
+  ("nothing was saved"). Each ack wait is the time left. Both passes yield one macrotask (`yieldToEventLoop` of
+  `src/bridge/scripts/search.js`) whenever a run of work reaches 50 ms, so the GM's tab stays responsive. Documents
+  never pass through the agent's context.
 
 ## Client restore (`restoreBackup.js`)
 
