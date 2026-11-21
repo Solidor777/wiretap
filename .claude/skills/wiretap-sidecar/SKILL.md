@@ -123,8 +123,9 @@ Plain JS with no dependencies and JSDoc types, shared by both sides. `server/`: 
 
 `shared/backup.js` (the backup file format: a 2,048-byte padded header line then one JSON line per document, the
 file-name pattern, limits, codes and header helpers) and `shared/bridgeSettings.js` (`backupFolder` and its
-sanitizer), plus the backup events, ops and typedefs of `shared/protocol.js`. Read references/backup-format.md before
-changing or using any of them.
+sanitizer), plus the backup events, ops and typedefs of `shared/protocol.js`, and the four backup tools of
+`server/backupTools.ts` (folder gate, busy lock, piece sink, restore pump, result checks). Read
+references/backup-format.md before changing or using any of them.
 
 ## Result enforcer and handle store
 
