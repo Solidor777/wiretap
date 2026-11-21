@@ -27,7 +27,7 @@ e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.
 `WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs were run on their own (16 passed, see M6 below). A full e2e run
 after M6 has not been made.
 
-Next milestone in the order of PLAN.md section 5: M18 (M17 dropped by D29, revision 7).
+Next milestone in the order of PLAN.md section 5: M21 (M17 dropped by D29, revision 7; M21 added by D33, revision 8).
 
 ## M0 status and deviations
 
@@ -146,6 +146,11 @@ remain except those that wait on M0 results.
 **Revision 7 (2026-11-21):** the user dropped M17 (multi-step undo). D29 now records the drop; the `allowUndo` gate row,
 the `undo_last` tool mentions and the M17 section were removed from PLAN.md; the item is logged in `TODO.md`. The code
 already had no undo gate (`shared/gates.js`, `tests/unit/gates.test.js`).
+
+**Revision 8 (2026-11-21):** the user chose document backups in place of undo (D33, new milestone M21 ahead of M18,
+design `specs/2026-11-21-wiretap-backups-design.md`), approved the `trash` npm dependency and changed the file rule to
+recycle-bin removal only (D34). The user delegated the remaining design calls; they are marked "designer's call" in
+the design.
 
 ## As-built notes (moved from PLAN.md)
 
