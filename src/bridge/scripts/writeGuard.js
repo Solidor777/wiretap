@@ -147,10 +147,12 @@ function writtenData(value) {
 }
 
 /**
- * Tell whether the data written to one RegionBehavior stores script code, by the rule Foundry applies with its
- * `MACRO_SCRIPT` permission (`common/documents/region-behavior.mjs`, `region.mjs`): the behavior becomes of type
+ * Tell whether the data written to one RegionBehavior stores script code: the behavior becomes of type
  * `executeScript` (created so, or changed to it from another stored type), or a behavior of that type has its
- * `system.source` written.
+ * `system.source` written. This follows the rule Foundry applies with its `MACRO_SCRIPT` permission
+ * (`common/documents/region-behavior.mjs`, `region.mjs`) with one difference: without that permission Foundry also
+ * refuses a write that re-states the `executeScript` type of a behavior already of that type, while this rule allows
+ * it, the same change-only type rule as for Macros.
  * @param {Record<string, unknown>} data - The data written to the behavior, operators replaced by `writtenData`.
  * @param {Record<string, unknown> | undefined} stored - The stored source of the behavior, none for a new one.
  * @returns {boolean} True when the write stores script code.

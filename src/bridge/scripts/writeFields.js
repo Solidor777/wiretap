@@ -15,8 +15,9 @@
  * keys are expanded and every operator spelling has become an operator object.
  * - `analyzeChanges` walks the cleaned changes for operator objects and reports the operations on embedded documents
  * and whether the reserved flag scope is rewritten.
- * - `walkEmbedded` pairs the embedded documents of live data with those of replacement data through the schema, for
- * the drops of `replace_document` and the carrying of the Wiretap records.
+ * - `walkEmbedded` pairs the embedded documents of one data tree with those of a second through the schema: live data
+ * with replacement data for the drops of `replace_document` and the carrying of the Wiretap records, and written data
+ * with the stored source for the region script rule of the guard.
  */
 
 import { cleanForLog } from '$shared/logText.js';
@@ -343,16 +344,21 @@ export function cleanChanges(document, changes) {
 }
 
 /**
- * Pair the embedded documents of live data with those of replacement data through the schema, every depth, single
- * embedded documents and the token delta included, and call a visitor for each live document: first the root, then
- * the embedded ones. A document the replacement has no element with the same `_id` for (or no value at all, for a
- * single embedded document) is visited with an undefined replacement, as is everything inside it.
+ * Pair the embedded documents of a first data tree with those of a second through the schema, every depth, single
+ * embedded documents and the token delta included, and call a visitor for each document of the first tree: first the
+ * root, then the embedded ones. The first tree is the live data of a document (`replace_document`, paired with its
+ * replacement) or the data a write puts (the guard, paired with the stored source). A document the second tree has no
+ * element with the same `_id` for (or no value at all, for a single embedded document) is visited with an undefined
+ * second, as is everything inside it. An element of an embedded collection that is not an object is no document and
+ * is not visited.
  * @param {{ schema: { fields: object }, documentName?: string }} model - The class of both root data objects.
- * @param {Record<string, unknown>} live - `toObject()` of the live document.
- * @param {Record<string, unknown> | undefined} replacement - The replacement data for the same document.
- * @param {Function} visit - Called as `visit(model, live, replacement)` with the class, the live data and the matching
- * replacement data, if any.
+ * @param {Record<string, unknown>} live - The first tree: `toObject()` of a live document, or written data.
+ * @param {Record<string, unknown> | undefined} replacement - The second tree for the same document: replacement data,
+ * or the stored source; none for a new document.
+ * @param {Function} visit - Called as `visit(model, live, replacement)` with the class, the data of the first tree and
+ * the matching data of the second, if any.
  * @returns {void}
+ * @throws {ScriptError} `ARGS_INVALID` past the depth the walk follows.
  */
 export function walkEmbedded(model, live, replacement, visit) {
    walkModel(model, live, replacement, visit, 0);
@@ -361,12 +367,12 @@ export function walkEmbedded(model, live, replacement, visit) {
 /**
  * Visit one document and everything embedded in it.
  * @param {{ schema: object }} model - The class of the document.
- * @param {Record<string, unknown>} live - The live data.
- * @param {Record<string, unknown> | undefined} replacement - The matching replacement data, if any.
+ * @param {Record<string, unknown>} live - The data of the first tree.
+ * @param {Record<string, unknown> | undefined} replacement - The matching data of the second tree, if any.
  * @param {Function} visit - The visitor of `walkEmbedded`.
  * @param {number} depth - How deep the walk is.
  * @returns {void}
- * @throws {ScriptError} `ARGS_INVALID` past the depth the walk follows: a replacement it cannot judge is refused.
+ * @throws {ScriptError} `ARGS_INVALID` past the depth the walk follows: a write it cannot judge is refused.
  */
 function walkModel(model, live, replacement, visit, depth) {
    visit(model, live, replacement);
@@ -377,8 +383,8 @@ function walkModel(model, live, replacement, visit, depth) {
  * Follow the data through a field by the same children `containsEmbedded` follows, and visit the documents of every
  * embedded field met.
  * @param {object} field - The schema field the data belongs to.
- * @param {unknown} live - The live data of the field.
- * @param {unknown} replacement - The matching replacement data, if any.
+ * @param {unknown} live - The data of the field in the first tree.
+ * @param {unknown} replacement - The matching data of the second tree, if any.
  * @param {Function} visit - The visitor of `walkEmbedded`.
  * @param {number} depth - How deep the walk is.
  * @param {string | undefined} type - The type of the document being walked.
@@ -387,7 +393,7 @@ function walkModel(model, live, replacement, visit, depth) {
  */
 function walkField(field, live, replacement, visit, depth, type) {
    if (depth > DEPTH_MAX) {
-      throw new ScriptError('ARGS_INVALID', 'The document nests embedded documents deeper than a replace can judge.');
+      throw new ScriptError('ARGS_INVALID', 'The data nests embedded documents too deeply for the write to be judged.');
    }
    if (live === undefined || live === null) {
       return;
@@ -397,7 +403,8 @@ function walkField(field, live, replacement, visit, depth, type) {
       const kept = new Map(
          (Array.isArray(replacement) ? replacement : []).map((element) => [element?._id, element]),
       );
-      for (const element of Array.isArray(live) ? live : []) {
+      // An element that is not an object is no document; Foundry's validation refuses it after the guard.
+      for (const element of (Array.isArray(live) ? live : []).filter(isPlainObject)) {
          walkModel(field.model, element, kept.get(element._id), visit, depth);
       }
       return;

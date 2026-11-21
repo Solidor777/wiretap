@@ -17,6 +17,12 @@ let macro;
 /** @type {string} The id of the compendium pack that holds Adventures. */
 const ADVENTURE_PACK = 'world.mock-adventures';
 
+/** @type {string} The code of a call whose data Foundry's validation refuses. */
+const VALIDATION_FAILED = 'VALIDATION_FAILED';
+
+/** @type {RegExp} The entries of `world.calls` that write to the mock world (lookups such as `.get` do not). */
+const WRITE_CALL = /^modifyBatch$|\.(createDocuments|createEmbeddedDocuments|update|updateEmbeddedDocuments)$/;
+
 beforeEach(() => {
    world = installWriteWorld(vi.fn, {
       users: [{
@@ -61,6 +67,15 @@ async function outcome(call) {
       return error;
    }
    return null;
+}
+
+/**
+ * List the writes the mock world logged from a position of its call log on.
+ * @param {number} start - The length of `world.calls` before the call under test.
+ * @returns {string[]} The logged calls from `start` on that write to the mock world.
+ */
+function writeCallsSince(start) {
+   return world.calls.slice(start).filter((call) => WRITE_CALL.test(call));
 }
 
 /**
@@ -327,7 +342,10 @@ describe('writing Macro code needs allowMacroExecution', () => {
          }),
       ];
       for (const [index, write] of writes.entries()) {
+         /** @type {number} How many calls the mock world logged before this write. */
+         const start = world.calls.length;
          expect(await outcome(write), `write ${index}`).toBeNull();
+         expect(writeCallsSince(start), `write ${index}`).not.toEqual([]);
       }
       expect(foundry.documents.modifyBatch).toHaveBeenCalledTimes(1);
    });
@@ -607,7 +625,12 @@ describe('writing a region script behavior needs allowMacroExecution', () => {
       gates.allowDelete = true;
       gates.allowReplace = true;
       gates.allowCompendiumWrites = true;
+      /** @type {number} How many calls the mock world logged before the write. */
+      const start = world.calls.length;
       expect(await outcome(storing[name])).toBeNull();
+      if (!name.startsWith('dry run')) {
+         expect(writeCallsSince(start)).not.toEqual([]);
+      }
    });
 
    it('writes that store no script code need no gate', async () => {
@@ -652,5 +675,66 @@ describe('writing a region script behavior needs allowMacroExecution', () => {
       for (const [index, write] of writes.entries()) {
          expect(await outcome(write), `write ${index}`).toBeNull();
       }
+   });
+
+   /**
+    * Each write whose data puts an entry that is not an object in a `behaviors` array, by name. The mock world fails
+    * validation only on data that marks its failures, so each payload carries the `invalid` table Foundry's validation
+    * would report for it; the guard itself must let the call through to that validation.
+    * @type {Record<string, () => Promise<unknown>>}
+    */
+   const malformed = {
+      'create of a Region': () => createDocuments({
+         documentName: 'Region',
+         parentUuid: scene.uuid,
+         data: [{
+            name: 'MOCK_region',
+            behaviors: ['x'],
+            invalid: { 'behaviors.0': 'is not an object' },
+         }],
+      }),
+      'create of a Scene': () => createDocuments({
+         documentName: 'Scene',
+         data: [{
+            name: 'MOCK_scene',
+            regions: [{
+               name: 'MOCK_region',
+               behaviors: [1],
+            }],
+            invalid: { 'regions.0.behaviors.0': 'is not an object' },
+         }],
+      }),
+      'replace of a Scene': () => replaceDocument({
+         uuid: scene.uuid,
+         data: {
+            name: 'MOCK_scene',
+            regions: [{
+               name: 'MOCK_region',
+               behaviors: ['x'],
+            }],
+            invalid: { 'regions.0.behaviors.0': 'is not an object' },
+         },
+      }),
+      'batch create of a Region': () => batchDocuments({
+         creates: [{
+            documentName: 'Region',
+            parentUuid: scene.uuid,
+            data: [{
+               name: 'MOCK_region',
+               behaviors: ['x'],
+               invalid: { 'behaviors.0': 'is not an object' },
+            }],
+         }],
+      }),
+   };
+
+   it.each(Object.keys(malformed))('%s with a behavior that is not an object fails validation', async (name) => {
+      gates.allowDelete = true;
+      gates.allowReplace = true;
+      /** @type {Error | null} What the call threw. */
+      const error = await outcome(malformed[name]);
+      expect(error?.code, error?.message).toBe(VALIDATION_FAILED);
+      expect(writeCallsSince(0)).toEqual([]);
+      expect(foundry.documents.modifyBatch).not.toHaveBeenCalled();
    });
 });
