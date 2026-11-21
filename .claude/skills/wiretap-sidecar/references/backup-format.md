@@ -1,8 +1,8 @@
 # Backup format, bridge settings and backup wire identifiers
 
-Current-state reference for `shared/backup.js`, `shared/bridgeSettings.js` and the backup parts of
-`shared/protocol.js`. Plain JS shared by both sides; no product code imports `shared/backup.js` or
-`shared/bridgeSettings.js` yet beyond their tests, and no sidecar or client code handles the backup events and ops yet.
+Current-state reference for `shared/backup.js`, `shared/bridgeSettings.js`, the backup parts of
+`shared/protocol.js`, and the sidecar backup tools of `server/backupTools.ts` (last section). The shared files are plain
+JS imported by both sides.
 
 ## `shared/backup.js` (imports only `./utf8.js`)
 
@@ -53,3 +53,44 @@ proxy gives the defaults). Tests: `tests/unit/bridgeSettings.test.js`.
   `{ requestId, seq, end: true, pieces, bytes }`; `PieceAck` `{ ok: true }` | `{ ok: false, error: { code, message } }`;
   `BridgeStatePush` `{ gateState, settings }`. The comment of `BRIDGE_GATE_STATE` names `BridgeStatePush` as its
   payload, while the sidecar and client code still send and read a bare `GateState`.
+
+## Backup tools (`server/backupTools.ts`)
+
+`createBackupTools({ bridge, store, log?, now? })` returns `(endpoint) => ToolRegistration[]`: the four registrations
+for a session (every invoke and snapshot passes `{ endpoint }` when the session restricts its kind, else `{}`). One busy
+flag is shared by every session: a backup or restore (dry runs included) or a delete while one runs is `BACKUP_BUSY`;
+`list_backups` is never refused. The flag clears when the invoke settles. `BackupBridge` is the slice of the Foundry
+bridge used (`invoke`, `snapshot`, `expectPieces`, `sendPiece`). Not yet registered in `server/mcp.ts` or measured by
+`tests/unit/contextBudget.test.js`.
+
+- Folder and gate: `store.resolveFolder(args.folder, settings.backupFolder)`; kind `named` with
+  `allowBackupAnyFolder` closed is `GATE_DENIED`. Backup and restore judge it inside the invoke's `prepare` on the
+  picked endpoint; list and delete on `bridge.snapshot(...)`, or the closed gates and default settings with no endpoint.
+- `backup_documents` (budget 256): exactly one of `uuids`, `folderUuid`, `documentName`, `pack`, and a note passing
+  `isBackupNote`, else `ARGS_INVALID`. `prepare` checks the folder (`checkFolder(folder, !dryRun)`), registers a
+  `createBackupSink` (not on a dry run) and sends `{ selector, dryRun?, timeoutMs }` (default 120,000; reply wait
+  `timeoutMs + 2000`). After the invoke the sink is removed; the error is the sink's first failure, else the invoke's,
+  else `BACKUP_INCOMPLETE` unless the end marker arrived, `documents` is at least 1 and equals the newline count,
+  `bytes` equals the file size, `unreadable`/`parents` are non-negative integers and the four `world` fields pass
+  `isWorldField`. Then `writer.finish` writes the header. Any failure after the file exists closes it and sends it to
+  `store.trashPath`; if that fails the message gains `The partial file <name> could not be moved to the recycle bin.`
+  (fitted to 512 B). Result `{ file, folder, documents, bytes }` (+ `unreadable`, `parents` when above 0); a dry run
+  `{ dryRun: true, folder, documents, bytes }` (+ the same).
+- `createBackupSink(openWriter)`: data pieces must come with `seq` 0, 1, 2, …; the file is created on the first;
+  header plus received bytes over `BACKUP_MAX_BYTES` is `BACKUP_TOO_LARGE`; the end marker's `seq`/`pieces` must equal
+  the data piece count and `bytes` the data bytes; `gone()` records `ENDPOINT_GONE` (nothing saved) and never throws;
+  the first failure is kept and refuses every later piece. `counts()` gives pieces, bytes, newline count and `ended`.
+- `restore_backup` (budget 4000): `prepare` opens `store.openFile(folder, file)` and sends `{ header, uuids?, dryRun?,
+  timeoutMs }`; `onSent` starts the pump (not awaited): `readPiece(512000)` pieces with `seq` 0, 1, … then the end
+  marker, each `sendPiece` waiting until the reply deadline; a pump failure is logged and stops it. The reader closes once the
+  pump and the invoke both ended. `ENDPOINT_GONE` becomes "the restore may be partly applied". The client result must
+  be an object whose `rows` is at most 20 rows of `[string, string, string?]` and whose other fields are non-negative
+  integers, booleans or strings, every string at most 256 B, else `BACKUP_INCOMPLETE`; it is returned with `file` first,
+  fitted by `fitRestoreResult`, and `BACKUP_INCOMPLETE` if it still exceeds 4000 B.
+- `list_backups` (budget 2000): `checkFolder(folder, false)`, `store.list(folder, limit ?? 10)`, notes cut to 40 B,
+  `{ folder, rows, total }` (+ `invalid` when above 0), fitted by `fitListResult`.
+- `delete_backup` (budget 128): `store.trashFile(folder, file)`, `{ file, trashed: true }`.
+- `fitListResult` / `fitRestoreResult(result, maxBytes)`: drop `rows` from the end until the JSON fits; `cut: true`
+  when any was dropped.
+
+Tests: `tests/unit/backupTools.test.js` (fake `BackupBridge`, the real store over a scratch root, `fakeTrash`).
