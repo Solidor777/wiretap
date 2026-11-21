@@ -12,6 +12,7 @@
       "@xterm/xterm": "^5.5.0",
       "node-pty": "^1.0.0",
       "socket.io": "^4.8.3",
+      "trash": "^10.1.1",
       "zod": "^4.4.3"
    },
    "devDependencies": {

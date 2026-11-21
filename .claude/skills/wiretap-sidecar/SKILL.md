@@ -63,37 +63,20 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 ## Shared protocol
 
-`shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (4), `BRIDGE_IDENTIFY`, `BRIDGE_GATE_STATE`,
-`BRIDGE_REGISTRY`, `BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CALL_TOOL` (the only op), `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
+`shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (5), `BRIDGE_IDENTIFY`, `BRIDGE_GATE_STATE`,
+`BRIDGE_REGISTRY`, `BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CALL_TOOL`, the backup events, ops and typedefs (references/backup-format.md), `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
 `ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `TOOL_GONE`, `PROTOCOL_MISMATCH`, `NOT_GM`, `GATE_DENIED`, and typedefs for the identify (with its optional `gateState`), identify ack, gate-state ack, `BridgeRegistryAck`, invoke, op ack and error payloads. Routing,
 the endpoint registry and the error contract are in `server/endpoints.ts` (see `wiretap-mcp-bridge`). Both sides import these constants; adding an event means editing this file and both consumers.
 
 ## Script definition (`shared/scripts.js`)
 
-Plain JS with JSDoc, imported by both sides: `server/toolRegistry.ts`, `server/mcp.ts` (`RESERVED_SCRIPT_NAMES`), `src/bridge/foundryBridge.js` (`SCRIPT_API_VERSION`) and `src/bridge/scripts/registry.js`. The module header documents every
-field of a script definition `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate?,
-moduleId? }`. Exports: `SCRIPT_API_VERSION` (1), `SCRIPT_SOURCES` (`shipped`, `plugin`, `agent`), `SCRIPT_REQUIRES` (`none`, `api`,
-`dom`), `RESERVED_SCRIPT_NAMES` (`read_handle`), `definitionBytes(name, description, inputSchema)`,
-`validateScriptDefinition(input, source)` and `parseRegistryPayload(payload)`.
-
-- `validateScriptDefinition` returns `{ ok: true, definition, warnings }` (a fresh copy of the known fields; a description over the
-  160-character target warns) or `{ ok: false, reason }`; it never throws (own properties only, a throwing getter or an
-  unserializable schema is a refusal). `source` is implied by the registering route and is not a field: an unknown source is a
-  refusal, `shipped` names are 1 to 32 characters (`[a-z][a-z0-9_-]*`), `plugin` names are `<moduleId>__<skill>` and `agent` names
-  `agent__<name>` of at most 64 characters, and every field is checked for every source before a valid plugin or agent definition is
-  refused as "not supported by this version of Wiretap". `mutates` (boolean) and `requires` are required and never defaulted;
-  `version` is `MAJOR.MINOR.PATCH` with optional `-prerelease` and `+build` within `SCRIPT_VERSION_MAX_CHARS` (32); `result.budgetBytes` is
-  an integer 1 to `RESULT_HARD_CAP_MAX_BYTES`; `gate` is a name in `GATES` except `allowedPluginModules`; `moduleId` exists on
-  plugin scripts only; `{name, description, inputSchema}` is held to `DEFINITION_MAX_BYTES` in UTF-8 bytes. The JSON Schema subset check
-  and the conversion to zod are sidecar-only (`server/toolRegistry.ts`).
-- `parseRegistryPayload` opens `{ apiVersion, scripts }` and refuses everything else (a plain array included) with a reason that
-  names `apiVersion`.
-
-Tests: `tests/unit/scripts.test.js`.
+The shared script definition validator and registry payload parser (`SCRIPT_API_VERSION`, `validateScriptDefinition`,
+`parseRegistryPayload`), imported by both sides. Read references/script-definition.md before changing or relying on
+it. Tests: `tests/unit/scripts.test.js`.
 
 ## Risk gates (`shared/gates.js`)
 
-Plain JS, no dependencies, imported by `server/endpoints.ts`, `server/foundryBridge.ts`, `src/bridge/gates.js`, `src/settings/gates.js` and `src/bridge/scripts/writeGuard.js`. `GATES` is the one deep-frozen registry: entries `{ type: 'boolean' | 'moduleList', default, unlocks }` (`unlocks`: what the gate allows; `allowMacroExecution` covers `execute_macro` and writing macro or region script code, enforced in `wiretap-write-guard`) for `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`, `allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites`, `allowDelete`, `allowReplace`, `allowAgentScripts` (boolean, default false) and `allowedPluginModules` (module-id list, default empty). There is no undo gate. A `GateState` is an object with exactly those keys.
+Plain JS, no dependencies, imported by `server/endpoints.ts`, `server/foundryBridge.ts`, `src/bridge/gates.js`, `src/settings/gates.js` and `src/bridge/scripts/writeGuard.js`. `GATES` is the one deep-frozen registry: entries `{ type: 'boolean' | 'moduleList', default, unlocks }` (`unlocks`: what the gate allows; `allowMacroExecution` covers `execute_macro` and writing macro or region script code, enforced in `wiretap-write-guard`) for `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`, `allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites`, `allowDelete`, `allowReplace`, `allowBackupAnyFolder` (backup files in a folder other than the default or the Backup folder setting), `allowAgentScripts` (boolean, default false) and `allowedPluginModules` (module-id list, default empty). There is no undo gate. A `GateState` is an object with exactly those keys.
 
 - `closedGateState()` returns a fresh all-closed snapshot. `sanitizeGateState(input)` returns a fresh complete snapshot: only registry names, only own properties, booleans only for boolean gates, the module list only when an array of at most `GATE_MODULES_MAX` (64) entries (a longer array is treated as empty without being walked) keeping module ids (`/^[a-z0-9][a-z0-9_-]*$/`, 1 to `GATE_MODULE_ID_MAX_CHARS` (64) characters, duplicates removed); anything else is dropped and the gate stays closed; a non-object, or an input whose reads throw, gives the closed state.
 - `gateDenial(gateState, name, moduleId?)` returns null when open, else `{ code: 'GATE_DENIED', message }` (message at most 256 bytes, names the gate, says only a GM can enable it in the Wiretap module settings). It always sanitizes the state first, so raw or oversized module lists are never open. Deny when the name is not an own key of `GATES` (unknown-gate message names no caller text) or the sanitized value is not exactly `true`; for `allowedPluginModules` a missing `moduleId` denies and a `moduleId` must be a member of the sanitized list (the id is ignored for boolean gates). `isGateOpen(state, name, moduleId?)` is `gateDenial(...) === null`; `isModuleAllowed(state, id)` is the plugin-module form. `GATE_DENIED` is not a reserved protocol code (the client may send it).
@@ -111,7 +94,9 @@ Plain JS with no dependencies and JSDoc types, shared by both sides. `server/`: 
   are the context budgets (names, definitions, instructions, MCP sessions and body, acks, compact views, search,
   errors, result caps, sheet layout, images, stored results, paths with `PATH_BYTES_MAX` 512 and `PATH_SEGMENTS_MAX`
   16, schema arrays, registry pushes, script concurrency, write calls) and the result budgets `SHEET_RESULT_MAX_BYTES`
-  128 (`open_sheet`, `close_sheet`), `ROLL_RESULT_MAX_BYTES` 512 and `DRAW_RESULT_MAX_BYTES` 1000 (`draw_table`).
+  128 (`open_sheet`, `close_sheet`), `ROLL_RESULT_MAX_BYTES` 512, `DRAW_RESULT_MAX_BYTES` 1000 (`draw_table`), and the backup result budgets
+  `BACKUP_RESULT_MAX_BYTES` 256 (`backup_documents`), `BACKUP_LIST_MAX_BYTES` 2000 (`list_backups`),
+  `RESTORE_RESULT_MAX_BYTES` 4000 (`restore_backup`) and `BACKUP_DELETE_MAX_BYTES` 128 (`delete_backup`).
   `warn` entries are `DESCRIPTION_TARGET_CHARS`, `PROJECTION_BYTES_PER_10_FIELDS`, `LIVE_RECALIBRATION_MAX_RUNS`. 1 KB is 1000 bytes (8000, 16000, 2000, 1000, 4000).
 - `shared/docPath.js` — the path grammar over a canonical document export. `parsePath(path)` refuses non-strings,
   paths over `PATH_BYTES_MAX` bytes or `PATH_SEGMENTS_MAX` segments (`PATH_LIMIT`, checked before splitting), empty
@@ -133,6 +118,13 @@ Plain JS with no dependencies and JSDoc types, shared by both sides. `server/`: 
   or replace value with an own `__proto__`/`constructor`/`prototype` key or nesting over 32 levels (`PATH_UNSAFE_VALUE`).
   Errors are `{ code, message }` (message within `PATH_ERROR_MAX_BYTES`) with `PATH_*` codes. Tests:
   `tests/unit/budgets.test.js`, `docPath.test.js`.
+
+## Backup format and bridge settings
+
+`shared/backup.js` (the backup file format: a 2,048-byte padded header line then one JSON line per document, the
+file-name pattern, limits, codes and header helpers) and `shared/bridgeSettings.js` (`backupFolder` and its
+sanitizer), plus the backup events, ops and typedefs of `shared/protocol.js`. Read references/backup-format.md before
+changing or using any of them.
 
 ## Result enforcer and handle store
 

@@ -173,6 +173,14 @@ export const BUDGETS = table([
    budget('ROLL_RESULT_MAX_BYTES', 512, 'bytes', BUDGET_SEVERITY.HARD),
    // The result of `draw_table` (1 KB).
    budget('DRAW_RESULT_MAX_BYTES', 1000, 'bytes', BUDGET_SEVERITY.HARD),
+   // The result of `backup_documents`.
+   budget('BACKUP_RESULT_MAX_BYTES', 256, 'bytes', BUDGET_SEVERITY.HARD),
+   // The result of `list_backups` (2 KB).
+   budget('BACKUP_LIST_MAX_BYTES', 2000, 'bytes', BUDGET_SEVERITY.HARD),
+   // The result of `restore_backup` (4 KB).
+   budget('RESTORE_RESULT_MAX_BYTES', 4000, 'bytes', BUDGET_SEVERITY.HARD),
+   // The result of `delete_backup`.
+   budget('BACKUP_DELETE_MAX_BYTES', 128, 'bytes', BUDGET_SEVERITY.HARD),
 ]);
 
 /**

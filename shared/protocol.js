@@ -67,14 +67,14 @@ export const TERMINAL_EXIT = 'terminal:exit';
 
 // Bridge protocol version carried by every identify; the sidecar refuses any other value (no translation of older
 // payloads).
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 // Client → server, once per (re)connect, with an ack callback: register this socket as a live Foundry-GM bridge
 // endpoint. The sidecar acks after registration (or refusal).
 export const BRIDGE_IDENTIFY = 'bridge:identify';
 
-// Client → server, with an optional ack callback: the registered GM endpoint's current risk-gate snapshot (a
-// GateState). Sent when a gate setting changes; the identify carries the first snapshot. A
+// Client → server, with an optional ack callback: the registered GM endpoint's current risk-gate snapshot and bridge
+// settings, a `BridgeStatePush`. Sent when a gate or bridge setting changes; the identify carries the first snapshot. A
 // socket that is not a registered endpoint is refused and its snapshot is not applied.
 export const BRIDGE_GATE_STATE = 'bridge:gateState';
 
@@ -96,6 +96,25 @@ export const BRIDGE_PING = 'bridge:ping';
 // with BRIDGE_REGISTRY. Params are `{ name, arguments }`; the result is shown to the MCP caller as text (a string as
 // is, anything else as JSON).
 export const OP_CALL_TOOL = 'callTool';
+
+// Client → server, with an ack callback: one `BackupPiece` of the backup stream a running `OP_BACKUP_EXPORT`
+// produces, or its end marker. The sidecar acks each piece with a `PieceAck` before the client sends the next.
+export const BRIDGE_BACKUP_PIECE = 'bridge:backupPiece';
+
+// Server → client, with an ack callback: one `BackupPiece` of the backup file a running `OP_BACKUP_RESTORE` reads, or
+// its end marker. The client acks each piece with a `PieceAck` before the sidecar sends the next.
+export const BRIDGE_RESTORE_PIECE = 'bridge:restorePiece';
+
+// Operation name dispatched over BRIDGE_INVOKE: export the named documents and stream them to the sidecar as
+// BRIDGE_BACKUP_PIECE events.
+export const OP_BACKUP_EXPORT = 'backupExport';
+
+// Operation name dispatched over BRIDGE_INVOKE: receive a backup file as BRIDGE_RESTORE_PIECE events and write its
+// documents back through the write code.
+export const OP_BACKUP_RESTORE = 'backupRestore';
+
+// Error code of a `PieceAck`: the receiver refused the piece, and the stream stops.
+export const PIECE_REFUSED = 'PIECE_REFUSED';
 
 // Endpoint kinds a client may identify as: a person's browser tab ('human') or an agent-runner browser ('agent').
 export const ENDPOINT_KINDS = ['human', 'agent'];
@@ -147,6 +166,34 @@ export const GATE_DENIED = 'GATE_DENIED';
  * @property {EndpointKind} kind - Whether this client is a person's tab or an agent runner.
  * @property {boolean} dom - Whether this endpoint is a browser client able to run DOM operations.
  * @property {import('./gates.js').GateState} [gateState] - Risk-gate snapshot; absent or invalid closes every gate.
+ */
+
+/**
+ * A data piece of a backup or restore stream, at most `BACKUP_PIECE_MAX_BYTES` bytes, tied to the invocation's
+ * `requestId`.
+ * @typedef {{ requestId: string, seq: number, data: Uint8Array }} BackupDataPiece
+ */
+
+/**
+ * The end marker of a backup or restore stream, carrying the piece count and the byte total.
+ * @typedef {{ requestId: string, seq: number, end: true, pieces: number, bytes: number }} BackupEndPiece
+ */
+
+/**
+ * One piece of a backup or restore stream: a data piece or the end marker.
+ * @typedef {BackupDataPiece | BackupEndPiece} BackupPiece
+ */
+
+/**
+ * The receiver's answer to one `BackupPiece`.
+ * @typedef {{ ok: true } | { ok: false, error: { code: string, message: string } }} PieceAck
+ */
+
+/**
+ * The payload of BRIDGE_GATE_STATE.
+ * @typedef {object} BridgeStatePush
+ * @property {import('./gates.js').GateState} gateState - The endpoint's risk-gate snapshot.
+ * @property {import('./bridgeSettings.js').BridgeSettings} settings - The endpoint's bridge settings.
  */
 
 /**

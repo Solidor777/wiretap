@@ -19,7 +19,7 @@ hosting an AI-agent terminal and a bridge that lets agents act on the live world
 | Sidecar (Node) | `server/` run by `tsx` (`npm run server:start`, `scripts/start-wiretap.sh`) | Socket.IO server (default `:31416`, `WIRETAP_PORT`), node-pty terminal relay, stateful MCP HTTP server (sessions with an SSE stream and `tools/list_changed`; default `127.0.0.1:31417/mcp`, `WIRETAP_MCP_PORT`) |
 
 `shared/protocol.js` holds the wire constants used by both sides (imported as `$shared/protocol.js` in the client and
-`../shared/protocol.js` in the sidecar). The Foundry bridge speaks protocol v4 (`PROTOCOL_VERSION`): GM clients identify as `human` or
+`../shared/protocol.js` in the sidecar). The Foundry bridge speaks protocol v5 (`PROTOCOL_VERSION`): GM clients identify as `human` or
 `agent` endpoints (acked after registration) and the sidecar routes each invocation through an endpoint registry and
 router (`server/endpoints.ts`). The reserved error codes are `NO_ENDPOINT`, `ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`,
 `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `PROTOCOL_MISMATCH`, `NOT_GM` and `TOOL_GONE`; a client ack cannot produce them (they become `OP_FAILED`). `GATE_DENIED` is not reserved: the executing client re-enforces gates and may send it, so it is never proof that a sidecar check ran. A registered GM endpoint can push its script list with `bridge:registry` (`{ apiVersion, scripts }`, the shared definition of `shared/scripts.js`); every tool except the sidecar's built-in `read_handle` (the read, write and gameplay tools included) is such a script. Each MCP session lists the scripts of the endpoint kind it routes to and is sent `tools/list_changed` when they change; a script that `requires` the DOM routes to a `dom: true` endpoint of the agent kind only. Limits:
@@ -54,8 +54,11 @@ before touching its files.
   spawn a PTY. Both also refuse a request whose `Origin` header is present and not in `ALLOWED_ORIGINS`
   (`server/origins.ts`: the Foundry page origins on :30000 and the Vite dev-server page origins on :30001), and `/mcp` refuses a `Host` other than `127.0.0.1:<boundMcpPort>` or
   `localhost:<boundMcpPort>`; a request with no `Origin` is accepted (same-machine processes are trusted).
-- No file-deletion API (`fs.rm*`, `fs.unlink*`, `fs.rmdir*`, recursive removal helpers) appears in product code or
-  tests. The MCP config is a fixed, overwritten file at `<module root>/.wiretap/mcp-<port>.json` (gitignored); its modes (0o700 directory, 0o600
+- No permanent file-deletion API (`fs.rm*`, `fs.unlink*`, `fs.rmdir*`, their `fs.promises` forms, recursive removal
+  helpers, `rimraf`, `del`) appears in product code or tests. A file is removed only through the recycle bin, by
+  `trash([path], { glob: false })` of the `trash` package (a runtime dependency), which only `server/backups.ts` may
+  import. `tests/unit/noPermanentDelete.test.js` scans every `.js`, `.mjs`, `.ts` and `.svelte` file under `server/`,
+  `shared/`, `src/`, `scripts/` and `tests/` and fails on either. The MCP config is a fixed, overwritten file at `<module root>/.wiretap/mcp-<port>.json` (gitignored); its modes (0o700 directory, 0o600
   file) apply only on creation, `.wiretap` and the file are `lstat`-checked for symbolic links, and the lstat-then-write
   gap is a documented residual risk. Tests that write files use unique roots under the gitignored `test/tmp/` or mock
   `node:fs`.

@@ -37,6 +37,10 @@
             "Name": "Terminal Font Size",
             "Hint": "Font size (px) of the embedded terminal."
          },
+         "BackupFolder": {
+            "Name": "Backup folder",
+            "Hint": "Absolute path of the folder the sidecar writes document backups to. Empty uses .wiretap/backups in the module folder."
+         },
          "Gates": {
             "AllowMacroExecution": {
                "Name": "Risk gate: run macros",
@@ -73,6 +77,10 @@
             "AllowReplace": {
                "Name": "Risk gate: replace documents",
                "Hint": "Lets agents replace whole documents through replace_document, and replace an embedded collection in an update. Fields the new data leaves out reset to their defaults. Embedded documents it leaves out are deleted, which also needs the delete gate. Previews (dry runs) work without this gate."
+            },
+            "AllowBackupAnyFolder": {
+               "Name": "Allow backups in any folder",
+               "Hint": "Lets agents write, list, restore and delete backup files in a folder other than the default (.wiretap/backups in the module folder) or the Backup folder setting."
             },
             "AllowAgentScripts": {
                "Name": "Risk gate: agent scripts",

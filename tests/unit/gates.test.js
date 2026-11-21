@@ -27,11 +27,12 @@ const BOOLEAN_GATES = [
    'allowModuleConfigWrites',
    'allowDelete',
    'allowReplace',
+   'allowBackupAnyFolder',
    'allowAgentScripts',
 ];
 
 describe('GATES registry', () => {
-   it('holds exactly the ten boolean gates and the plugin module list', () => {
+   it('holds exactly the eleven boolean gates and the plugin module list', () => {
       expect(Object.keys(GATES).sort()).toEqual([...BOOLEAN_GATES, 'allowedPluginModules'].sort());
    });
 
@@ -80,6 +81,7 @@ describe('closedGateState', () => {
          allowModuleConfigWrites: false,
          allowDelete: false,
          allowReplace: false,
+         allowBackupAnyFolder: false,
          allowAgentScripts: false,
          allowedPluginModules: [],
       });

@@ -314,6 +314,30 @@ const EXPECTED = [
       'bytes',
       'hard',
    ],
+   [
+      'BACKUP_RESULT_MAX_BYTES',
+      256,
+      'bytes',
+      'hard',
+   ],
+   [
+      'BACKUP_LIST_MAX_BYTES',
+      2000,
+      'bytes',
+      'hard',
+   ],
+   [
+      'RESTORE_RESULT_MAX_BYTES',
+      4000,
+      'bytes',
+      'hard',
+   ],
+   [
+      'BACKUP_DELETE_MAX_BYTES',
+      128,
+      'bytes',
+      'hard',
+   ],
 ];
 
 describe('getBudget', () => {

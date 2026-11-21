@@ -367,9 +367,9 @@ describe('validateIdentify', () => {
       expect(result.error.message).toMatch(/reload/i);
    });
 
-   it('speaks protocol 4 and refuses the previous version 3', () => {
-      expect(PROTOCOL_VERSION).toBe(4);
-      expect(validateIdentify(identify({ protocolVersion: 3 })).error.code).toBe(PROTOCOL_MISMATCH);
+   it('speaks protocol 5 and refuses the previous version 4', () => {
+      expect(PROTOCOL_VERSION).toBe(5);
+      expect(validateIdentify(identify({ protocolVersion: 4 })).error.code).toBe(PROTOCOL_MISMATCH);
    });
 
    it('refuses a wrong protocolVersion', () => {

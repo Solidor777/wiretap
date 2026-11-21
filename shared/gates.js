@@ -24,6 +24,8 @@ import { GATE_DENIED } from './protocol.js';
  * @property {boolean} allowModuleConfigWrites - Writes to the module configuration setting.
  * @property {boolean} allowDelete - Deleting documents (delete_documents and the deletes of a batch).
  * @property {boolean} allowReplace - Replacing whole documents (replace_document).
+ * @property {boolean} allowBackupAnyFolder - Backup files in a folder other than the default or the Backup folder
+ * setting.
  * @property {boolean} allowAgentScripts - Saving and running agent-saved scripts (arbitrary code).
  * @property {string[]} allowedPluginModules - Ids of the modules whose plugin skills and scripts are enabled.
  */
@@ -92,6 +94,12 @@ export const GATES = Object.freeze({
       'boolean',
       false,
       'Replacing documents or embedded collections; fields left out reset to defaults.',
+   ),
+   allowBackupAnyFolder: entry(
+      'boolean',
+      false,
+      'Writing, listing, restoring and deleting backup files in a folder other than the default or the Backup folder '
+         + 'setting.',
    ),
    allowAgentScripts: entry('boolean', false, 'Saving, disabling and running agent-saved scripts (arbitrary code).'),
    allowedPluginModules: entry(
