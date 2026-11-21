@@ -31,7 +31,10 @@ const CREATED_BY = 'backupTools.spec';
 /** @type {number} The `timeoutMs` of the largest pack's dry run: the longest a backup call may set. */
 const DRY_RUN_TIMEOUT_MS = 300_000;
 
-/** @type {number} The MCP request wait of the largest pack's dry run: its time limit plus the sidecar's reply grace. */
+/**
+ * @type {number} The MCP request wait of the largest pack's dry run: its time limit plus a 10 s margin, which covers
+ * the sidecar's 2 s reply grace and the MCP round trip.
+ */
 const DRY_RUN_REQUEST_MS = DRY_RUN_TIMEOUT_MS + 10_000;
 
 /** @type {number} The bytes the largest backup may hold, used to project the export time at the measured rate. */
@@ -153,8 +156,10 @@ function readLines(file) {
 }
 
 /**
- * Copy an export without any `_stats` key at any depth: Foundry rewrites `_stats` on every write
- * (common/abstract/document.mjs, `_stats` of `_preCreate` and `_preUpdate`), so a restore cannot keep it.
+ * Copy an export without any `_stats` key at any depth: every database operation gets a fresh
+ * `operation.modifiedTime` (common/abstract/backend.mjs, `#configureOperation`), and the server writes it and the
+ * other managed `_stats` fields (`DocumentStatsField.managedFields`, common/data/fields.mjs) into each document it
+ * creates or updates (`_tagStats` in dist/database/backend/server-document.mjs), so a restore cannot keep them.
  * @param {unknown} value - The export.
  * @returns {unknown} The copy.
  */
@@ -348,10 +353,18 @@ test.describe('wiretap backup tools', () => {
    test.afterEach(async ({ page }) => {
       try {
          // A named-folder file needs `allowBackupAnyFolder`, which stays open until the gates are restored below.
+         // Every file is tried, so one refused delete does not leave the others behind.
+         /** @type {string[]} The files whose delete failed, each with its reason. */
+         const failures = [];
          for (const entry of made) {
-            await callJson('delete_backup', entry);
+            try {
+               await callJson('delete_backup', entry);
+            } catch (error) {
+               failures.push(`${entry.file}: ${error instanceof Error ? error.message : String(error)}`);
+            }
          }
          made = [];
+         expect(failures, 'every backup file of the test moves to the recycle bin').toEqual([]);
       } finally {
          try {
             await client?.close();
@@ -366,30 +379,33 @@ test.describe('wiretap backup tools', () => {
       }
    });
 
-   test('backs up to the Backup folder setting, lists the file, and the file holds a valid header', async ({ page }) => {
-      expect(await callJson('list_backups', {})).toMatchObject({ folder: 'setting' });
-      const result = await backup({ folderUuid: docs.folderUuid });
-      expect(result).toEqual({
-         file: result.file,
-         folder: 'setting',
-         documents: 2,
-         bytes: result.bytes,
+   test('backs up to the Backup folder setting, lists the file, and the file holds a valid header',
+      async ({ page }) => {
+         expect(await callJson('list_backups', {})).toMatchObject({ folder: 'setting' });
+         /** @type {{ file: string, bytes: number }} The backup of the Folder and its Actor. */
+         const result = await backup({ folderUuid: docs.folderUuid });
+         expect(result).toEqual({
+            file: result.file,
+            folder: 'setting',
+            documents: 2,
+            bytes: result.bytes,
+         });
+         /** @type {string} The path of the written file. */
+         const file = path.join(settingDir, result.file);
+         expect(fs.existsSync(file)).toBe(true);
+         /** @type {import('../../shared/backup.js').BackupHeader | null} The parsed header line. */
+         const header = parseHeaderLine(fs.readFileSync(file).subarray(0, HEADER_LINE_BYTES).toString('utf8'));
+         expect(header).not.toBeNull();
+         expect(header.worldId).toBe(await page.evaluate(() => game.world.id));
+         expect(header).toMatchObject({
+            documents: 2,
+            bytes: fs.statSync(file).size,
+         });
+         expect((await callJson('list_backups', {})).rows[0][0]).toBe(result.file);
       });
-      /** @type {string} The path of the written file. */
-      const file = path.join(settingDir, result.file);
-      expect(fs.existsSync(file)).toBe(true);
-      /** @type {import('../../shared/backup.js').BackupHeader | null} The parsed header line. */
-      const header = parseHeaderLine(fs.readFileSync(file).subarray(0, HEADER_LINE_BYTES).toString('utf8'));
-      expect(header).not.toBeNull();
-      expect(header.worldId).toBe(await page.evaluate(() => game.world.id));
-      expect(header).toMatchObject({
-         documents: 2,
-         bytes: fs.statSync(file).size,
-      });
-      expect((await callJson('list_backups', {})).rows[0][0]).toBe(result.file);
-   });
 
    test('restores changed, deleted and added-to documents to their backed-up export', async ({ page }) => {
+      /** @type {{ file: string }} The backup of the Actor and the JournalEntry. */
       const result = await backup({
          uuids: [
             docs.actorUuid,
@@ -439,6 +455,7 @@ test.describe('wiretap backup tools', () => {
    test('a restore dry run writes nothing, and a closed allowReplace fails the document naming the gate',
       async ({ page }) => {
          await expectGatesClosed(page, ['allowReplace']);
+         /** @type {{ file: string }} The backup of the Actor. */
          const result = await backup({ uuids: [docs.actorUuid] });
          /** @type {string} The name the Actor carries after the change. */
          const renamed = await page.evaluate(async (uuid) => {
@@ -449,6 +466,7 @@ test.describe('wiretap backup tools', () => {
          }, docs.actorUuid);
          await openGates(page, ['allowOwnershipWrites']);
 
+         /** @type {{ rows: string[][] }} The restore with `allowReplace` closed. */
          const denied = await callJson('restore_backup', { file: result.file });
          expect(denied).toMatchObject({
             replaced: 0,
@@ -476,6 +494,7 @@ test.describe('wiretap backup tools', () => {
 
    test('a folder argument outside the default and the setting needs allowBackupAnyFolder', async ({ page }) => {
       await expectGatesClosed(page, ['allowBackupAnyFolder']);
+      /** @type {{ isError: boolean, text: string }} The backup to the named folder with the gate closed. */
       const denied = await callText('backup_documents', {
          uuids: [docs.actorUuid],
          folder: namedDir,
@@ -486,6 +505,7 @@ test.describe('wiretap backup tools', () => {
       expect(fs.readdirSync(namedDir)).toEqual([]);
 
       await openGates(page, ['allowBackupAnyFolder']);
+      /** @type {{ file: string }} The backup to the named folder with the gate open. */
       const result = await backup({
          uuids: [docs.actorUuid],
          folder: namedDir,
@@ -509,6 +529,7 @@ test.describe('wiretap backup tools', () => {
          original(message, extra);
       };
 
+      /** @type {{ file: string }} The backup of the Actor, which carries the marker, and the JournalEntry. */
       const result = await backup({
          uuids: [
             docs.actorUuid,
@@ -538,11 +559,13 @@ test.describe('wiretap backup tools', () => {
    });
 
    test('delete_backup moves the file to the recycle bin, and a second delete is BACKUP_NOT_FOUND', async () => {
+      /** @type {{ file: string }} The backup of the Actor. */
       const result = await backup({ uuids: [docs.actorUuid] });
       /** @type {string} The path of the written file. */
       const file = path.join(settingDir, result.file);
       expect(fs.existsSync(file)).toBe(true);
 
+      /** @type {{ isError: boolean, text: string }} The first delete. */
       const deleted = await callText('delete_backup', { file: result.file });
       expect(deleted.isError, deleted.text).toBe(false);
       made = [];
@@ -553,6 +576,7 @@ test.describe('wiretap backup tools', () => {
       expect(bytesOf(deleted.text)).toBeLessThanOrEqual(DELETE_RESULT_MAX_BYTES);
       expect(fs.existsSync(file)).toBe(false);
 
+      /** @type {{ isError: boolean, text: string }} The second delete of the same file. */
       const again = await callText('delete_backup', { file: result.file });
       expect(again.isError, again.text).toBe(true);
       expect(again.text).toContain('BACKUP_NOT_FOUND');
@@ -577,6 +601,7 @@ test.describe('wiretap backup tools', () => {
       expect(largest, 'the world must have a compendium pack').not.toBeNull();
       /** @type {number} The clock before the call. */
       const start = performance.now();
+      /** @type {{ documents: number, bytes: number }} The dry run's measurement. */
       const result = await callJson('backup_documents', {
          pack: largest.id,
          dryRun: true,

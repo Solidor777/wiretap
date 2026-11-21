@@ -10,7 +10,10 @@ import { GATE_OBSERVER_PORT } from './ports.js';
 /** @type {string} The repo root, derived from this file's location. */
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-/** @type {string} The running list of prior setting values; overwritten, never deleted, restored by setup and teardown. */
+/**
+ * @type {string} The running list of prior setting values; overwritten, never deleted, restored by setup and
+ * teardown.
+ */
 const RECORD_FILE = path.join(repoRoot, 'test', 'state', 'gate-settings.json');
 
 /** @type {number} The longest a request to the gate observer may take, in milliseconds. */
