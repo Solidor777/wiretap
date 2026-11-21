@@ -438,7 +438,7 @@ World-scope settings, `restricted: true` (GM only), `config: true`, all default 
 
 | Gate | Unlocks | Notes |
 |---|---|---|
-| `allowMacroExecution` | `execute_macro`; any write that sets a Macro's `command`, changes a Macro's `type` to script, or writes an Adventure's stored `macros` | Arbitrary code; see the known limit below |
+| `allowMacroExecution` | `execute_macro`; any write that sets a Macro's `command`, changes a Macro's `type` to script, writes an Adventure's stored `macros`, or stores an `executeScript` RegionBehavior's code (directly or in an Adventure's `scenes`) | Arbitrary code; see the known limit below |
 | `allowDelete` | `delete_documents` | Irreversible; `dryRun` previews; Claude Code `ask` rules are a second layer |
 | `allowReplace` | `replace_document` | Overwrites the document; omitted fields reset to defaults |
 | `allowUndo` | `undo_last` | Replays inverse operations; each inverse also passes its original category gate |
@@ -596,11 +596,18 @@ the tool description); irreversible deletes (D12a, `dryRun`).
   client (the handler checks that the sender is a GM); without it, on the client running the call.
 - `roll(formula, toChat=false)`.
 - `draw_table(uuid, toChat?)`, `toChat` default false.
-- `execute_macro(uuid, actorUuid?, tokenUuid?)` (gate `allowMacroExecution`): `actorUuid` and `tokenUuid` name the
-  Actor and the Token (on the scene the executing client views) the macro acts on.
+- `execute_macro(uuid, actorUuid?, tokenUuid?, timeoutMs?)` (gate `allowMacroExecution`): `actorUuid` and
+  `tokenUuid` name the Actor and the Token (on the scene the executing client views) the macro acts on. A macro that
+  ran is never reported as failed: a value too large for the wire comes back as a success with `tooLarge: true`, and
+  the user-facing skill says such a result does not by itself show the macro did what was wanted.
+- `timeoutMs` (integer, 1,000 to 300,000, default 8,000) is a shared optional argument: any script whose input schema
+  declares it runs under that call's limit on the executing client, and the sidecar waits `timeoutMs` + 2 s for that
+  call's reply. Scripts without it keep the 8 s limit and the 10 s wait. Only `execute_macro` declares it.
 - A write that sets a Macro's `command` (create, update, replace or batch) also needs `allowMacroExecution`: the
   command is code that runs when a user executes the macro. So do an update that changes a Macro's `type` to script
-  (stored text becomes code) and a write of an Adventure's stored `macros` (importing it creates them).
+  (stored text becomes code; re-saving a script Macro's type is not refused), a write of an Adventure's stored
+  `macros` (importing it creates them), and a write that stores an `executeScript` RegionBehavior's code, directly or
+  in an Adventure's stored `scenes` (the code runs on region events).
 
 `undo_last` is built once, in M17. All as M14 scripts. `screenshot` is in M15b (it needs the agent runner). **Depends on:** M2, M5, M14. **Tests:** unit
 (query handler checks); integration; e2e with a GM tab and a `wtx-player` context: the sheet opens on the player
