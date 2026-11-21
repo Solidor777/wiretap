@@ -20,10 +20,14 @@ document, so none are stated here; the count at the time this file was written i
 | M14 Script runtime and the discovery layer | Done | 2026-10-13 | `8786fdd`, `a6a9d6c`, `43b7e57`, `f7fac20` | [`PLAN.md`](PLAN.md) section 4.5 as-built note; client runtime in `src/bridge/scripts/`; user-facing skill `skills/wiretap/SKILL.md` |
 | M5 Core write tools | Done | 2026-10-13 to 2026-11-20 | `248ee4a`, `948f4cc`, `f9e4fe0` (phase A); `9511623`, `1f4fd50` (phase B) | [`PLAN.md`](PLAN.md) M5 as-built notes (phase A and review fixes); `create_documents`, `update_documents`, `delete_documents` in `src/bridge/scripts/`; measured after the review fixes: `npm test` 74 files, 2016 passed, 1 skipped; headless e2e 40 passed, 1 skipped; 8 tools, 4,490 B of definitions (`tests/measure/measureContext.mjs`). Phase B and review fixes (2026-10-13, MEASURED): `replace_document`, `batch`, `actAs`, `idempotencyKey`, handle inputs, strict arguments, the `_id` and `flags.wiretap` guard rules, batch settle and repair; `npm test` 89 files, 2274 passed, 1 skipped; headless e2e 54 passed, 1 skipped; 10 tools, 6,202 B of definitions (`replace_document` 562 B, `batch` 795 B); 50-document `create_documents` ack 3,541 B; mutation runs: round 1 `mutation-m5b.txt` (17 killed), round 2 `mutation-m5c.txt` (39, 37 killed, 2 equivalent), round 3 `mutation-m5d.txt` (20 plus 1 re-run, all killed but one equivalent: the `flags` value wrap by prefix-stripped key), round 4 `mutation-m5e.txt` (15, all killed); e2e output in `debug/dumps/e2e-final-m5e.txt`; `allowDelete` and `allowReplace` gates added |
 | M4 Core read tools | Done | 2026-10-13 | `4d18a51`, `5e1c59f`, `b27144b`, `5fd4801` | [`PLAN.md`](PLAN.md) M4 as-built notes (phases A and B); [`experiments/2026-10-m4-keyfields.md`](experiments/2026-10-m4-keyfields.md); `list_document_types`, `get_document`, `search_documents`, `describe_schema` in `src/bridge/scripts/` |
+| M6 Sheets and gameplay | Done | 2026-11-20 | `fab9300` (plan); `823e070`, `3aeba20`, `c601f8b`, `e5da1ff`, `acec4dd`, `f3b7d38` (tasks 1 to 6); `bbbdcd1`, `4dbf3bf`, `15984e8`, `f08ec17`, `11940fe`, `44c9ac5`, `7fe13ce`, `c3f5129` (buddy-check fixes and plan edits); `8c58704`, `6bc5b2a`, `9e245a2` (e2e) | [`plans/2026-11-20-wiretap-m6-sheets-gameplay.md`](plans/2026-11-20-wiretap-m6-sheets-gameplay.md); as-built notes below; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro` in `src/bridge/scripts/`; 15 tools, 8,149 B of definitions |
 
-Current suite (MEASURED 2026-11-20, `npm test`): 94 test files passed, 2365 tests passed, 1 skipped (2366). Headless e2e: 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless `WIRETAP_MEASURE_KEYFIELDS=1`).
+Current suite (MEASURED 2026-11-20, `npm test`): 104 test files passed, 2544 tests passed, 1 skipped (2545). Headless
+e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless
+`WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs were run on their own (16 passed, see M6 below). A full e2e run
+after M6 has not been made.
 
-Next milestone in the order of PLAN.md section 5: M5.
+Next milestone in the order of PLAN.md section 5: M17.
 
 ## M0 status and deviations
 
@@ -466,6 +470,56 @@ follow):**
   through the public API, because `groupWrites` refuses an `_id` path before it is reached. The batch result match
   ignoring ids gives the same outcome, because the server confirmation after a failure reclassifies a wrongly matched
   echo.
+
+### As-built notes: M6
+
+**As built (2026-11-20; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro`, the Macro code gate):**
+
+- Run with the parallel workflow (ten tasks in lanes: sheets, dice, macros), controller in the main session. `undo_last`
+  was moved to M17 by the owner and is not built.
+- Definition sizes (MEASURED, `npx tsx tests/measure/measureContext.mjs`): `open_sheet` 370 B, `close_sheet` 363 B,
+  `roll` 368 B, `draw_table` 358 B, `execute_macro` 488 B; 15 tools, 8,149 B in all (max 30 tools, 16,000 B). Fixture
+  results: `open_sheet` with a 100-byte app id 122 B (budget 128), `close_sheet` 25 B (128), `roll` cut to its budget
+  500 B (512), `draw_table` of several long results 993 B (1000), `TABLE_EMPTY` 78 B (512), `USER_OFFLINE` 214 B (512),
+  `execute_macro` small value 27 B, a 12 KB value as a handle 135 B. Hard failures 0, warnings 0.
+- New result budgets: `SHEET_RESULT_MAX_BYTES` 128, `ROLL_RESULT_MAX_BYTES` 512, `DRAW_RESULT_MAX_BYTES` 1000.
+  `execute_macro` takes `RESULT_HARD_CAP_MAX_BYTES`; the enforcer turns a value over 8,000 B into a handle.
+- e2e on the live world (MEASURED, headless, zero census after each run): `sheetTools.spec.js` 4 passed (two runs),
+  `diceTools.spec.js` 6 passed (two runs), `macroTools.spec.js` 6 passed (runs 3 and 4; runs 1 and 2 each failed one
+  test on a spec error: a scene created with no active scene in the world became active, fixed with `active: false`
+  and a restored view; a token-only macro sees the token's synthetic actor, whose name is the token's). No product
+  defect was found by the e2e runs.
+- Owner decisions of 2026-11-20:
+  - The sheet tools are normal `api` tools, not DOM tools, with an optional `userId`: with it the sheet opens on that
+    connected user's client (who needs OBSERVER), without it on the client running the call; never broadcast. They
+    stay read-only (no consent prompt: opening a sheet changes no data).
+  - `close_sheet` takes `userId` too and uses a second user query, `wiretap.closeSheet`, with the same sender-is-GM
+    check as `wiretap.openSheet`.
+  - `draw_table` has `toChat`, default false, like `roll`.
+  - `execute_macro` takes `uuid`, `actorUuid?`, `tokenUuid?` and `timeoutMs?` (1 s to 5 minutes, default 8 s).
+    `timeoutMs` is one shared argument any tool can opt into by declaring it; the sidecar waits `timeoutMs` + 2 s for a
+    tool that declares it (10 s otherwise). A value too large for the wire is reported as success with `value: null`,
+    `tooLarge: true` and its size in bytes; the user-facing skill says this alone does not show the macro worked.
+  - `allowMacroExecution` also gates writing code that later runs: a Macro `command`, a Macro `type` changed to
+    `script`, an Adventure's stored `macros`, and a region behavior of type `executeScript` (in a scene, a region or an
+    Adventure). The type rules are change-only: re-saving a script Macro or an existing script behavior without new
+    code is not refused. Author/user fields, `_stats.createdTime` and folder/sort stay ungated (`docs/TODO.md`).
+  - The user-facing skill limit is 70 lines (was 60).
+  - Approved: per-family definition files (`sheetDefinitions.js`, `diceDefinitions.js`, `macroDefinitions.js`) so no
+    two lanes write one file; six new error codes (`SHEET_UNAVAILABLE`, `SHEET_DENIED`, `USER_OFFLINE`,
+    `SHEET_QUERY_FAILED`, `TABLE_EMPTY`, `MACRO_FAILED`); the `wiretap-gameplay` developer skill.
+  - The plan writer's calls, approved with the plan: a token not on the viewed scene is refused; a chat macro speaks as
+    the named actor; an e2e defect in risky code stops its lane; the names `actorUuid` and `tokenUuid`.
+- Review: Tasks 2 (sheets), 4 (`execute_macro`) and 5 (the Macro write gate) took a buddy check with
+  `wiretap-spec-reviewer` and `wiretap-code-reviewer` in place of their normal review. Its fixes: the sheet query's own
+  5 s timer (an unanswered query is `SHEET_QUERY_FAILED`, not a misleading 8 s timeout); remote sheet ids bounded by
+  their JSON size; `timeoutMs` and the per-call reply wait; `tooLarge` success; macro refusal and failure wording ("is
+  a document of type", "did not compile; nothing ran", "threw; it may have partly run"); the region script gate and
+  the change-only type rules; the guard walk skipping non-object embedded entries; stale comments; open-gate tests
+  that check the write happened; one skill line each for a null chat value, a sheet opening on every tab the user has
+  open and the agent's client stopping before `timeoutMs`; the exact timeout text (`limit / 1000`, not rounded).
+- Task 6 had to edit three test files outside its file list, because each hard-codes the shipped tool list:
+  `tests/unit/contextBudget.test.js`, `tests/unit/writeScripts.test.js`, `tests/integration/readTools.test.js`.
 
 ## Decision provenance (moved from PLAN.md section 3)
 

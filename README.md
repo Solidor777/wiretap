@@ -116,12 +116,15 @@ method `405`.
   script by name, judged the script's declared risk gate from its own world settings, and validated the arguments
   against the script's own schema (`shared/schemaValidate.js`, the same JSON Schema subset the sidecar converts; every
   array schema must declare a `maxItems` of at most 1,000); a script that runs longer than 8 s fails with
-  `SCRIPT_TIMEOUT`, which says the operation may still have applied. A client runs at most 8 scripts at once; a call
+  `SCRIPT_TIMEOUT`, which says the operation may still have applied. A script may declare the shared optional argument
+  `timeoutMs` in its schema (today only `execute_macro` does, 1,000 to 300,000 ms): a call that sets it runs under that
+  limit instead, and the sidecar waits `timeoutMs` + 2 s for that call's reply instead of its usual 10 s. A client runs at most 8 scripts at once; a call
   beyond that fails at once with `SCRIPT_BUSY`. The client sends one registry push per task however many scripts register in it; the sidecar applies at most 2
   `bridge:registry` pushes per second from one socket: later pushes in the same second are coalesced, and the latest is applied when the second ends (an earlier
   coalesced push is acked `{ ok: true, coalesced: true }`). The listed definitions of all tools, with the room kept
   for the sidecar's own `read_handle`, fit 16,000 bytes; a tool that would overflow it is refused with a logged reason.
-  The write tools are listed with `readOnlyHint` false. A tool
+  The write tools, `roll`, `draw_table` and `execute_macro` are listed with `readOnlyHint` false; `open_sheet` and
+  `close_sheet` with true. A tool
   added during a `claude` session was deferred (found through `ToolSearch`) and callable in the same session.
 - **Reading documents.** `list_document_types` returns the world's document classes (`world`, `embedded`, `packOnly`)
   and the subtypes of each (at most 3,000 bytes; the longest subtype lists are left out and named in `omitted` when
@@ -188,7 +191,10 @@ method `405`.
   whatever the gate, and the signed-in user and the last game master cannot be deleted), a Setting write needs
   `allowSettingWrites` and never a `wiretap.*` key (a by-id write is judged by the key of the existing document), the
   module configuration setting also needs `allowModuleConfigWrites`, a base64 data URI needs `allowFileUpload`, an
-  `ownership` field or path needs `allowOwnershipWrites`, a pack or a document inside one needs
+  `ownership` field or path needs `allowOwnershipWrites`, macro code needs `allowMacroExecution` (a Macro `command`, a
+  Macro `type` changed to `script`, an Adventure's stored `macros`, or a region behavior of type `executeScript` in a
+  region, a scene or an Adventure; re-saving an existing script Macro or script behavior without new code needs no
+  gate, and a `dryRun` needs it too), a pack or a document inside one needs
   `allowCompendiumWrites`, deleting documents needs `allowDelete` (so does any update or replace that removes embedded documents, such as a
   `replace_document` whose data leaves them out or an update with `op` `replace` or `delete` on an embedded field) and
   replacing a document needs `allowReplace` (a
@@ -224,6 +230,25 @@ method `405`.
   stored text before the call reaches the Foundry client, so the client's gates and write guard judge the resolved
   content. Each text is at most 100,000 bytes and all together 200,000; an unknown, expired or foreign handle is
   `HANDLE_NOT_FOUND`, a larger one `HANDLE_TOO_LARGE`, and a stored text that is not one document `HANDLE_NOT_DOCUMENT`.
+- **Sheets, dice and macros.** `open_sheet` takes `uuid` and an optional `userId`. With `userId` it opens the
+  document's sheet on that connected user's client, through the Foundry user query `wiretap.openSheet`; the receiving
+  client refuses a sender who is not a game master and opens the sheet only when its user has OBSERVER on the document
+  (`SHEET_DENIED` otherwise; Foundry itself would show a sheet at LIMITED). Without `userId` the sheet opens on the GM
+  client running the call. Nothing is broadcast to other users. `close_sheet` takes the same arguments and closes the
+  sheet the same way (query `wiretap.closeSheet`, same game-master check), reporting `closed: false` when none was
+  open. An offline user is `USER_OFFLINE`; a user's client that does not answer within 5 s is `SHEET_QUERY_FAILED`.
+  With no human connected (only an agent runner), no one sees a sheet: an agent reads the data or measurements
+  instead. Both results are at most 128 bytes. `roll` takes a dice `formula` (at most 256 characters, no `@`
+  references) and returns the total and each die within 512 bytes (`cut: true` when results are left out).
+  `draw_table` takes a RollTable `uuid`, draws with Foundry's own draw (drawn results are marked when the table has no
+  replacement) and returns the rows within 1,000 bytes; nothing left to draw is `TABLE_EMPTY`. Both take `toChat`,
+  default false: only `toChat: true` posts the roll or the draw to chat. `execute_macro` runs a Macro by `uuid` on the
+  GM client and returns `{ type, value }` (a Document as its uuid; an unserializable value as `unserializable: true`; a
+  value too large for the wire as `tooLarge: true` with its size in bytes, which shows the macro ran but not that it
+  worked). `actorUuid` and `tokenUuid` name the actor and token the macro acts on (a token must be on the scene that
+  client views; a chat macro speaks as them), and `timeoutMs` (1 s to 5 minutes, default 8 s) sets how long it may
+  run. A macro that does not compile ran nothing; one that throws may have partly run; both are `MACRO_FAILED`. It
+  needs the `allowMacroExecution` gate.
 - **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
   alone does not count). At most 32 sessions are held; an `initialize` beyond that is refused with `503` and a
   `Retry-After` header and no held session is ended, so one client cannot push another's session out. The idle sweep (one
@@ -241,7 +266,8 @@ method `405`.
 (`mcp__wiretap__list_document_types`, `mcp__wiretap__get_document`, `mcp__wiretap__search_documents`,
 `mcp__wiretap__describe_schema`, `mcp__wiretap__create_documents`, `mcp__wiretap__update_documents`,
 `mcp__wiretap__delete_documents`, `mcp__wiretap__replace_document`, `mcp__wiretap__batch`,
-`mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
+`mcp__wiretap__open_sheet`, `mcp__wiretap__close_sheet`, `mcp__wiretap__roll`, `mcp__wiretap__draw_table`,
+`mcp__wiretap__execute_macro`, `mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
 copy the `skills/wiretap` directory into the `.claude/skills/` directory of the project that runs `claude` (a skill for
 one project), or into `~/.claude/skills/` (a skill for every project), so that the file is
 `.claude/skills/wiretap/SKILL.md`, then start a new `claude` session. A symbolic link to the directory works the same
@@ -334,8 +360,8 @@ endpoint is connected: enable an agent, or restrict this session to a human tab 
 and `mutates` for the script as the listing did, or the call fails with `TOOL_GONE` without being sent.
 
 **Endpoint health.** Every endpoint is `healthy` or `unresponsive`; routing (the default order and the `endpoint`
-override alike) skips unresponsive endpoints, keeping the order above among the rest. When an invocation gets no ack in
-10 s the sidecar emits `bridge:ping` to that endpoint (the client acks `{ ok: true }` at once). A ping acked within 1 s
+override alike) skips unresponsive endpoints, keeping the order above among the rest. When an invocation gets no ack within
+its reply wait (10 s, or `timeoutMs` + 2 s, see below) the sidecar emits `bridge:ping` to that endpoint (the client acks `{ ok: true }` at once). A ping acked within 1 s
 leaves the endpoint healthy (the operation was slow). A ping that is not acked in 1 s, or cannot be written, marks it
 unresponsive and the sidecar pings it every 5 s, one ping in flight per endpoint, until one is acked; only a ping ack
 restores it (a new identify from an already-registered socket keeps its health and probe), and a disconnect or a refused
@@ -409,10 +435,11 @@ fallback to an older protocol.
 **Invocation and errors.** The sidecar emits `bridge:invoke` `{ op, params, requestId }` (`requestId` is a UUID per call
 and appears in sidecar log lines). The client acks `{ ok: true, result }` or `{ ok: false, error: { code?, message,
 failures? } }`. Failures reach the caller as `{ code, message, failures?, failureCount? }` with codes `NO_ENDPOINT`,
-`ENDPOINT_UNAVAILABLE` (endpoints connected, all unresponsive; refused without sending), `ENDPOINT_TIMEOUT` (10 s with
-no ack; the operation may still have applied; it is reported after up to 11 s, the 10 s ack window plus the sidecar's
-health ping of at most 1 s), `ENDPOINT_GONE` (the endpoint disconnected, or could not be written to, before it acked;
-reported at once, not after 10 s), `OP_FAILED` (the default when the client gives no code), `PROTOCOL_MISMATCH`,
+`ENDPOINT_UNAVAILABLE` (endpoints connected, all unresponsive; refused without sending), `ENDPOINT_TIMEOUT` (no ack
+within the call's reply wait: 10 s, or `timeoutMs` + 2 s for a tool that declares `timeoutMs` when the call sets it;
+the message names that wait and says the operation may still have applied; it is reported after up to the wait plus
+the sidecar's health ping of at most 1 s), `ENDPOINT_GONE` (the endpoint disconnected, or could not be written to,
+before it acked; reported at once, not after the wait), `OP_FAILED` (the default when the client gives no code), `PROTOCOL_MISMATCH`,
 `NOT_GM`, `ENDPOINT_LIMIT`. All of them except `OP_FAILED` are reserved: a code of that name in a client's failure ack
 is reported as `OP_FAILED`. Messages are at most 512 bytes (256 for `NO_ENDPOINT`), truncated with `…`; `failures` is
 capped at 10 entries with `failureCount` holding the true total. MCP error results are at most 512 bytes in total:
@@ -428,7 +455,7 @@ default; each unlocks a class of dangerous operation for agents:
 
 | Setting | Unlocks |
 |---|---|
-| `allowMacroExecution` | Running macros (arbitrary code) |
+| `allowMacroExecution` | Running macros with `execute_macro` (arbitrary code), and writing code that runs later: a Macro `command`, a Macro `type` changed to `script`, an Adventure's stored macros, or a region behavior that runs a script (in a region, a scene or an Adventure); a `dryRun` of such a write needs it too |
 | `allowUserWrites` | Creating, updating and deleting User documents |
 | `allowSettingWrites` | Writing Setting documents and world or user settings |
 | `allowFileUpload` | Base64 data in file-path fields and the file upload tool |

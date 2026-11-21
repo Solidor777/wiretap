@@ -1,6 +1,6 @@
 ---
 name: wiretap-mcp-bridge
-description: Wiretap MCP tools and Foundry bridge — the built-in tool (read_handle) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents, delete_documents, replace_document and batch among them), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
+description: Wiretap MCP tools and Foundry bridge — the built-in tool (read_handle) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents, delete_documents, replace_document, batch, open_sheet, close_sheet, roll, draw_table and execute_macro), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
 paths:
   - "server/mcp.ts"
   - "server/endpoints.ts"
@@ -34,8 +34,10 @@ MCP client → `initialize` `POST http://127.0.0.1:<WIRETAP_MCP_PORT>/mcp` (open
 `Mcp-Session-Id`) → the session lists the scripts the routed endpoint registered with `bridge:registry` → the SDK
 validates the arguments against the listed schema → `makeRegistryToolHandler` in `server/mcp.ts` →
 `bridge.invokeTool(name, args, { endpoint?, listed })` (`server/foundryBridge.ts`, the router of `server/endpoints.ts`) → Socket.IO
-`BRIDGE_INVOKE` `{ op: 'callTool', params: { name, arguments }, requestId }` to the chosen endpoint → the client's `callTool` op handler (`src/bridge/scripts/callTool.js`, see `wiretap-scripts`: script lookup, gate, argument validation, handler under an 8 s limit) → result returns the same
-way as the tool result.
+`BRIDGE_INVOKE` `{ op: 'callTool', params: { name, arguments }, requestId }` to the chosen endpoint → the client's `callTool` op handler (`src/bridge/scripts/callTool.js`, see `wiretap-scripts`: script lookup, gate, argument validation, handler under an 8 s limit, or the call's `timeoutMs` for a script that declares it) → result returns the same
+way as the tool result. The sidecar waits for the client's reply `DEFAULT_REPLY_WAIT_MS` (10 s, `server/endpoints.ts`),
+or `timeoutMs` + 2 s for a registry tool whose listed schema declares `timeoutMs` and whose call sets it
+(`toolReplyWaitMs`); a missing reply is `ENDPOINT_TIMEOUT` whose message names that call's wait.
 
 ## Reaching the endpoint
 

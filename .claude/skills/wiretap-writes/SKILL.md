@@ -33,8 +33,8 @@ paths:
 
 # Wiretap phase B write tools
 
-Covers the phase A scripts (`create_documents`, `update_documents`, `delete_documents`) and the phase B tools; the guard is in `wiretap-write-guard`. Ten shipped scripts
-in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B raw-definition limit, MEASURED by
+Covers the phase A scripts (`create_documents`, `update_documents`, `delete_documents`) and the phase B tools; the guard is in `wiretap-write-guard`. Fourteen shipped
+scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B raw-definition limit, MEASURED by
 `tests/measure/measureContext.mjs`). Foundry version read and measured: 14.364 (`game.version`).
 
 ## Files

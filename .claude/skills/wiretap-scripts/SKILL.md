@@ -1,6 +1,6 @@
 ---
 name: wiretap-scripts
-description: Wiretap client script runtime — the shipped script registry, the callTool dispatcher, ctx (core, shape, signal, dom), argument validation, the core read scripts list_document_types, get_document, search_documents and describe_schema, the core write scripts create_documents, update_documents and delete_documents (canonical export, exclusions, key-field lists, search paging, schema walker), and the user-facing skill skills/wiretap. Use when reading or editing src/bridge/scripts/, shared/schemaValidate.js, shared/utf8.js, shared/logText.js or skills/.
+description: Wiretap client script runtime — the shipped script registry, the callTool dispatcher and its timeoutMs convention, ctx (core, shape, signal, dom), argument validation, the core read scripts list_document_types, get_document, search_documents and describe_schema, the core write scripts create_documents, update_documents and delete_documents (canonical export, exclusions, key-field lists, search paging, schema walker), and the user-facing skill skills/wiretap. Use when reading or editing src/bridge/scripts/, shared/schemaValidate.js, shared/utf8.js, shared/logText.js or skills/.
 paths:
   - "src/bridge/scripts/**"
   - "shared/schemaValidate.js"
@@ -64,7 +64,9 @@ client-only, never on the wire). Every MCP tool except the sidecar's `read_handl
 | `writeArgs.js`, `writeAck.js` | Argument helpers (`shapeRefusal`, `parseDataObjects`, `parseJson`, `checkDataBytes`, `checkReadbackPaths`) and ack shaping (`ackDocuments`, `ackUpdates`, `attachReadback`, `fitPreview`) |
 | `createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | The handlers of the write scripts (`updateDocuments.js` groups patch entries by uuid) |
 | `listDocumentTypes.js`, `getDocument.js`, `searchDocuments.js`, `describeSchema.js` | The handlers of the read scripts (the last two only call `ctx.core`) |
-| `index.js` | `SHIPPED_SCRIPTS` (static list: `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`), `registerShippedScripts(registry?)`; called by `hooks/OnceReady.js` for a GM before `initFoundryBridge` |
+| `sheetDefinitions.js`, `diceDefinitions.js`, `macroDefinitions.js` | The per-family definitions of the gameplay scripts (`open_sheet`, `close_sheet`; `roll`, `draw_table`; `execute_macro`); relative imports only, like `definitions.js` |
+| `sheets.js`, `openSheet.js`, `closeSheet.js`, `roll.js`, `drawTable.js`, `executeMacro.js` | The gameplay script handlers and their shared sheet helpers: see `wiretap-gameplay` |
+| `index.js` | `SHIPPED_SCRIPTS` (static list: `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`, `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro`), `registerShippedScripts(registry?)`; called by `hooks/OnceReady.js` for a GM before `initFoundryBridge` |
 
 ## Registration (`registry.js`)
 
@@ -86,9 +88,15 @@ At most `SCRIPT_CONCURRENCY_MAX` (8) handlers run at once; a call beyond it is r
 Order: params `{ name: string, arguments? }` (else `OP_FAILED`) → script lookup by exact name (`TOOL_GONE`, name echoed
 cleaned and ≤ 48 B) → declared gate via `requireGate` from this client's settings, fail closed (`GATE_DENIED`, text from
 `gateDenial`) → `validate(arguments ?? {})` (`ARGS_INVALID`, text names the path) → handler under an `AbortController`
-timer (`SCRIPT_TIMEOUT`, aborts `ctx.signal`) → result must serialize (`RESULT_INVALID`) within 900,000 B
+timer (`SCRIPT_TIMEOUT`, aborts `ctx.signal`; the text names the limit in seconds, `limit / 1000` unrounded) → result must serialize (`RESULT_INVALID`) within 900,000 B
 (`RESULT_TOO_LARGE`); a result of `undefined` is `null`; the acked result is a `JSON.parse` copy. A handler error is
 rethrown; `foundryBridge.js` acks `ScriptError` codes as is and every other error as `OP_FAILED`, message ≤ 256 B.
+
+The handler limit is `SCRIPT_TIMEOUT_MS` (8 s; `createCallTool`'s `timeoutMs` option overrides it) unless the script's
+input schema declares the shared `timeoutMs` argument and the call sets it: the limit is then `args.timeoutMs` (the
+validated arguments hold only declared properties, so no other script can set it; the bounds are in the declaring
+schema). The sidecar reads the same argument and waits `timeoutMs` + 2 s for that call (`wiretap-mcp-bridge`). Only
+`execute_macro` declares it (1,000 to 300,000 ms).
 
 ## Argument validation (`shared/schemaValidate.js`)
 
@@ -127,7 +135,7 @@ Covers the four read scripts (list_document_types, get_document, search_document
 ## User-facing skill
 
 `skills/wiretap/SKILL.md` (module root, installed by copying; README). It may name only existing tools as
-`mcp__wiretap__<tool>` and must stay ≤ 60 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test).
+`mcp__wiretap__<tool>` and must stay ≤ 70 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test).
 
 ## Tests
 

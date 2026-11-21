@@ -30,9 +30,15 @@ Part of the wiretap-mcp-bridge skill; read it before changing server/mcp.ts, ser
   `formatBridgeError` (whole text at most 512 bytes: `<code>: <message>`, then `path: message` failure lines, one per line,
   as many as fit, then ` (+N more)` for the failures not shown). `truncateUtf8` returns `''` when the limit is below the
   3-byte ellipsis. `NO_ENDPOINT` is at most 256 bytes and names the fix. A transport rejection with an
-  `EndpointTimeoutError` (no ack within 10 s) first runs the endpoint health check, then becomes `ENDPOINT_TIMEOUT` with
-  the message `Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.`. The
-  check pings the endpoint (`ping`, 1 s window in `foundryBridge.ts`; the router awaits it before throwing, so a timed-out call reports after up to 11 s: the 10 s ack window plus at most 1 s): an acked ping leaves it healthy; a failed ping
+  `EndpointTimeoutError` (no ack within the call's reply wait) first runs the endpoint health check, then becomes
+  `ENDPOINT_TIMEOUT` with the message `Foundry did not respond in <wait / 1000> s; the operation may still have applied.
+  Check before retrying.` (`timeoutMessage(waitMs)`). The reply wait is passed to `send` per call: `invoke` (a plain op)
+  uses `DEFAULT_REPLY_WAIT_MS` (10 s, exported); `invokeTool` uses `toolReplyWaitMs(listed, args)`, which is
+  `args.timeoutMs` + `REPLY_WAIT_MARGIN_MS` (2 s) when the listed tool's `shape` declares `timeoutMs` (`TIMEOUT_ARG`)
+  and the call's value is a number (its bounds are the listed schema's, validated by the SDK before the call), else
+  the default. The check pings the endpoint (`ping`, 1 s window in `foundryBridge.ts`; the router awaits it before
+  throwing, so a timed-out call reports after up to its reply wait plus at most 1 s): an acked ping leaves it healthy;
+  a failed ping
   marks it unresponsive and starts one `timers.setInterval` probe (every `PROBE_INTERVAL_MS` = 5 s; defaults to the
   global interval timers, looked up at call time) that pings it with at most one ping in flight and, on an ack,
   restores it and clears the interval. Health log lines (failed ping, unresponsive, recovery) go to `logHealth` (default `log`); the bridge passes a `createLogThrottle` of 10 per minute (noun `endpoint health lines`), so a never-acking endpoint cannot flood the log. Concurrent timeouts on one endpoint share one check; a tick for a removed or
@@ -41,7 +47,7 @@ Part of the wiretap-mcp-bridge skill; read it before changing server/mcp.ts, ser
   Other transport rejections never ping; every other transport rejection (an
   `EndpointGoneError` or any error from the send) becomes `ENDPOINT_GONE` (the cause is logged, not returned). `requestId` is in the payload and sidecar log lines, not in error text or tool results.
 - `server/foundryBridge.ts` — `createFoundryBridge({ log? })` returns `{ handleConnection(socket), invoke, invokeTool, gateState, tools, subscribe, dispose }` (`invoke`, `invokeTool`, `gateState` and `tools` are the router's, `subscribe` the registry's). It keeps
-  a socket map, the registry and the router (the invoke and ping transports share one `emitWithAck` helper (`socket.timeout(ms).emit(event, [payload,] ack)`; the ack-callback error becomes an `EndpointTimeoutError`; invoke uses a 10 s window and tracks the call so a disconnect rejects it); a missing socket, a synchronous emit failure or a
+  a socket map, the registry and the router (the invoke and ping transports share one `emitWithAck` helper (`socket.timeout(ms).emit(event, [payload,] ack)`; the ack-callback error becomes an `EndpointTimeoutError`; invoke uses the window the router passes to `send(socketId, payload, timeoutMs)` and tracks the call so a disconnect rejects it); a missing socket, a synchronous emit failure or a
   disconnect while an invocation awaits its ack rejects with `EndpointGoneError`, the disconnect immediately; the
   router's `ping` is the same helper with a 1 s window and no payload, untracked). The returned bridge also has `dispose()` (stops every
   health probe; `createWiretapServer.dispose()` calls it).

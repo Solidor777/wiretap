@@ -17,7 +17,9 @@ For Svelte/Foundry syntax defer to the `web-ui:svelte-5`, `foundry-vtt:foundry-v
 - `OnceInit.js` sets `CONFIG.ui.wiretap = WiretapSidebarTab` (guarded on `foundry.applications.sidebar`
   availability) and registers the client settings `serverUrl`, `terminalCommand`, `terminalTheme`,
   `terminalFontSize` under module id `wiretap`, the risk-gate world settings (`registerGateSettings()` from
-  `settings/gates.js`), plus the hidden client-scope `endpointKind` (`human` default, `agent`;
+  `settings/gates.js`), the two sheet user queries `wiretap.openSheet` and `wiretap.closeSheet` in `CONFIG.queries`
+  (`registerSheetQueries()` from `bridge/sheetQuery.js`, on every client, players included, so a player's client can
+  receive them), plus the hidden client-scope `endpointKind` (`human` default, `agent`;
   `config: false`, no lang keys) that supplies `kind` in the bridge identify. It sets
   `game.modules.get('wiretap').api = { bridge: { get identified() } }`, a getter over `bridgeState.identified` exported
   by `bridge/foundryBridge.js` (true only after an ok identify ack; false on disconnect, refusal or a new identify) so
@@ -55,7 +57,8 @@ For Svelte/Foundry syntax defer to the `web-ui:svelte-5`, `foundry-vtt:foundry-v
 | `bridge/TerminalConnection.svelte.js` | `TerminalConnection` class + `connection` singleton: Socket.IO client to the sidecar, terminal events, `onSocket` hook for sharing the socket |
 | `bridge/popoutState.svelte.js` | `popoutState` rune state `{ open }` |
 | `settings/gates.js` | `registerGateSettings()`: one world-scope, `restricted`, `config: true`, default-closed setting per `GATES` entry of `shared/gates.js` (iterated, no second list); a `boolean` gate is a Boolean, `allowedPluginModules` a String of comma-separated module ids (default `''`; Foundry has no list-of-strings setting editor). `gateLangKey(name, 'Name' \| 'Hint')` derives the `lang/en.json` key `WIRETAP.Settings.Gates.<Name with first letter upper-cased>.<Name\|Hint>`; the hints of `allowMacroExecution`, `allowAgentScripts` and `allowedPluginModules` state the arbitrary-code caveat; `allowDelete` and `allowReplace` (default closed, enforced by `guardWrite`, previews exempt) have their own hints, as every `GATES` entry must |
-| `bridge/scripts/**` | The client script runtime: registry, `callTool` dispatcher, `ctx`, the shipped scripts `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document` and `batch`, the canonical document export (see `wiretap-scripts`) |
+| `bridge/scripts/**` | The client script runtime: registry, `callTool` dispatcher, `ctx`, the shipped scripts `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`, `open_sheet`, `close_sheet`, `roll`, `draw_table` and `execute_macro`, the canonical document export (see `wiretap-scripts`; the gameplay scripts in `wiretap-gameplay`) |
+| `bridge/sheetQuery.js` | `OPEN_SHEET_QUERY`, `CLOSE_SHEET_QUERY`, `handleOpenSheetQuery`, `handleCloseSheetQuery`, `registerSheetQueries()`: the receiving side of a GM's cross-user sheet request; each handler refuses a sender who is not a GM (`SHEET_DENIED`), the open handler also requires OBSERVER for this client's user, and both answer `{ ok: false, code, message }` instead of throwing (see `wiretap-gameplay`) |
 | `bridge/gates.js` | `readGateState()` (reads `game.settings` for every gate, a throwing read leaves the gate out, parses the module string, returns `sanitizeGateState(raw)`), `requireGate(name, moduleId?)` (`gateDenial(readGateState(), name, moduleId)`: reads this client's settings at call time, params never carry a gate value) and `gateNameFromSettingKey(key)` (gate name for a `wiretap.<gate>` key, else null) |
 | `test-probe/registerProbe.js` | e2e-only probe (must never ship in the production build); `_probe.scripts.registerE2e()` registers the e2e-only `e2e_gated` script |
 
@@ -66,5 +69,6 @@ For Svelte/Foundry syntax defer to the `web-ui:svelte-5`, `foundry-vtt:foundry-v
 - Settings, localization strings (`lang/en.json`) and keys must stay in sync when adding UI.
 - Unit tests live in `tests/unit/` (`Wiretap`, `TerminalToolbar`, `TerminalConnection*`, `terminalController`,
   `terminalFontSize`, `terminalThemes`, `OnceInit` which asserts the `serverUrl` default `http://127.0.0.1:31416`
-  matching the sidecar's IPv4 loopback bind, the `endpointKind` setting and `api.bridge.identified`; identify/ack and `BRIDGE_PING`
+  matching the sidecar's IPv4 loopback bind, the `endpointKind` setting, `api.bridge.identified` and the two sheet
+  queries; `sheetQuery` covers the query handlers; identify/ack and `BRIDGE_PING`
   behavior is in `foundryBridge.identify.test.js`; gates: `gateSettings` (registration iterates `GATES`, lang keys for every gate, caveat text), `bridgeGates` (`readGateState` with hostile values, `requireGate`), `foundryBridge.gatePush` (identify payload and push), `foundryBridge.noSettingWrites`); e2e in `tests/e2e/` (see `wiretap-build-test`).

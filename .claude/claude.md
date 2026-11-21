@@ -84,7 +84,8 @@
 | `wiretap-mcp-sessions` | `paths:` `server/mcpSessions.ts`, `server/toolRegistry.ts`, session tests | Stateful MCP sessions, expiry and cap, `list_changed`, HTTP limits, the endpoint tool registry |
 | `wiretap-scripts` | `paths:` `src/bridge/scripts/**`, `shared/scripts.js`, `shared/schemaValidate.js`, their tests | Client script registry, `callTool` dispatch, `ctx`, shipped scripts, user-facing skill |
 | `wiretap-writes` | `paths:` `src/bridge/scripts/writes.js`, `{create,update,delete}Documents.js`, `write{Args,Ack,Replace,Batch,BatchSettle,ActAs,Idempotency}.js`, `replaceDocument.js`, `batch.js`, `server/handleInput.ts`, their tests | `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`, advisory `actAs`, `idempotencyKey`, handle inputs |
-| `wiretap-write-guard` | `paths:` `src/bridge/scripts/write{Guard,Fields}.js`, `shared/writeKeys.js`, `shared/docPath.js`, `shared/gates.js`, their tests, the operator grid | `guardWrite` and its gates, the one reader of Foundry update operators, the cleaned-changes backstop, the `_id` and `flags.wiretap` rules |
+| `wiretap-write-guard` | `paths:` `src/bridge/scripts/write{Guard,Fields}.js`, `shared/writeKeys.js`, `shared/docPath.js`, `shared/gates.js`, their tests, the operator grid | `guardWrite` and its gates, the one reader of Foundry update operators, the cleaned-changes backstop, the `_id` and `flags.wiretap` rules, the macro and region script code gate |
+| `wiretap-gameplay` | `paths:` `src/bridge/sheetQuery.js`, `src/bridge/scripts/{sheets,sheetDefinitions,openSheet,closeSheet,diceDefinitions,roll,drawTable,macroDefinitions,executeMacro}.js`, their tests | `open_sheet`, `close_sheet` and the sheet user queries, `roll`, `draw_table`, `execute_macro` |
 | `wiretap-build-test` | `paths:` `tests/**`, build/lint configs | Build, vitest, Playwright e2e |
 
 - **Mandatory invoke:** invoke the matching skill(s) before reading or editing a subsystem's files.

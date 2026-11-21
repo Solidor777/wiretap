@@ -27,10 +27,11 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   equals the stored value Foundry applies nothing and the list is empty, which is not an error. A dry run lists the
   planned paths. Status: Documented in the tool description and the skill.
 
-- Title: Code-bearing documents are not gated. Summary: `create_documents` and `update_documents` can create or edit a
-  script `Macro` (and other code-bearing data such as HTML in a `JournalEntry` page) with no gate. PLAN section 4.6
-  gates only `execute_macro` (`allowMacroExecution`), which is not built; a Macro runs only when a user or a hook
-  executes it. `guardWrite` has no rule for the `Macro` class or for `type: 'script'`. Status: Needs owner decision.
+- Title: Code-bearing documents. Summary: a write tool could store code that runs later (a script `Macro`, a script
+  region behavior) with no gate. Status: Resolved by owner decision (2026-11-20): `guardWrite` needs
+  `allowMacroExecution`, the gate of `execute_macro`, for a Macro `command`, a Macro `type` changed to `script`, an
+  Adventure's stored `macros` and an `executeScript` region behavior at any nesting (change-only type rules). Other
+  code-bearing data, such as HTML in a `JournalEntry` page, stays ungated; no decision covers it.
 
 - Title: JSON-text arguments. Summary: the argument-schema subset (depth 4, 64 nodes, no free-form object) cannot
   describe a data object, so `data` entries and patch `value`s are JSON text, parsed in the handler with a byte bound.
@@ -129,3 +130,9 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   kept). The load runs also showed 1000 ms waits for the identify or the invocation and 5000 ms test timeouts
   expiring under that overload; those are CPU starvation, not a defect of one test.
 
+
+- Title: A scene created while no scene is active becomes active. Summary: `Scene.create({ name })` in a world with no
+  active scene makes the new scene active and viewed (`client/documents/scene.mjs` `_preCreateOperation`, READ at
+  lines 1038-1042), which pulls every connected user to it. MEASURED in the M6 macro e2e on 14.364: the first run left a
+  recorded scene active until teardown. Status: `tests/e2e/macroTools.spec.js` creates its scene with `active: false`
+  and restores the prior view; any e2e that creates a Scene must do the same.

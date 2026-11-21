@@ -1,6 +1,6 @@
 ---
 name: wiretap-write-guard
-description: Wiretap write guard - guardWrite and its gates (allowDelete, allowReplace, user, setting, ownership, file upload, compendium), the one reader of Foundry update operators (shared/writeKeys.js), the schema-based embedded-field analysis and cleaned-changes backstop (writeFields.js), the write path grammar (shared/docPath.js groupWrites) and the generated operator grid. Use when reading or editing the guard, operators, gates or their tests.
+description: Wiretap write guard - guardWrite and its gates (allowDelete, allowReplace, user, setting, ownership, file upload, macro and region script code, compendium), the one reader of Foundry update operators (shared/writeKeys.js), the schema-based embedded-field analysis and cleaned-changes backstop (writeFields.js), the write path grammar (shared/docPath.js groupWrites) and the generated operator grid. Use when reading or editing the guard, operators, gates or their tests.
 paths:
   - "src/bridge/scripts/writeGuard.js"
   - "src/bridge/scripts/writeFields.js"
@@ -13,6 +13,7 @@ paths:
   - "tests/unit/writeFields.test.js"
   - "tests/unit/writeHardening.test.js"
   - "tests/unit/riskGates.test.js"
+  - "tests/unit/macroCommandGate.test.js"
   - "tests/unit/operatorGrid*.js"
   - "tests/unit/mockFoundryData.js"
 ---
@@ -31,15 +32,39 @@ paths:
 ## Order of the guard
 
 Called through the planners of `writes.js` (also by `replace_document` and `batch`) after arguments and targets are
-resolved and before validation or any write. The guard throws `GATE_DENIED` for the first of:
-a password-named field or path of a `User` (always), a `Setting` whose key (from the data, or from the existing
-document for a by-id update, normalized by `normalizeSettingKey`) is in the `wiretap.` namespace or cannot be read
-(always), then a closed gate on THIS client: `allowUserWrites` (User), `allowSettingWrites` (Setting),
-`allowModuleConfigWrites` (`core.moduleConfiguration`), `allowFileUpload` (a base64 data URI anywhere in the values),
-`allowOwnershipWrites` (an `ownership` key in values or paths), `allowCompendiumWrites` (a `pack` or a document
-inside one), and, when the intent carries `operations` (or the cleaned `targets` hold operators on embedded fields) and
-is not a `dryRun`, `allowDelete` (`delete`) or `allowReplace` (`replace`); see `wiretap-writes`. The guard also refuses
-an operator spelling in written data first (`scan.operator`) and the `flags.wiretap` scope.
+resolved and before validation or any write. The guard throws `GATE_DENIED` for the first of, in code order (always,
+whatever the gates): an operator spelling in written data (`scan.operator`), the `flags.wiretap` scope, a
+password-named field or path of a `User`, a `Setting` whose key (from the data, or from the existing document for a
+by-id update, normalized by `normalizeSettingKey`) is in the `wiretap.` namespace or cannot be read; then a closed gate
+on THIS client: `allowDelete` (`delete`) and `allowReplace` (`replace`) when the intent carries `operations` (or the
+cleaned `targets` hold operators on embedded fields) and is not a `dryRun` (see `wiretap-writes`), `allowUserWrites`
+(User), `allowSettingWrites` (Setting), `allowModuleConfigWrites` (`core.moduleConfiguration`), `allowFileUpload` (a
+base64 data URI anywhere in the values), `allowOwnershipWrites` (an `ownership` key in values or paths),
+`allowMacroExecution` (macro or region script code, below; a `dryRun` needs it too), `allowCompendiumWrites` (a
+`pack` or a document inside one).
+
+## Macro and region script code (`allowMacroExecution`)
+
+A write that stores code which later runs needs `allowMacroExecution`, the gate of `execute_macro`
+(`wiretap-gameplay`), on every write tool (create, update, replace, batch).
+
+- `writesMacroCode(intent)` over the raw `values` and each target's cleaned `changes`; a key counts by its first
+  segment (`keyNames(key)[0]`, so a dotted key counts as the field Foundry expands it into):
+  - `Macro`: any key writing `command` (any value, any op); or a cleaned change of `type` whose value (operator
+    unwrapped by `DataFieldOperator.get`) is `script` on a target whose stored `_source.type` is not `script`. The type
+    rule is change-only: re-saving a script Macro's type is allowed. A create's `type: 'script'` with no `command`
+    stores the default empty command and is not gated.
+  - `Adventure`: any key writing `macros` (importing the adventure creates those Macros).
+- `writesRegionScript(intent)`: each create or replace value (with `CONFIG[documentName].documentClass`, no stored
+  source) or each target's cleaned changes (with `target.document.constructor` and `_source`) is copied by
+  `writtenData` (a `ForcedReplacement` becomes its value, a `ForcedDeletion` becomes null) and walked by
+  `walkEmbedded` of `writeFields.js`, which pairs each written embedded document with its stored source by `_id` at any
+  nesting: a RegionBehavior itself, a Region's `behaviors`, a Scene's `regions`, an Adventure's stored `scenes`. The
+  walk skips an embedded collection element that is not an object (Foundry's validation refuses it after the guard).
+  `storesBehaviorScript(data, stored)` is true when the behavior's type after the write is `executeScript` and either
+  the stored type is not (created so, or changed to it) or the write puts `system.source`. Change-only like Macros:
+  this is Foundry's `MACRO_SCRIPT` rule (`common/documents/region-behavior.mjs`, `region.mjs`) except that Foundry also
+  refuses re-stating the type of an existing `executeScript` behavior and Wiretap does not.
 
 ## Delete and replace gates (`writeGuard.js`)
 
@@ -117,6 +142,8 @@ Unit over `mockFoundryData.js` (faithful `DataFieldOperator` classes, the cleani
 and a Setting with no flags, ownership or type) and `mockWriteWorld.js`: `writeGuard`, `riskGates`, `writeHardening`,
 `writeKeys`, `writeFields` (one traversal for `containsEmbedded` and `walkEmbedded`, the `idempotencyKey` refusal on a
 class with no flags), `writeBackstop` (guard-level and `analyzeChanges` cases, the create backstop, the cleaned-changes
-scan outside operator values), and `operatorGrid` over `operatorGridCases.js`: every write tool against every operator
+scan outside operator values), `macroCommandGate` (Macro command, type, Adventure macros and region script behaviors
+at every nesting, through create, update, replace and batch, gate closed, dry run and open; the writes that store no
+code), and `operatorGrid` over `operatorGridCases.js`: every write tool against every operator
 representation, including the dotted wrapper segment, on a fresh world per cell. e2e `tests/e2e/writeTools.spec.js`
 records how Foundry treats every operator spelling (the representation table in `docs/POST_WORK_FINDINGS.md`).
