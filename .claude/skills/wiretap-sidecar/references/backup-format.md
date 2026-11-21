@@ -77,7 +77,8 @@ bridge used (`invoke`, `snapshot`, `expectPieces`, `sendPiece`). Not yet registe
   `timeoutMs + 2000`). After the invoke the sink is removed; the error is the sink's first failure, else the invoke's,
   else `BACKUP_INCOMPLETE` unless the end marker arrived, `documents` is at least 1 and equals the newline count,
   `bytes` equals the file size, `unreadable`/`parents` are non-negative integers and the four `world` fields pass
-  `isWorldField`. Then `writer.finish` writes the header. Any failure after the file exists closes it and sends it to
+  `isWorldField`; more than `BACKUP_MAX_DOCUMENTS` (10,000) documents is `BACKUP_TOO_LARGE` (`parseHeaderLine` refuses
+  such a header, so the file could not be opened, restored or recycled). Then `writer.finish` writes the header. Any failure after the file exists closes it and sends it to
   `store.trashPath`; if that fails the message gains `The partial file <name> could not be moved to the recycle bin.`
   (fitted to 512 B). Result `{ file, folder, documents, bytes }` (+ `unreadable`, `parents` when above 0); a dry run
   `{ dryRun: true, folder, documents, bytes }` (+ the same).
@@ -85,16 +86,20 @@ bridge used (`invoke`, `snapshot`, `expectPieces`, `sendPiece`). Not yet registe
   header plus received bytes over `BACKUP_MAX_BYTES` is `BACKUP_TOO_LARGE`; the end marker's `seq`/`pieces` must equal
   the data piece count and `bytes` the data bytes; `gone()` records `ENDPOINT_GONE` (nothing saved) and never throws;
   the first failure is kept and refuses every later piece. `counts()` gives pieces, bytes, newline count and `ended`.
-- `restore_backup` (budget 4000): `prepare` opens `store.openFile(folder, file)` and sends `{ header, uuids?, dryRun?,
+- `restore_backup` (budget 4000): `prepare` runs `checkFolder(folder, false)` (a linked folder or `.wiretap` is
+  `BACKUP_FOLDER_INVALID`), opens `store.openFile(folder, file)` and sends `{ header, uuids?, dryRun?,
   timeoutMs }`; `onSent` starts the pump (not awaited): `readPiece(512000)` pieces with `seq` 0, 1, … then the end
   marker, each `sendPiece` waiting until the reply deadline; a pump failure is logged and stops it. The reader closes once the
   pump and the invoke both ended. `ENDPOINT_GONE` becomes "the restore may be partly applied". The client result must
-  be an object whose `rows` is at most 20 rows of `[string, string, string?]` and whose other fields are non-negative
-  integers, booleans or strings, every string at most 256 B, else `BACKUP_INCOMPLETE`; it is returned with `file` first,
+  have the shape `RestoreResult` of `src/bridge/backup/restoreBackup.js`: `replaced`, `created`, `skipped`, `failed`
+  and `secretLost` non-negative integers; `rows` at most 20 rows of `[string, string, string?]`; `differences`, when
+  present, 1 to 3 strings (one per differing world field); `dryRun`, when present, `true`; no other key; every string
+  at most 256 B; else `BACKUP_INCOMPLETE`; it is returned with `file` first,
   fitted by `fitRestoreResult`, and `BACKUP_INCOMPLETE` if it still exceeds 4000 B.
 - `list_backups` (budget 2000): `checkFolder(folder, false)`, `store.list(folder, limit ?? 10)`, notes cut to 40 B,
   `{ folder, rows, total }` (+ `invalid` when above 0), fitted by `fitListResult`.
-- `delete_backup` (budget 128): `store.trashFile(folder, file)`, `{ file, trashed: true }`.
+- `delete_backup` (budget 128): `checkFolder(folder, false)`, `store.trashFile(folder, file)`,
+  `{ file, trashed: true }`.
 - `fitListResult` / `fitRestoreResult(result, maxBytes)`: drop `rows` from the end until the JSON fits; `cut: true`
   when any was dropped.
 

@@ -12,6 +12,7 @@ import {
    BACKUP_BUSY,
    BACKUP_INCOMPLETE,
    BACKUP_MAX_BYTES,
+   BACKUP_MAX_DOCUMENTS,
    BACKUP_TIMEOUT_DEFAULT_MS,
    BACKUP_TIMEOUT_MAX_MS,
    BACKUP_TIMEOUT_MIN_MS,
@@ -113,6 +114,19 @@ const REPLY_GRACE_MS: number = 2000;
 
 // Longest string a restore result may carry in a field or a row, in UTF-8 bytes.
 const RESTORE_STRING_MAX_BYTES: number = 256;
+
+// The count fields of a restore result; the client restore always sends each.
+const RESTORE_COUNT_KEYS: readonly string[] = [
+   'replaced',
+   'created',
+   'skipped',
+   'failed',
+   'secretLost',
+];
+
+// Most entries of a restore result's `differences`: the client compares three world fields (`foundryVersion`,
+// `systemId`, `systemVersion`), one entry each; a fourth means the result did not come from the client restore.
+const RESTORE_DIFFERENCES_MAX: number = 3;
 
 // Longest error text a tool result carries, `<code>: <message>`, in UTF-8 bytes.
 const ERROR_MAX_BYTES: number = getBudget('ERROR_MAX_BYTES').value;
@@ -367,9 +381,22 @@ function namePartialFile(error: BridgeError, file: string): BridgeError {
 }
 
 /**
- * Check a restore result a GM client sent: an object whose `rows` holds at most `RESTORE_ROWS_MAX` rows of
- * `[string, string, string?]`, and whose other fields are non-negative integer counts, booleans or strings; every
- * string at most `RESTORE_STRING_MAX_BYTES` bytes.
+ * Check that a value is an array of `min` to `max` strings of at most `RESTORE_STRING_MAX_BYTES` bytes each.
+ * @param {unknown} value - The untrusted value.
+ * @param {number} min - The fewest entries.
+ * @param {number} max - The most entries.
+ * @returns {boolean} Whether it is such an array.
+ */
+function isShortStringArray(value: unknown, min: number, max: number): value is string[] {
+   return Array.isArray(value) && value.length >= min && value.length <= max && value.every(isShortString);
+}
+
+/**
+ * Check a restore result a GM client sent against the `RestoreResult` the client restore builds
+ * (`src/bridge/backup/restoreBackup.js`): the counts `replaced`, `created`, `skipped`, `failed` and `secretLost` as
+ * non-negative integers; `rows`, at most `RESTORE_ROWS_MAX` rows of `[string, string, string?]`; `differences`, when
+ * present, one to `RESTORE_DIFFERENCES_MAX` strings; `dryRun`, when present, `true`; no other field. Every string is
+ * at most `RESTORE_STRING_MAX_BYTES` bytes.
  * @param {unknown} value - The untrusted result.
  * @returns {Record<string, unknown>} A copy of the fields.
  * @throws {BridgeError} `BACKUP_INCOMPLETE` for any other shape.
@@ -380,22 +407,28 @@ function checkRestoreResult(value: unknown): Record<string, unknown> {
    }
    // The fields, each checked below.
    const entries: Array<[string, unknown]> = Object.entries(value);
-   for (const [key, field] of entries) {
-      if (key === 'rows') {
-         if (!Array.isArray(field) || field.length > RESTORE_ROWS_MAX) {
-            throw mismatch();
-         }
-         for (const row of field) {
-            if (!Array.isArray(row) || row.length < 2 || row.length > 3 || !row.every(isShortString)) {
-               throw mismatch();
-            }
-         }
-      } else if (!(isCount(field) || typeof field === 'boolean' || isShortString(field))) {
-         throw mismatch();
-      }
+   // The result viewed as a field map.
+   const fields: Record<string, unknown> = Object.fromEntries(entries);
+   // Every key the client restore can send.
+   const known: string[] = [
+      ...RESTORE_COUNT_KEYS,
+      'rows',
+      'differences',
+      'dryRun',
+   ];
+   if (
+      !entries.every(([key]) => known.includes(key)) ||
+      !RESTORE_COUNT_KEYS.every((key) => isCount(fields[key])) ||
+      !Array.isArray(fields.rows) ||
+      fields.rows.length > RESTORE_ROWS_MAX ||
+      !fields.rows.every((row) => isShortStringArray(row, 2, 3)) ||
+      (fields.differences !== undefined && !isShortStringArray(fields.differences, 1, RESTORE_DIFFERENCES_MAX)) ||
+      (fields.dryRun !== undefined && fields.dryRun !== true)
+   ) {
+      throw mismatch();
    }
    // `Object.fromEntries` defines own data properties, so a `__proto__` key cannot change the prototype.
-   return Object.fromEntries(entries);
+   return fields;
 }
 
 /**
@@ -585,7 +618,8 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
     * @param {string} note - The caller's note.
     * @param {ResolvedFolder['kind']} kind - The folder kind.
     * @returns {object} `{ file, folder, documents, bytes }` plus `unreadable` and `parents` when above 0.
-    * @throws {BridgeError} `BACKUP_INCOMPLETE` on a mismatch; `BACKUP_WRITE_FAILED` when the header cannot be written.
+    * @throws {BridgeError} `BACKUP_INCOMPLETE` on a mismatch; `BACKUP_TOO_LARGE` over `BACKUP_MAX_DOCUMENTS`;
+    *         `BACKUP_WRITE_FAILED` when the header cannot be written.
     */
    function finishBackup(value: unknown, sink: BackupSink, note: string, kind: ResolvedFolder['kind']): object {
       // What the sink accepted.
@@ -614,6 +648,10 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
          !isWorldField(world.systemVersion)
       ) {
          throw mismatch();
+      }
+      // `parseHeaderLine` refuses a header over the limit, so such a file could not be opened, restored or recycled.
+      if (documents > BACKUP_MAX_DOCUMENTS) {
+         throw new BridgeError(BACKUP_TOO_LARGE, `The backup would exceed ${BACKUP_MAX_DOCUMENTS} documents.`);
       }
       // The checked world description.
       const checked: WorldDescription = world as unknown as WorldDescription;
@@ -707,6 +745,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
             prepare: (endpoint: Endpoint, requestId: string): object => {
                // The resolved, gate-checked folder.
                const folder: ResolvedFolder = chooseFolder(store, args.folder, endpoint.gateState, endpoint.settings);
+               store.checkFolder(folder, false);
                reader = store.openFile(folder, args.file);
                target = {
                   socketId: endpoint.socketId,
@@ -795,6 +834,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
       refuseWhileBusy();
       // The folder.
       const folder: ResolvedFolder = sidecarFolder(routing, args.folder);
+      store.checkFolder(folder, false);
       await store.trashFile(folder, args.file);
       return jsonResult({
          file: args.file,

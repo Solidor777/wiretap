@@ -337,6 +337,54 @@ function writeBackup(store, folderPath = store.defaultFolder, content = {}) {
    return writer.file;
 }
 
+/** @type {'junction' | 'dir'} The directory link type that needs no administrator rights on this platform. */
+const DIR_LINK = process.platform === 'win32' ? 'junction' : 'dir';
+
+/**
+ * Write a valid backup into a real directory and reach it through links: a named folder that is a link to it, and a
+ * `.wiretap` that is a link to its parent, so the default folder resolves to it too.
+ * @param {Fixture} fixture - The store, fake bridge and tools.
+ * @returns {{ link: string, target: string, file: string }} The linked named folder, the real folder and the file.
+ */
+function linkedFolders(fixture) {
+   /** @type {string} The real directory standing in for `.wiretap`. */
+   const realWiretap = path.join(fixture.root, 'real-wiretap');
+   /** @type {string} The real folder holding the backup. */
+   const target = path.join(realWiretap, 'backups');
+   fs.mkdirSync(target, { recursive: true });
+   /** @type {string} The backup. */
+   const file = writeBackup(fixture.store, target);
+   /** @type {string} A named folder that links to the real folder. */
+   const link = path.join(fixture.root, 'link');
+   fs.symlinkSync(target, link, DIR_LINK);
+   fs.symlinkSync(realWiretap, path.join(fixture.root, '.wiretap'), DIR_LINK);
+   return {
+      link,
+      target,
+      file,
+   };
+}
+
+/** @type {object} A restore result with every field the client restore always sends. */
+const RESTORE_RESULT = {
+   replaced: 1,
+   created: 1,
+   skipped: 0,
+   failed: 0,
+   rows: [
+      [
+         'Actor.MOCKACTOR0000002',
+         'created',
+         'FOLDER_GONE: restored outside its folder.',
+      ],
+      [
+         'Actor.MOCKACTOR0000001',
+         'replaced',
+      ],
+   ],
+   secretLost: 0,
+};
+
 describe('backup tool definitions', () => {
    it('lists each definition within DEFINITION_MAX_BYTES, measured as the MCP SDK lists it', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
@@ -646,6 +694,42 @@ describe('backup_documents', () => {
          expect(backupFiles(fixture.store.defaultFolder)).toEqual([]);
       });
 
+   it('saves 10000 documents as a listable backup and refuses 10001 with BACKUP_TOO_LARGE, trashing the file',
+      async () => {
+         /** @type {Fixture} The store, fake bridge and tools under test. */
+         const fixture = setup();
+         /**
+          * Stream `count` short document lines in one piece and answer with a result that matches them.
+          * @param {number} count - The document lines.
+          * @returns {void}
+          */
+         const streamLines = (count) => {
+            clientStreams(fixture, streamOf(['{"uuid":"Actor.MOCKACTOR0000001"}\n'.repeat(count)]), (bytes) => ({
+               documents: count,
+               bytes: HEADER_LINE_BYTES + bytes,
+               unreadable: 0,
+               parents: 0,
+               world: WORLD,
+            }));
+         };
+
+         streamLines(10_000);
+         /** @type {Record<string, unknown>} The saved backup. */
+         const saved = await fixture.call('backup_documents', { documentName: 'Actor' });
+         expect(saved.documents).toBe(10_000);
+         expect(await fixture.call('list_backups', {})).toMatchObject({
+            rows: [[saved.file, expect.any(String), 10_000, '']],
+            total: 1,
+         });
+
+         streamLines(10_001);
+         expect(await fixture.call('backup_documents', { documentName: 'Actor' })).toEqual({
+            error: 'BACKUP_TOO_LARGE: The backup would exceed 10000 documents.',
+         });
+         expect(fixture.trash.calls).toHaveLength(1);
+         expect(backupFiles(fixture.store.defaultFolder)).toEqual([saved.file]);
+      });
+
    it('names the partial file when the recycle bin refuses it', async () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup({
@@ -846,6 +930,7 @@ describe('restore_backup', () => {
                skipped: 0,
                failed: 0,
                rows: [],
+               secretLost: 0,
             };
          };
          /** @type {Record<string, unknown>} The parsed tool result. */
@@ -952,6 +1037,7 @@ describe('restore_backup', () => {
          skipped: 0,
          failed: 0,
          rows,
+         secretLost: 0,
       });
       /** @type {Record<string, unknown>} The parsed tool result. */
       const result = await fixture.call('restore_backup', { file });
@@ -964,30 +1050,107 @@ describe('restore_backup', () => {
       expect(kept).toEqual(rows.slice(0, kept.length));
    });
 
+   it('returns the result the client restore sends after a Foundry or system update, differences included',
+      async () => {
+         /** @type {Fixture} The store, fake bridge and tools under test. */
+         const fixture = setup();
+         /** @type {string} The backup. */
+         const file = writeBackup(fixture.store);
+         /** @type {object} A dry run's result as `restoreBackup` of the client builds it, every optional field set. */
+         const clientResult = {
+            ...RESTORE_RESULT,
+            secretLost: 1,
+            differences: [
+               'foundryVersion: 13.351 -> 14.364',
+               'systemId: mock-system -> mock-system-b',
+               'systemVersion: 1.0.0 -> 1.1.0',
+            ],
+            dryRun: true,
+         };
+         fixture.bridge.behaviour = async () => clientResult;
+         expect(await fixture.call('restore_backup', {
+            file,
+            dryRun: true,
+         })).toEqual({
+            file,
+            ...clientResult,
+            __bytes: expect.any(Number),
+         });
+      });
+
    it('refuses a malformed restore result with BACKUP_INCOMPLETE', async () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The backup. */
       const file = writeBackup(fixture.store);
-      /** @type {object[]} Malformed client results. */
+      /** @type {string} A difference of the longest kind the client builds. */
+      const difference = `foundryVersion: ${'v'.repeat(64)} -> ${'w'.repeat(64)}`;
+      /** @type {object[]} Client results the client restore cannot send, each one change away from a real one. */
       const malformed = [
          {
-            replaced: 21,
+            ...RESTORE_RESULT,
             rows: Array.from({ length: 21 }, () => ['Actor.MOCKACTOR0000001', 'replaced']),
          },
          {
+            ...RESTORE_RESULT,
             replaced: -1,
-            rows: [],
          },
          {
-            failed: 1,
+            ...RESTORE_RESULT,
             rows: [['Actor.MOCKACTOR0000001', 'failed', 'r'.repeat(300)]],
+         },
+         {
+            ...RESTORE_RESULT,
+            secretLost: undefined,
+         },
+         {
+            ...RESTORE_RESULT,
+            extra: 'text',
+         },
+         {
+            ...RESTORE_RESULT,
+            dryRun: false,
+         },
+         {
+            ...RESTORE_RESULT,
+            differences: 'foundryVersion: 13.351 -> 14.364',
+         },
+         {
+            ...RESTORE_RESULT,
+            differences: [],
+         },
+         {
+            ...RESTORE_RESULT,
+            differences: Array.from({ length: 4 }, () => difference),
+         },
+         {
+            ...RESTORE_RESULT,
+            differences: [1],
+         },
+         {
+            ...RESTORE_RESULT,
+            differences: [`${difference}${'x'.repeat(200)}`],
          },
       ];
       for (const result of malformed) {
-         fixture.bridge.behaviour = async () => result;
+         fixture.bridge.behaviour = async () => JSON.parse(JSON.stringify(result));
          expect((await fixture.call('restore_backup', { file })).error).toMatch(/^BACKUP_INCOMPLETE: /);
       }
+   });
+
+   it('refuses to restore from a folder that is a link or whose .wiretap is a link', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      fixture.bridge.endpoint.gateState.allowBackupAnyFolder = true;
+      const { link, file } = linkedFolders(fixture);
+      expect((await fixture.call('restore_backup', {
+         file,
+         folder: link,
+      })).error).toBe('BACKUP_FOLDER_INVALID: The backup folder is a symbolic link.');
+      expect((await fixture.call('restore_backup', { file })).error)
+         .toBe('BACKUP_FOLDER_INVALID: The backup folder is a symbolic link.');
+      expect(fixture.bridge.calls.every((call) => !call.sent)).toBe(true);
+      expect(fixture.bridge.sentPieces).toHaveLength(0);
    });
 });
 
@@ -1050,6 +1213,21 @@ describe('list_backups and delete_backup', () => {
          folder: namedDir,
       })).error).toMatch(/^GATE_DENIED: /);
       expect(await fixture.call('delete_backup', { file })).toMatchObject({ trashed: true });
+   });
+
+   it('refuses to delete from a folder that is a link or whose .wiretap is a link', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      fixture.bridge.endpoint.gateState.allowBackupAnyFolder = true;
+      const { link, target, file } = linkedFolders(fixture);
+      expect((await fixture.call('delete_backup', {
+         file,
+         folder: link,
+      })).error).toBe('BACKUP_FOLDER_INVALID: The backup folder is a symbolic link.');
+      expect((await fixture.call('delete_backup', { file })).error)
+         .toBe('BACKUP_FOLDER_INVALID: The backup folder is a symbolic link.');
+      expect(fixture.trash.calls).toEqual([]);
+      expect(backupFiles(target)).toEqual([file]);
    });
 
    it('deletes a valid backup into the recycle bin and returns { file, trashed: true } within 128 bytes', async () => {
