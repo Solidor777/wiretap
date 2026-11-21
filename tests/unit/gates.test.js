@@ -29,10 +29,11 @@ const BOOLEAN_GATES = [
    'allowReplace',
    'allowBackupAnyFolder',
    'allowAgentScripts',
+   'allowPackDeletion',
 ];
 
 describe('GATES registry', () => {
-   it('holds exactly the eleven boolean gates and the plugin module list', () => {
+   it('holds exactly the twelve boolean gates and the plugin module list', () => {
       expect(Object.keys(GATES).sort()).toEqual([...BOOLEAN_GATES, 'allowedPluginModules'].sort());
    });
 
@@ -66,6 +67,15 @@ describe('GATES registry', () => {
       expect(GATES).toHaveProperty('allowReplace');
       expect(GATES).not.toHaveProperty('allowUndo');
    });
+
+   it('defines allowPackDeletion as a boolean gate that is closed by default', () => {
+      expect(GATES.allowPackDeletion).toMatchObject({
+         type: 'boolean',
+         default: false,
+      });
+      expect(gateDenial(closedGateState(), 'allowPackDeletion')?.message).toContain('allowPackDeletion');
+      expect(isGateOpen({ ...closedGateState(), allowPackDeletion: true }, 'allowPackDeletion')).toBe(true);
+   });
 });
 
 describe('closedGateState', () => {
@@ -83,6 +93,7 @@ describe('closedGateState', () => {
          allowReplace: false,
          allowBackupAnyFolder: false,
          allowAgentScripts: false,
+         allowPackDeletion: false,
          allowedPluginModules: [],
       });
       first.allowMacroExecution = true;
