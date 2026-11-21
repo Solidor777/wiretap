@@ -1,7 +1,7 @@
 // @vitest-environment node
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
    ALLOWED_DOCUMENT_NAMES,
    E2E_PREFIX,
@@ -31,6 +31,24 @@ let deleted;
 
 /** @type {{ combats: object[], scenes: object[] }} The mock world state. */
 let world;
+
+/**
+ * A `Map` of mock packs by collection id that iterates its values, as Foundry's `Collection` does
+ * (`common/utils/collection.mjs`).
+ * @extends {Map<string, object>}
+ */
+class MockPacks extends Map {
+   /**
+    * Iterate the packs, not the entries.
+    * @returns {IterableIterator<object>} An iterator over the mock packs, in insertion order.
+    */
+   [Symbol.iterator]() {
+      return this.values();
+   }
+}
+
+/** @type {MockPacks} The mock compendium packs of `game.packs`. */
+let packs;
 
 /** @type {number} Counter that makes each test's file distinct. */
 let serial = 0;
@@ -90,6 +108,49 @@ function entryOf(documentName, number) {
 }
 
 /**
+ * Add a mock compendium pack. Its `deleteCompendium` records the id in `deleted` and removes the pack; its
+ * `configure` applies the given configuration.
+ * @param {string} name - The pack name; the id is `world.<name>`.
+ * @param {object} [overrides] - Fields replacing the defaults (`title`, `metadata`, `locked`).
+ * @returns {Record<string, any>} The mock pack.
+ */
+function addPack(name, overrides = {}) {
+   /** @type {string} The pack collection id. */
+   const collection = `world.${name}`;
+   /** @type {Record<string, any>} The mock pack. */
+   const pack = {
+      collection,
+      title: `${E2E_PREFIX}pack ${name}`,
+      metadata: { packageType: 'world' },
+      locked: false,
+      ...overrides,
+   };
+   pack.configure = vi.fn(async (configuration) => {
+      Object.assign(pack, configuration);
+   });
+   pack.deleteCompendium = vi.fn(async () => {
+      deleted.push(collection);
+      packs.delete(collection);
+   });
+   packs.set(collection, pack);
+   return pack;
+}
+
+/**
+ * Build a valid running-list entry for a mock pack.
+ * @param {string} name - The pack name; the id is `world.<name>`.
+ * @returns {object} The running-list entry that names the mock pack.
+ */
+function packEntryOf(name) {
+   return {
+      documentName: 'Compendium',
+      id: `world.${name}`,
+      uuid: `Compendium.world.${name}`,
+      createdBy: 'unit',
+   };
+}
+
+/**
  * Write a running list straight to the file.
  * @param {object} record - The running-list content to write as JSON.
  * @returns {void}
@@ -129,8 +190,10 @@ beforeEach(() => {
       combats: [],
       scenes: [],
    };
+   packs = new MockPacks();
    globalThis.game = {
       world: { id: TEST_WORLD },
+      packs,
       get combats() {
          return world.combats;
       },
@@ -153,8 +216,51 @@ afterEach(() => {
 describe('entryProblem and recordProblem', () => {
    it('accepts a well-formed entry of every allowed type', () => {
       for (const documentName of ALLOWED_DOCUMENT_NAMES) {
-         expect(entryProblem(entryOf(documentName, 1)), documentName).toBeNull();
+         /** @type {object} A well-formed entry of this type; a pack is named by its collection id. */
+         const entry = documentName === 'Compendium' ? packEntryOf('wiretap-e2e-1') : entryOf(documentName, 1);
+         expect(entryProblem(entry), documentName).toBeNull();
       }
+   });
+
+   it('accepts a well-formed pack entry and refuses a pack id on another type', () => {
+      expect(entryProblem({
+         documentName: 'Compendium',
+         id: 'world.wiretap-e2e-1',
+         uuid: 'Compendium.world.wiretap-e2e-1',
+         createdBy: 'unit',
+      })).toBeNull();
+      expect(entryProblem(packEntryOf('a_B-9'))).toBeNull();
+      for (const id of [
+         'system.pack',
+         'world.',
+         'world.a b',
+         `world.${'a'.repeat(65)}`,
+         idOf(1),
+      ]) {
+         expect(entryProblem({
+            ...packEntryOf('x'),
+            id,
+            uuid: `Compendium.${id}`,
+         }), id).toMatch(/pack id/);
+      }
+      expect(entryProblem(packEntryOf('a'.repeat(64)))).toBeNull();
+      for (const uuid of [
+         'world.x',
+         'Compendium.world.y',
+         'Actor.world.x',
+         'Compendium.world.x.Actor.MOCKDOC000000001',
+      ]) {
+         expect(entryProblem({
+            ...packEntryOf('x'),
+            uuid,
+         }), uuid).toMatch(/uuid/);
+      }
+      expect(entryProblem({
+         documentName: 'Actor',
+         id: 'world.x',
+         uuid: 'Actor.world.x',
+         createdBy: 'unit',
+      })).toMatch(/16-character/);
    });
 
    it.each([
@@ -769,5 +875,188 @@ describe('settleRegistry and assertSettled', () => {
          swept,
          census: [],
       })).toThrow(/and 40 more/);
+   });
+});
+
+describe('compendium packs', () => {
+   it('tears a recorded pack down through deleteCompendium, unlocking it first only when it is locked', async () => {
+      /** @type {Record<string, any>} A pack the GM locked. */
+      const locked = addPack('locked', { locked: true });
+      /** @type {Record<string, any>} A pack that is not locked. */
+      const open = addPack('open');
+      writeRaw(pendingOf([
+         packEntryOf('locked'),
+         packEntryOf('open'),
+      ]));
+      await teardownRecorded(page, { file });
+      expect(locked.configure).toHaveBeenCalledTimes(1);
+      expect(locked.configure).toHaveBeenCalledWith({ locked: false });
+      expect(locked.configure.mock.invocationCallOrder[0]).toBeLessThan(
+         locked.deleteCompendium.mock.invocationCallOrder[0],
+      );
+      expect(locked.deleteCompendium).toHaveBeenCalledTimes(1);
+      expect(open.configure).not.toHaveBeenCalled();
+      expect(open.deleteCompendium).toHaveBeenCalledTimes(1);
+      expect(deleted.sort()).toEqual([
+         'world.locked',
+         'world.open',
+      ]);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).pending).toBe(false);
+   });
+
+   it('refuses to delete a recorded pack that is a system pack or whose title lacks the e2e prefix, and deletes nothing',
+      async () => {
+         /** @type {Record<string, any>} A safe pack recorded beside the unsafe ones. */
+         const safe = addPack('safe');
+         /** @type {Record<string, any>} A system pack named with the prefix. */
+         const system = addPack('system', { metadata: { packageType: 'system' } });
+         /** @type {Record<string, any>} A world pack a human titled. */
+         const human = addPack('human', { title: 'MOCK_monsters' });
+         for (const entries of [
+            [
+               packEntryOf('safe'),
+               packEntryOf('system'),
+            ],
+            [
+               packEntryOf('safe'),
+               packEntryOf('human'),
+            ],
+         ]) {
+            writeRaw(pendingOf(entries));
+            await expect(teardownRecorded(page, { file })).rejects.toThrow(/refuses to delete: world\.(system|human)/);
+            expect(JSON.parse(fs.readFileSync(file, 'utf8')).pending).toBe(true);
+         }
+         for (const pack of [
+            safe,
+            system,
+            human,
+         ]) {
+            expect(pack.deleteCompendium).not.toHaveBeenCalled();
+            expect(pack.configure).not.toHaveBeenCalled();
+         }
+         expect(deleted).toEqual([]);
+      });
+
+   it('re-tests the identity of a pack right before deleting it', async () => {
+      /** @type {Record<string, any>} The pack that is retitled between the inspection and the delete. */
+      const pack = addPack('racing', { locked: true });
+      writeRaw(pendingOf([packEntryOf('racing')]));
+      /** @type {number} The evaluate calls made so far. */
+      let calls = 0;
+      /** @type {{ evaluate: (fn: Function, arg?: unknown) => Promise<unknown> }} A page that retitles the pack. */
+      const racing = {
+         evaluate: async (fn, arg) => {
+            calls += 1;
+            // The inspection (call 2, after the world check) passed; the pack is retitled before the delete runs.
+            if (calls === 3) {
+               pack.title = 'MOCK_monsters';
+            }
+            return fn(arg);
+         },
+      };
+      await expect(teardownRecorded(racing, { file })).rejects.toThrow(/world\.racing/);
+      expect(pack.configure).not.toHaveBeenCalled();
+      expect(pack.deleteCompendium).not.toHaveBeenCalled();
+   });
+
+   it('skips a recorded pack that no longer exists', async () => {
+      writeRaw(pendingOf([packEntryOf('gone')]));
+      await teardownRecorded(page, { file });
+      expect(deleted).toEqual([]);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).pending).toBe(false);
+   });
+
+   it('deletes recorded packs after the documents', async () => {
+      addPack('first');
+      addDocument('Folder', 1);
+      addDocument('Actor', 2);
+      writeRaw(pendingOf([
+         packEntryOf('first'),
+         entryOf('Folder', 1),
+         entryOf('Actor', 2),
+      ]));
+      await teardownRecorded(page, { file });
+      expect(deleted).toEqual([
+         `Actor.${idOf(2)}`,
+         `Folder.${idOf(1)}`,
+         'world.first',
+      ]);
+   });
+
+   it('sweeps unrecorded world packs titled with the prefix and spares system packs, module packs and unprefixed world '
+      + 'packs', async () => {
+      /** @type {Record<string, any>} A locked world pack titled with the prefix. */
+      const locked = addPack('locked', { locked: true });
+      addPack('open');
+      /** @type {Record<string, any>[]} The packs the sweep must leave alone. */
+      const spared = [
+         addPack('human', { title: 'MOCK_monsters' }),
+         addPack('inside', { title: `MOCK ${E2E_PREFIX}not at the start` }),
+         addPack('system', {
+            title: 'MOCK_system_pack',
+            metadata: { packageType: 'system' },
+         }),
+         addPack('module', {
+            title: 'MOCK_module_pack',
+            metadata: { packageType: 'module' },
+         }),
+      ];
+      addDocument('Folder', 1);
+      expect(await sweepUnrecorded(page)).toEqual([
+         `Folder ${E2E_PREFIX}doc 1`,
+         `Compendium ${E2E_PREFIX}pack locked`,
+         `Compendium ${E2E_PREFIX}pack open`,
+      ]);
+      expect(locked.configure).toHaveBeenCalledWith({ locked: false });
+      expect(deleted).toEqual([
+         `Folder.${idOf(1)}`,
+         'world.locked',
+         'world.open',
+      ]);
+      for (const pack of spared) {
+         expect(pack.deleteCompendium).not.toHaveBeenCalled();
+         expect(pack.configure).not.toHaveBeenCalled();
+      }
+   });
+
+   it('a sweep with a violation deletes no pack', async () => {
+      /** @type {Record<string, any>} A world pack the sweep would delete without the violation. */
+      const safe = addPack('safe');
+      /** @type {Record<string, any>} A module pack titled with the prefix. */
+      const foreign = addPack('foreign', { metadata: { packageType: 'module' } });
+      addDocument('Actor', 1);
+      await expect(sweepUnrecorded(page)).rejects.toThrow(/refuses to delete: Compendium world\.foreign/);
+      expect(safe.deleteCompendium).not.toHaveBeenCalled();
+      expect(foreign.deleteCompendium).not.toHaveBeenCalled();
+      expect(deleted).toEqual([]);
+   });
+
+   it('counts a prefixed world pack as a leftover line "Compendium <title>"', async () => {
+      addPack('left');
+      addPack('human', { title: 'MOCK_monsters' });
+      addPack('system', { metadata: { packageType: 'system' } });
+      expect(await censusPrefixed(page)).toEqual([`Compendium ${E2E_PREFIX}pack left`]);
+   });
+
+   it('settleRegistry tears down, sweeps and counts packs together with documents', async () => {
+      addPack('recorded', { locked: true });
+      addPack('unrecorded');
+      addDocument('Actor', 1);
+      writeRaw(pendingOf([
+         packEntryOf('recorded'),
+         entryOf('Actor', 1),
+      ]));
+      /** @type {{ swept: string[], census: string[] }} The settle outcome. */
+      const result = await settleRegistry(page, { file });
+      expect(result).toEqual({
+         swept: [`Compendium ${E2E_PREFIX}pack unrecorded`],
+         census: [],
+      });
+      expect(deleted).toEqual([
+         `Actor.${idOf(1)}`,
+         'world.recorded',
+         'world.unrecorded',
+      ]);
+      expect(packs.size).toBe(0);
    });
 });
