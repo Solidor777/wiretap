@@ -643,11 +643,12 @@ apart from documented system side effects; no document text appears in any MCP m
 **Goal:** D30. `create_pack(label, type, name?)` and `delete_pack(id)` for world packs, `dryRun` on both.
 **Depends on:** M5. **In:**
 
-- Pack creation through Foundry's compendium creation call; deletion through `CompendiumCollection#deleteCompendium`
-  after unlocking; `create_pack` behind `allowCompendiumWrites`, `delete_pack` behind `allowPackDeletion`; both refused for system and module packs.
+- Pack creation through Foundry's compendium creation call; deletion through `deleteCompendium` of an unlocked pack; a
+  locked pack is refused with `PACK_LOCKED` and the GM unlocks it (Wiretap never changes a lock); `create_pack` behind
+  `allowCompendiumWrites`, `delete_pack` behind `allowPackDeletion`; both refused for system and module packs.
 - `delete_pack` always prompts the human, at every Claude Code permission level: the tool carries
-  `_meta["anthropic/requiresUserInteraction"]: true` (§2.5 safeguard 2), which needs a tool-level `_meta` field in the
-  script definition and its registry mapping. A test asserts the annotation is present and cannot be removed by a
+  `_meta["anthropic/requiresUserInteraction"]: true` (§2.5 safeguard 2), carried by the script definition's
+  `requiresUserInteraction` flag, which the sidecar maps to `_meta` and forces for the name `delete_pack`. A test asserts the annotation is present and cannot be removed by a
   plugin or setting. The prompt is enforced by Claude Code, so a non-Claude client or local process is not prompted
   (§2.5 residual risk); the gate stays the Wiretap-side control.
 - `dryRun` lists the pack and its document count; the tool description states that deletion is irreversible.

@@ -68,14 +68,15 @@ the names in `RESERVED_SCRIPT_NAMES`) is a script. Scripts call ops
 | `listDocumentTypes.js`, `getDocument.js`, `searchDocuments.js`, `describeSchema.js` | The handlers of the read scripts (the last two only call `ctx.core`) |
 | `sheetDefinitions.js`, `diceDefinitions.js`, `macroDefinitions.js` | The per-family definitions of the gameplay scripts (`open_sheet`, `close_sheet`; `roll`, `draw_table`; `execute_macro`); relative imports only, like `definitions.js` |
 | `sheets.js`, `openSheet.js`, `closeSheet.js`, `roll.js`, `drawTable.js`, `executeMacro.js` | The gameplay script handlers and their shared sheet helpers: see `wiretap-gameplay` |
-| `index.js` | `SHIPPED_SCRIPTS` (static list: `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`, `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro`), `registerShippedScripts(registry?)`; called by `hooks/OnceReady.js` for a GM before `initFoundryBridge` |
+| `packDefinitions.js`, `packCommon.js`, `createPack.js`, `deletePack.js` | The compendium pack scripts `create_pack` and `delete_pack` (definitions with relative imports only, shared gate and ack helpers, handlers): see `wiretap-packs` |
+| `index.js` | `SHIPPED_SCRIPTS` (static list: `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`, `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro`, `create_pack`, `delete_pack`), `registerShippedScripts(registry?)`; called by `hooks/OnceReady.js` for a GM before `initFoundryBridge` |
 
 ## Registration (`registry.js`)
 
 `register(definition, handler)` never throws and returns `{ ok: true, name }` or `{ ok: false, reason }`; every refusal is
 logged as `Wiretap | script registry refused "<name>": <reason>` (name and reason cleaned and bounded). Checks, in order:
 the shared `validateScriptDefinition(def, 'shipped')` (name, version, description, definition ≤ 800 B, budget ≤ 16,000,
-`requires`, `mutates`, gate); `requires: 'none'` refused; handler is a function; name not registered; count ≤
+`requires`, `mutates`, gate, the optional `requiresUserInteraction` that may only be `true`); `requires: 'none'` refused; handler is a function; name not registered; count ≤
 `ALWAYS_LISTED_TOOLS_MAX` − `RESERVED_SCRIPT_NAMES.length` (25); `inputSchema` compiles with `compileSchema`; the listed
 definition (`definitionBytes(name, description, compiled.listed)`, the form the sidecar lists) ≤ `DEFINITION_MAX_BYTES`;
 the sum of listed bytes plus one `DEFINITION_MAX_BYTES` per sidecar built-in (five) ≤ `ALL_DEFINITIONS_MAX_BYTES`
@@ -139,8 +140,9 @@ Covers the four read scripts (list_document_types, get_document, search_document
 `skills/wiretap/SKILL.md` (module root, installed by copying; README). It may name only existing tools as
 `mcp__wiretap__<tool>` (it names every shipped script and every sidecar built-in; its Backups recipe tells the agent
 to make or offer `backup_documents` before a bulk update, a replace, a delete or a document-changing macro, and to
-restore only when the user asks; its opening says `list_backups` and `delete_backup` work without a GM) and must stay
-≤ 70 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test).
+restore only when the user asks; its opening says `list_backups` and `delete_backup` work without a GM; its Compendium
+packs line names both pack tools, their gates and that Claude Code asks before every `delete_pack`) and must stay
+≤ 75 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test; it is 74 now).
 
 ## Backup export (`canonical.js`)
 
@@ -171,7 +173,9 @@ gate path, and `e2e_matrix` to reach the client argument validator with argument
 running list in `tests/e2e/registryCore.js` (`test/state/registry.json`; re-exported by `registry.js`, which adds the
 headless setup and teardown steps). The registry allows `ChatMessage` (identified by `flavor`), `Combat`, `Setting` (key
 prefix `wiretap-e2e.`), `User` (never the signed-in user or a game master), `Scene`, `Playlist`, `RollTable`,
-`JournalEntry`, `Macro`, `Cards`, `Actor`, `Item` and `Folder`, deleted in that order (`tests/unit/e2eRegistry.test.js`). `tests/e2e/registry.spec.js` covers the sweep and the refusal to delete a
+`JournalEntry`, `Macro`, `Cards`, `Actor`, `Item`, `Folder` and `Compendium` (a world pack, id `world.<name>`, uuid
+`Compendium.world.<name>`, resolved with `game.packs.get` and deleted with `deleteCompendium`, unlocked first when
+locked; a pack must be a world pack titled with the prefix), deleted in that order (`tests/unit/e2eRegistry.test.js`). `tests/e2e/registry.spec.js` covers the sweep and the refusal to delete a
 non-prefixed document.
 
 ## Reference files

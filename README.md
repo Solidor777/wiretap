@@ -104,10 +104,12 @@ method `405`.
   [Document backups](#document-backups)) is a script a GM client registers. A registered
   GM client pushes its complete script list with the Socket.IO event `bridge:registry`, whose payload is
   `{ apiVersion: 1, scripts: [...] }` (a plain array is refused); each event replaces the endpoint's previous list. A
-  script definition is `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate? }`,
-  documented field by field in `shared/scripts.js`: `version` is a semver-like string of at most 32 characters,
-  `requires` is `'api'` (any client endpoint) or `'dom'` (a DOM-capable endpoint), and `mutates` is required and never
-  defaulted. The sidecar refuses any entry over the budgets (name at most 32 characters, description at most 240,
+  script definition is `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate?,
+  requiresUserInteraction? }`, documented field by field in `shared/scripts.js`: `version` is a semver-like string of
+  at most 32 characters, `requires` is `'api'` (any client endpoint) or `'dom'` (a DOM-capable endpoint), `mutates` is
+  required and never defaulted, and `requiresUserInteraction` may only be `true`. A tool with that flag, and
+  `delete_pack` whatever its definition says, is listed with `_meta: { "anthropic/requiresUserInteraction": true }`,
+  which the sidecar builds itself; a client cannot attach any other `_meta` to a tool. The sidecar refuses any entry over the budgets (name at most 32 characters, description at most 240,
   bounded definition, a documented JSON Schema subset), logs the reason, and tells each session routed to that endpoint
   with one debounced `notifications/tools/list_changed` (200 ms quiet, 1,000 ms at most). A call to such a tool runs the
   `callTool` operation on the session's endpoint; each tool is listed with `readOnlyHint` set to the inverse of
@@ -125,7 +127,8 @@ method `405`.
   coalesced push is acked `{ ok: true, coalesced: true }`). The listed definitions of all tools, with the room kept
   for the sidecar's five built-in tools, fit 16,000 bytes; a tool that would overflow it is refused with a logged
   reason.
-  The write tools, `roll`, `draw_table` and `execute_macro` are listed with `readOnlyHint` false; `open_sheet` and
+  The write tools, `roll`, `draw_table`, `execute_macro`, `create_pack` and `delete_pack` are listed with
+  `readOnlyHint` false; `open_sheet` and
   `close_sheet` with true. A tool
   added during a `claude` session was deferred (found through `ToolSearch`) and callable in the same session.
 - **Reading documents.** `list_document_types` returns the world's document classes (`world`, `embedded`, `packOnly`)
@@ -186,7 +189,7 @@ method `405`.
   operators, wildcards and conflicting paths are refused with their `PATH_*` code, and it returns `{uuid, changed}` per
   document (`changed` is empty when Foundry applied nothing). `delete_documents` takes `uuids` (1 to 50) and `dryRun`;
   a dry run returns `{dryRun, rows: [uuid, name, type][], total, cut?}` including embedded cascades within 8,000 bytes,
-  and a compendium pack itself cannot be deleted. Deletion is irreversible and needs the `allowDelete` gate
+  and a compendium pack itself cannot be deleted with it (`delete_pack` does that). Deletion is irreversible and needs the `allowDelete` gate
   (closed by default); put `"ask": ["mcp__wiretap__delete_documents"]` in the Claude Code permissions to confirm each
   call as well. Every call is
   guarded as a whole before the first write: a User write needs `allowUserWrites` (password fields are refused
@@ -253,6 +256,27 @@ method `405`.
   client views; a chat macro speaks as them), and `timeoutMs` (1 s to 5 minutes, default 8 s) sets how long it may
   run. A macro that does not compile ran nothing; one that throws may have partly run; both are `MACRO_FAILED`. It
   needs the `allowMacroExecution` gate.
+- **Compendium packs.** `create_pack` takes `label` (1 to 128 characters, not blank), `type` (one of Foundry's pack
+  document types: `ActiveEffect`, `Actor`, `Adventure`, `Cards`, `Item`, `JournalEntry`, `Macro`, `Playlist`,
+  `RollTable`, `Scene`), an optional `name` (1 to 64 letters, digits, `-` and `_`, not a reserved device name such as
+  `con` or `nul`; by default the slug of `label`, as Foundry derives it) and `dryRun`. It creates the world pack
+  `world.<name>` and returns `{ id, label, type }`; a dry run returns `{ dryRun: true, id, label, type }` and creates
+  nothing. A name a world pack already has, compared without regard to case (pack folders are named after the pack,
+  and Windows folder names ignore case), and a label with no letters or digits and no `name` are refused with
+  `ARGS_INVALID`. `delete_pack` takes `id` (`world.<name>`) and `dryRun` and deletes the pack with every document in
+  it, returning `{ id, deleted: true }`; a dry run returns `{ dryRun: true, id, label, type, documents }` (the count
+  from the pack index) and deletes nothing. **Deletion is irreversible**: Foundry's `deleteCompendium` asks the Foundry
+  server, which removes the pack's files itself; Wiretap removes no file. Only world packs can be created or deleted
+  (`delete_pack` refuses a system or module pack with `ARGS_INVALID`); an unknown id is `PACK_NOT_FOUND`; a locked
+  pack is refused with
+  `PACK_LOCKED`, and the GM unlocks it in Foundry (Wiretap never changes a lock). A real `create_pack` needs
+  `allowCompendiumWrites` and a real `delete_pack` needs `allowPackDeletion`; each checks its gate first, so a closed
+  gate reveals nothing about the world's packs, and a dry run needs no gate. Wiretap makes each of these refusals
+  before Foundry is called, so it shows no error on the GM screen. Both results are at most 256 bytes (a long label is
+  cut). **The human is asked before every `delete_pack` call** in Claude Code, at every permission level: the sidecar
+  lists `delete_pack` with `_meta["anthropic/requiresUserInteraction"]: true` whatever a client registers. That prompt
+  is enforced by Claude Code, so another MCP client or a local process is not prompted; the `allowPackDeletion` gate
+  stays Wiretap's own control (the residual risk).
 - **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
   alone does not count). At most 32 sessions are held; an `initialize` beyond that is refused with `503` and a
   `Retry-After` header and no held session is ended, so one client cannot push another's session out. The idle sweep (one
@@ -331,7 +355,7 @@ SYSTEM account (or another service account) sends files to that account's recycl
 `mcp__wiretap__describe_schema`, `mcp__wiretap__create_documents`, `mcp__wiretap__update_documents`,
 `mcp__wiretap__delete_documents`, `mcp__wiretap__replace_document`, `mcp__wiretap__batch`,
 `mcp__wiretap__open_sheet`, `mcp__wiretap__close_sheet`, `mcp__wiretap__roll`, `mcp__wiretap__draw_table`,
-`mcp__wiretap__execute_macro`, `mcp__wiretap__backup_documents`, `mcp__wiretap__list_backups`,
+`mcp__wiretap__execute_macro`, `mcp__wiretap__create_pack`, `mcp__wiretap__delete_pack`, `mcp__wiretap__backup_documents`, `mcp__wiretap__list_backups`,
 `mcp__wiretap__restore_backup`, `mcp__wiretap__delete_backup`, `mcp__wiretap__read_handle`) and how to use them,
 including when to make or offer a backup. It is not installed automatically:
 copy the `skills/wiretap` directory into the `.claude/skills/` directory of the project that runs `claude` (a skill for
@@ -465,7 +489,7 @@ entry; a disconnect removes it. Limits: `userId` is at most 64 bytes and `userNa
 **Risk gates.** A gate is a world-scope GM setting that unlocks a class of dangerous operation. The registry is
 `shared/gates.js` (`GATES`): the boolean gates `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`,
 `allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites`, `allowDelete`,
-`allowReplace`, `allowBackupAnyFolder` and `allowAgentScripts` (all default `false`) and `allowedPluginModules` (an
+`allowReplace`, `allowPackDeletion`, `allowBackupAnyFolder` and `allowAgentScripts` (all default `false`) and `allowedPluginModules` (an
 array of module ids, default empty). There is no undo gate. The client reports its gate values as a snapshot object
 with exactly those keys: in the identify's optional `gateState`, and again by emitting `bridge:gateState`
 `{ gateState, settings }` (ack callback optional) whenever a gate or a bridge setting changes; a payload without
@@ -535,6 +559,7 @@ default; each unlocks a class of dangerous operation for agents:
 | `allowModuleConfigWrites` | Writing the module configuration (enables and disables modules) |
 | `allowDelete` | Deleting documents with `delete_documents` or the deletes of a `batch` (previews need no gate) |
 | `allowReplace` | Replacing whole documents with `replace_document` (previews need no gate) |
+| `allowPackDeletion` | Deleting an unlocked world compendium pack and every document in it with `delete_pack`, irreversibly (previews need no gate) |
 | `allowBackupAnyFolder` | Writing, listing, restoring and deleting backup files in a folder other than the default (`.wiretap/backups` in the module folder) or the Backup folder setting |
 | `allowAgentScripts` | Saving, disabling and running agent-saved scripts (arbitrary code) |
 | `allowedPluginModules` | Plugin skills and scripts of the module ids listed (comma-separated; empty by default) |

@@ -22,14 +22,16 @@ document, so none are stated here; the count at the time this file was written i
 | M4 Core read tools | Done | 2026-10-13 | `4d18a51`, `5e1c59f`, `b27144b`, `5fd4801` | [`PLAN.md`](PLAN.md) M4 as-built notes (phases A and B); [`experiments/2026-10-m4-keyfields.md`](experiments/2026-10-m4-keyfields.md); `list_document_types`, `get_document`, `search_documents`, `describe_schema` in `src/bridge/scripts/` |
 | M6 Sheets and gameplay | Done | 2026-11-20 | `fab9300` (plan); `823e070`, `3aeba20`, `c601f8b`, `e5da1ff`, `acec4dd`, `f3b7d38` (tasks 1 to 6); `bbbdcd1`, `4dbf3bf`, `15984e8`, `f08ec17`, `11940fe`, `44c9ac5`, `7fe13ce`, `c3f5129` (buddy-check fixes and plan edits); `8c58704`, `6bc5b2a`, `9e245a2` (e2e); `6a3f7cb`, `717da53` (docs); `418e6f9`, `7887884` (final-review minors) | [`plans/2026-11-20-wiretap-m6-sheets-gameplay.md`](plans/2026-11-20-wiretap-m6-sheets-gameplay.md); as-built notes below; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro` in `src/bridge/scripts/`; 15 tools, 8,149 B of definitions |
 | M21 Document backups | Done | 2026-11-21 | `253257f`, `3914297` (design and plan); `393ac25`, `302d9f9`, `517fb81`, `723a3ad`, `76b9ad8`, `9a6f979`, `a8b78d1`, `9c30bb4`, `e4c2085`, `b61251f`, `cd2967a`, `d5b3960`, `da9bd16`, `fa9e809` (features and fixes); `80403c5`, `79f94ac`, `8f820be`, `f9bc54a` (tests); merges `1881516`, `8570e4f`, `18fc7b1`, `f5409a4`, `ec5a77e`, `8433951`, `176d540`, `eb570e0`, `b70cbc1`, `640f155`; `docs: close M21; progress, README and skills` | [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md), [`plans/2026-11-21-wiretap-m21-backups.md`](plans/2026-11-21-wiretap-m21-backups.md); as-built notes below; `backup_documents`, `list_backups`, `restore_backup`, `delete_backup` in `server/backupTools.ts`; 19 tools, 10,426 B of definitions |
+| M18 Compendium pack tools | Done | 2026-11-21 | `10ffd14`, `75ef915` (design and plan); `a7ce589`, `b4f9f24`, `214426b`, `3b6787b`, `d372696`, `72c6af2`, `b41ab2e` (features and fix); `a48ffd2`, `869a36d`, `989582d`, `e15d83b` (tests); merges `c9773e5`, `ae02d1c`, `f239556`, `5d8da73`, `853581a`, `f47640c`, `9cbf590`, `bab19f8`, `02bda56`, `86aaa0e`; `docs: close M18; progress, README and skills` | [`specs/2026-11-21-wiretap-pack-tools-design.md`](specs/2026-11-21-wiretap-pack-tools-design.md), [`plans/2026-11-21-wiretap-m18-pack-tools.md`](plans/2026-11-21-wiretap-m18-pack-tools.md); as-built notes below; `create_pack`, `delete_pack` in `src/bridge/scripts/`; the `allowPackDeletion` gate; 21 tools, 11,330 B of definitions |
 
-Current suite (MEASURED 2026-11-21, `npm test`): 123 test files passed, 2779 tests passed, 2 skipped (2781). Headless
+Current suite (MEASURED 2026-11-21, `npm test`): 129 test files passed, 2876 tests passed, 2 skipped (2878). Headless
 e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless
-`WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs and the M21 specs `backupTools.spec.js` and `gates.spec.js` were run
-on their own (see M6 and M21 below). A full e2e run after M6 has not been made.
+`WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs, the M21 specs `backupTools.spec.js` and `gates.spec.js`, and the
+M18 spec `packTools.spec.js` were run on their own (see M6, M21 and M18 below). A full e2e run after M6 has not been
+made.
 
-Next milestone in the order of PLAN.md section 5: M18 (M17 dropped by D29, revision 7; M21 added by D33, revision 8,
-and done).
+Next milestone in the order of PLAN.md section 5: M15a (M17 dropped by D29, revision 7; M21 added by D33, revision 8,
+and done; M18 done).
 
 ## M0 status and deviations
 
@@ -571,6 +573,59 @@ recycle-bin removal):**
     with `BACKUP_TOO_LARGE`; restore and delete run the same folder link check as backup and list.
   - The `wiretap.backupFolder` world setting is kept in the e2e gate record, so a killed e2e run is recovered.
   - The backups unit test that writes 1,001 files has a 30 s limit (`POST_WORK_FINDINGS.md` has the entry).
+
+### As-built notes: M18
+
+**As built (2026-11-21; `create_pack`, `delete_pack`, the `allowPackDeletion` gate, the definition flag
+`requiresUserInteraction` and the sidecar's `_meta` entry, the pack-aware e2e running list):**
+
+- Definition sizes (MEASURED, `npx tsx tests/measure/measureContext.mjs`): `create_pack` 500 B, `delete_pack` 404 B;
+  21 tools, 11,330 B in all (max 30 tools, 16,000 B). The fixtures `create_pack` dry run with a 64-character name and a
+  cut label and `delete_pack` dry run with the largest count and a long label each measure 256 B of 256 B.
+- e2e on the live world (MEASURED, headless, 14.364): `tests/e2e/packTools.spec.js` 6 passed: the listing (only
+  `delete_pack` carries the meta entry), a `create_pack` dry run and a denied real run with the gate closed, a real
+  create with refusals that raise no GM-screen error, a `delete_pack` dry run with the document count, and the denied,
+  refused and real delete.
+- `compendiumConfiguration` (MEASURED in that run): a deleted pack's key stays in the core world setting as
+  `{"folder":null,"locked":false}`; Foundry does not prune it (`POST_WORK_FINDINGS.md` has the entry).
+- Unit suite after M18 (MEASURED, `npm test` at `e15d83b`): 129 files, 2876 passed, 2 skipped.
+- `skills/wiretap/SKILL.md` is 74 lines; its cap in `tests/unit/shippedSkill.test.js` is 75 (the owner ruled such
+  limits are the agent's to settle).
+- `create_pack` refuses a name equal to an existing pack id's name ignoring case and names that pack id, because the
+  server stores a pack in `packs/<name>` and Windows folder names ignore case (`CLOSED_BUGS.md` has the entry).
+- `tests/integration/userInteractionMeta.test.js` covers a hostile client that registers its own `_meta` and
+  `annotations` (the listing holds only the sidecar's one meta key and `readOnlyHint` from `mutates`) and a flag off,
+  on, off sequence with a `tools/list_changed` each time.
+- Designer decisions made during the run (each the designer's call under the user's delegation, not the user's own
+  choice):
+  - Gate before checks, on a real run only: a real run checks its gate first and a closed gate reveals nothing about
+    packs; a dry run skips the gate. Rejected: checks first, which would let an agent learn `PACK_LOCKED` before
+    `GATE_DENIED`.
+  - `delete_pack` refuses a locked pack with `PACK_LOCKED` instead of unlocking and deleting; `PLAN.md` M18 was edited
+    to say so. Owner attention: this changes the M18 decision text.
+  - The not-found code is `PACK_NOT_FOUND` (the design's word), while `restore_backup` uses `PACK_GONE` for a pack
+    that no longer exists; the two codes name the same condition on two tools. Owner attention.
+  - Bounds on untrusted input in the schema: `label` 1 to 128 characters, `name` 1 to 64, `id` 1 to 128; `type` is
+    unbounded in the schema and checked against the ten Foundry pack types in the handler (an enum would cost about
+    150 B of the 800 B definition). A pack name becomes a folder name, so an unbounded name could make the Foundry
+    server fail with a GM-screen error.
+  - A label that slugs to nothing, with no `name`, is `ARGS_INVALID` ("give a name"), because Foundry would pick
+    `<type>-<randomID>`, which a dry run could not report.
+  - A derived name over 64 characters is `ARGS_INVALID`, the same bound as an explicit `name`.
+  - The handler uses `label.slugify({ strict: true })` (Foundry's own slug, the server's default) and holds its own
+    copies of Foundry's name pattern and reserved-name pattern, cited to `common/packages/base-package.mjs`, because
+    no public validator is exposed to modules.
+  - The ack label is cut with `truncateUtf8` until the whole row is at most 256 B; `id`, `type` and `documents` are
+    never cut.
+  - The carrier is a boolean (`requiresUserInteraction`), not a free `_meta` object, so no client can attach other MCP
+    metadata; the sidecar builds the one `_meta` entry itself. The forced name list is
+    `USER_INTERACTION_TOOLS = ['delete_pack']` in `shared/scripts.js`.
+  - No `isGM` check in the handlers: the bridge runs scripts only on GM clients, so a non-GM call cannot arrive.
+  - The e2e running list records a pack as `{ documentName: 'Compendium', id: 'world.<name>', uuid:
+    'Compendium.world.<name>' }`; `Compendium` is the last type in the deletion order (documents inside a pack go with
+    it).
+  - A new skill `wiretap-packs` holds the pack scripts; the carrier is described in `wiretap-mcp-sessions`, the gate in
+    `wiretap-write-guard` and `wiretap-sidecar`.
 
 ## Decision provenance (moved from PLAN.md section 3)
 

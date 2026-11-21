@@ -114,13 +114,14 @@
 - [ ] `get_document` with `mode: "full"` fails with `RESULT_TOO_LARGE` when the client result is over 900,000 bytes (a
       scene with thousands of placeables). The agent reads such a document with `paths`; chunked full reads are not built
 
-- [ ] e2e registry (docs/PLAN.md section 4.8): the running list records world documents only and embedded documents are
-      removed with their recorded parent. Add `parent`, `packId` and `sceneId` fields with the first flow that must
-      create an embedded document under a document it did not create, or a compendium; also the TITAN safety net's chat
-      messages since the run start and the E2E users' broken hotbar entries, and the restore of world settings other
-      than the risk gates. The sweep and census cover prefixed world documents of the types in
-      `ALLOWED_DOCUMENT_NAMES` (ChatMessage by `flavor`, Setting by key prefix), combats and orphan tokens
-      (`tests/e2e/registryCore.js`)
+- [ ] e2e registry (docs/PLAN.md section 4.8): the running list records world documents and whole world compendium
+      packs (`Compendium`, id `world.<name>`) only; embedded documents are removed with their recorded parent and
+      documents inside a pack with the pack. Add `parent`, `packId` and `sceneId` fields with the first flow that must
+      create an embedded document under a document it did not create, or a document inside a pack it did not create;
+      also the TITAN safety net's chat messages since the run start and the E2E users' broken hotbar entries, and the
+      restore of world settings other than the risk gates. The sweep and census cover prefixed world documents of the
+      types in `ALLOWED_DOCUMENT_NAMES` (ChatMessage by `flavor`, Setting by key prefix), world packs by title, combats
+      and orphan tokens (`tests/e2e/registryCore.js`)
 
 ## Carried-over cleanups
 
