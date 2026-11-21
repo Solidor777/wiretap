@@ -324,6 +324,27 @@ function backupExportHandler() {
 }
 
 /**
+ * Call a backup tool and return its result, failing on an error result: an error text is at most 512 bytes, well
+ * under every backup budget, so a fixture that measured one would pass without building the result it names.
+ * @param {Client} client - The SDK client of the running fixture.
+ * @param {string} name - The tool to call.
+ * @param {Record<string, unknown>} args - The arguments of the call.
+ * @returns {Promise<{ isError?: boolean, content: { text: string }[] }>} The successful result.
+ * @throws {Error} When the call returns an error result; the message carries its text.
+ */
+async function callBackupTool(client, name, args) {
+   /** @type {{ isError?: boolean, content: { text: string }[] }} The result of the call. */
+   const result = await client.callTool({
+      name,
+      arguments: args,
+   });
+   if (result.isError) {
+      throw new Error(`${name} failed: ${result.content[0].text}`);
+   }
+   return result;
+}
+
+/**
  * Make one backup through the client with the fake GM answer of `backupExportHandler`.
  * @param {FixtureContext} context - The client and the fake GM controls of the running fixture.
  * @param {string} [note] - The `note` argument of the call; none when absent.
@@ -332,18 +353,10 @@ function backupExportHandler() {
  */
 async function makeBackup({ client, setGmHandler }, note) {
    setGmHandler(backupExportHandler());
-   /** @type {{ isError?: boolean, content: { text: string }[] }} The result of the call. */
-   const result = await client.callTool({
-      name: 'backup_documents',
-      arguments: {
-         uuids: ['Actor.x'],
-         ...(note === undefined ? {} : { note }),
-      },
+   return callBackupTool(client, 'backup_documents', {
+      uuids: ['Actor.x'],
+      ...(note === undefined ? {} : { note }),
    });
-   if (result.isError) {
-      throw new Error(`backup_documents failed: ${result.content[0].text}`);
-   }
-   return result;
 }
 
 /**
@@ -408,10 +421,7 @@ export const FIXTURES = {
             for (let index = 0; index < 50; index += 1) {
                await makeBackup(context, `MOCK_NOTE_${String(index).padStart(2, '0')}_${'n'.repeat(187)}`);
             }
-            return context.client.callTool({
-               name: 'list_backups',
-               arguments: { limit: 50 },
-            });
+            return callBackupTool(context.client, 'list_backups', { limit: 50 });
          },
       },
    ],
@@ -423,10 +433,7 @@ export const FIXTURES = {
             /** @type {string} The backup file to restore. */
             const { file } = JSON.parse((await makeBackup(context)).content[0].text);
             context.setGmHandler(restoreHandler());
-            return context.client.callTool({
-               name: 'restore_backup',
-               arguments: { file },
-            });
+            return callBackupTool(context.client, 'restore_backup', { file });
          },
       },
    ],
@@ -437,10 +444,7 @@ export const FIXTURES = {
          run: async (context) => {
             /** @type {string} The backup file to recycle. */
             const { file } = JSON.parse((await makeBackup(context)).content[0].text);
-            return context.client.callTool({
-               name: 'delete_backup',
-               arguments: { file },
-            });
+            return callBackupTool(context.client, 'delete_backup', { file });
          },
       },
    ],
