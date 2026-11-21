@@ -125,8 +125,7 @@ function writesMacroCode(intent) {
 
 /**
  * Copy written data with every update operator replaced by what it writes: a `ForcedReplacement` by its value and a
- * `ForcedDeletion` by null, so the key it deletes still counts as written. An empty element of an array becomes an
- * empty object, because `walkEmbedded` reads the `_id` of every element of an embedded collection.
+ * `ForcedDeletion` by null, so the key it deletes still counts as written.
  * @param {unknown} value - Create data, replace data or cleaned changes.
  * @returns {unknown} The copy, free of operator objects.
  */
@@ -138,7 +137,7 @@ function writtenData(value) {
       return writtenData(foundry.data.operators.DataFieldOperator.get(value));
    }
    if (Array.isArray(value)) {
-      return value.map((member) => (member === null || member === undefined ? {} : writtenData(member)));
+      return value.map(writtenData);
    }
    if (isPlainObject(value)) {
       return Object.fromEntries(Object.entries(value).map(([key, member]) => [key, writtenData(member)]));
