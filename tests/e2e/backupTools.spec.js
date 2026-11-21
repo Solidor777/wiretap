@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import config from '../../playwright.config.mjs';
 import { HEADER_LINE_BYTES, parseHeaderLine } from '../../shared/backup.js';
 import { login } from './fixtures.js';
 import { e2eLog } from './log.js';
@@ -64,48 +63,14 @@ const namedDir = path.join(scratch, 'named');
 /** @type {import('node:child_process').ChildProcess | undefined} The e2e sidecar of this spec file. */
 let sidecar;
 
-/** @type {string | undefined} The Backup folder setting's value before the run. */
-let priorBackupFolder;
-
-/**
- * Open a GM page of its own in the given browser, for the hooks that have no test page.
- * @param {import('@playwright/test').Browser} browser - The worker's browser.
- * @returns {Promise<import('@playwright/test').Page>} The logged-in page.
- */
-async function gmPage(browser) {
-   /** @type {import('@playwright/test').Page} The page that logs in as the GM. */
-   const page = await browser.newPage({ baseURL: config.use.baseURL });
-   await login(page);
-   return page;
-}
-
-test.beforeAll(async ({ browser }) => {
+test.beforeAll(async () => {
    fs.mkdirSync(settingDir, { recursive: true });
    fs.mkdirSync(namedDir, { recursive: true });
-   /** @type {import('@playwright/test').Page} The page that reads the setting. */
-   const page = await gmPage(browser);
-   try {
-      priorBackupFolder = await page.evaluate(() => game.settings.get('wiretap', 'backupFolder'));
-   } finally {
-      await page.close();
-   }
    sidecar = await startGateSidecar();
 });
 
-test.afterAll(async ({ browser }) => {
-   try {
-      await stopSidecar(sidecar);
-   } finally {
-      if (priorBackupFolder !== undefined) {
-         /** @type {import('@playwright/test').Page} The page that restores the setting. */
-         const page = await gmPage(browser);
-         try {
-            await page.evaluate((value) => game.settings.set('wiretap', 'backupFolder', value), priorBackupFolder);
-         } finally {
-            await page.close();
-         }
-      }
-   }
+test.afterAll(async () => {
+   await stopSidecar(sidecar);
 });
 
 /** @type {Client | undefined} The fake MCP client of the running test. */
@@ -372,6 +337,8 @@ test.describe('wiretap backup tools', () => {
             'delete_backup',
          ]));
       // Every backup of the run goes to the scratch folder the setting names, never to the sidecar's default folder.
+      // The setting's prior value is in the record taken above, so the afterEach, or a later run or the global
+      // teardown after a killed run, restores it.
       await page.evaluate((dir) => game.settings.set('wiretap', 'backupFolder', dir), settingDir);
       await expect.poll(async () => (await callJson('list_backups', {})).folder, { timeout: POLL_MS })
          .toBe('setting');
@@ -390,7 +357,8 @@ test.describe('wiretap backup tools', () => {
             await client?.close();
             client = undefined;
          } finally {
-            // Anything the flows created and did not record is swept and fails the test, as does any leftover.
+            // Anything the flows created and did not record is swept and fails the test, as does any leftover. The
+            // restore puts back the gates and the Backup folder setting, after the backups above are trashed.
             const settled = await settleRegistry(page);
             await restoreGateSettings(page);
             assertSettled(settled);

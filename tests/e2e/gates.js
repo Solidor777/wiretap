@@ -10,17 +10,26 @@ import { GATE_OBSERVER_PORT } from './ports.js';
 /** @type {string} The repo root, derived from this file's location. */
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-/** @type {string} The running list of prior gate values; overwritten, never deleted, restored by setup and teardown. */
+/** @type {string} The running list of prior setting values; overwritten, never deleted, restored by setup and teardown. */
 const RECORD_FILE = path.join(repoRoot, 'test', 'state', 'gate-settings.json');
 
 /** @type {number} The longest a request to the gate observer may take, in milliseconds. */
 const OBSERVER_TIMEOUT_MS = 1000;
 
 /**
+ * @type {string[]} The world settings the record holds: every gate, and the Backup folder setting, which
+ * `backupTools.spec.js` points at a `test/tmp/` scratch folder for each test.
+ */
+const RECORDED_SETTINGS = [
+   ...Object.keys(GATES),
+   'backupFolder',
+];
+
+/**
  * @typedef {object} GateRecord
  * @property {boolean} pending - True while the recorded values still have to be restored.
  * @property {string} world - The id of the world the values belong to.
- * @property {Record<string, unknown>} values - The prior gate setting values keyed by gate name.
+ * @property {Record<string, unknown>} values - The prior values of the recorded settings keyed by setting name.
  */
 
 /**
@@ -30,9 +39,9 @@ const OBSERVER_TIMEOUT_MS = 1000;
  */
 
 /**
- * Read the current value of every gate setting in the page.
+ * Read the current value of every recorded setting (the gates and the Backup folder) in the page.
  * @param {import('@playwright/test').Page} page - The logged-in GM page.
- * @returns {Promise<Record<string, unknown>>} The stored values keyed by gate name.
+ * @returns {Promise<Record<string, unknown>>} The stored values keyed by setting name.
  */
 export async function readGateSettings(page) {
    return page.evaluate(
@@ -43,12 +52,13 @@ export async function readGateSettings(page) {
                game.settings.get('wiretap', name),
             ]),
          ),
-      Object.keys(GATES),
+      RECORDED_SETTINGS,
    );
 }
 
 /**
- * Record the current gate setting values and the world id so they can be restored after a spec, even after a crash.
+ * Record the current values of the recorded settings and the world id so they can be restored after a spec, even
+ * after a crash.
  * @param {import('@playwright/test').Page} page - The logged-in GM page.
  * @returns {Promise<void>} Resolves once the record is written.
  */
@@ -64,7 +74,7 @@ export async function recordGateSettings(page) {
 }
 
 /**
- * Restore every recorded gate setting through the settings API and mark the record as restored. A no-op when nothing is
+ * Restore every recorded setting through the settings API and mark the record as restored. A no-op when nothing is
  * pending or when the record belongs to another world, so it is safe to call at the start of a run, after every test
  * and at the end of the run.
  * @param {import('@playwright/test').Page} page - The logged-in GM page.

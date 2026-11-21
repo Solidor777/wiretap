@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { login } from './fixtures.js';
 import { startGateSidecar, stopSidecar } from './sidecar.js';
@@ -11,6 +13,14 @@ import {
 
 /** @type {number} The longest wait inside an already-loaded page, in milliseconds. */
 const POLL_MS = 1000;
+
+/** @type {string} A scratch Backup folder value under the gitignored `test/tmp/`; the folder itself is never made. */
+const scratchFolder = path.join(
+   path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
+   'test',
+   'tmp',
+   `e2e-gates-${Date.now()}-${process.pid}`,
+);
 
 /** @type {import('node:child_process').ChildProcess | undefined} The e2e gate sidecar of this spec file. */
 let sidecar;
@@ -65,6 +75,23 @@ test.describe('wiretap risk gates', () => {
          allowedPluginModules: [],
       });
       expect(await readGateSettings(page)).toEqual(prior);
+   });
+
+   test('a run killed after changing the Backup folder setting leaves it for the next run to restore', async ({
+      page,
+   }) => {
+      /** @type {string} The Backup folder setting's value before the test. */
+      const prior = await page.evaluate(() => game.settings.get('wiretap', 'backupFolder'));
+      try {
+         await page.evaluate((dir) => game.settings.set('wiretap', 'backupFolder', dir), scratchFolder);
+         // A killed run never reaches its afterEach; the next run's beforeEach restores the pending record.
+         await restoreGateSettings(page);
+         expect(await page.evaluate(() => game.settings.get('wiretap', 'backupFolder'))).toBe(prior);
+      } finally {
+         if (await page.evaluate(() => game.settings.get('wiretap', 'backupFolder')) !== prior) {
+            await page.evaluate((value) => game.settings.set('wiretap', 'backupFolder', value), prior);
+         }
+      }
    });
 
    test('resetting a gate to its default deletes the Setting document and closes the sidecar snapshot', async ({
