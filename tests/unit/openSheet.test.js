@@ -1,7 +1,52 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { CONTROL_PATTERN } from '$shared/logText.js';
+import { CONTROL_PATTERN, cleanForLog } from '$shared/logText.js';
 import { utf8Bytes } from '$shared/utf8.js';
 import { openSheetHandler } from '~/bridge/scripts/openSheet.js';
+import { APP_ID_MAX_BYTES, boundAppId } from '~/bridge/scripts/sheets.js';
+
+/**
+ * The reference bound: clean and cut the whole id again at each lower raw bound until its JSON form fits. It is the
+ * result `boundAppId` must give for every input.
+ * @param {string} appId - The sheet id.
+ * @returns {string} The cleaned, bounded id.
+ */
+function referenceBound(appId) {
+   /** @type {number} The raw byte bound of the cut. */
+   let limit = APP_ID_MAX_BYTES;
+   /** @type {string} The id cleaned and cut to the raw byte bound. */
+   let bounded = cleanForLog(appId, limit);
+   while (utf8Bytes(JSON.stringify(bounded)) > APP_ID_MAX_BYTES) {
+      limit -= 1;
+      bounded = cleanForLog(appId, limit);
+   }
+   return bounded;
+}
+
+describe('boundAppId', () => {
+   it('gives the reference result, within 128 bytes of result JSON, for short, long, escaped and multi-byte ids',
+      () => {
+         /** @type {string[]} The ids: the existing cases, multi-byte and C1 text, and a huge reply of quotes. */
+         const ids = [
+            'MockSheet-Actor-MOCKACTOR0000001',
+            'S'.repeat(200),
+            'R'.repeat(200),
+            '"\\\u0001\u001f\u0085'.repeat(60),
+            'é"'.repeat(80),
+            '€'.repeat(50),
+            '\u0085'.repeat(120),
+            '"'.repeat(1_000_000),
+         ];
+         for (const id of ids) {
+            /** @type {string} The bounded id. */
+            const bounded = boundAppId(id);
+            expect(bounded).toBe(referenceBound(id));
+            expect(utf8Bytes(JSON.stringify({
+               ok: true,
+               appId: bounded,
+            }))).toBeLessThanOrEqual(128);
+         }
+      });
+});
 
 /** @type {string} The uuid of the mocked actor. */
 const uuid = 'Actor.MOCKACTOR0000001';

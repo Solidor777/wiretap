@@ -47,14 +47,28 @@ const TEXT_MAX_BYTES = 200;
 const CLASS_ECHO_MAX_BYTES = 32;
 
 /**
- * Reduce HTML to plain text: each tag becomes a space, then runs of whitespace collapse to one space and the ends are
- * trimmed, so text in adjacent block elements stays separated.
+ * Replace HTML character references (`&amp;`, `&nbsp;`, `&#39;`, `&#x00E9;` and every other named or numeric one)
+ * with the characters they stand for. A textarea's content is parsed as text with references, never as elements, so
+ * the browser's own HTML parser decodes the references and nothing else.
+ * @param {string} text - Text without tags.
+ * @returns {string} The text with each reference decoded.
+ */
+function decodeReferences(text) {
+   /** @type {HTMLTextAreaElement} A detached element whose content the parser reads as text. */
+   const decoder = document.createElement('textarea');
+   decoder.innerHTML = text;
+   return decoder.value;
+}
+
+/**
+ * Reduce HTML to plain text: each tag becomes a space and character references are decoded, then runs of whitespace
+ * (a decoded `&nbsp;` included) collapse to one space and the ends are trimmed, so text in adjacent block elements
+ * stays separated.
  * @param {string} markup - The HTML description of one drawn result.
  * @returns {string} The words of the description, without markup.
  */
 function plainText(markup) {
-   return markup
-      .replace(/<[^>]*>/g, ' ')
+   return decodeReferences(markup.replace(/<[^>]*>/g, ' '))
       .replace(/\s+/g, ' ')
       .trim();
 }

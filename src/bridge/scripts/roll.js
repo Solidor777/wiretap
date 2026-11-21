@@ -86,8 +86,8 @@ function appendWhileFits(result, list, values) {
 
 /**
  * Shape the evaluated dice into the result: every term in full when it fits, otherwise results listed in order
- * until one more would push the result over the budget, with `cut: true`. A term or inactive list is listed only
- * once its first value fits.
+ * until one more would push the result over the budget, with `cut: true`. A term is listed only once its entry fits
+ * (with its first value, when it has any); an inactive list only once its first value fits.
  * @param {number} total - The roll total.
  * @param {string} formula - The bounded formula.
  * @param {Array<{ faces: number, active: number[], inactive: number[] }>} terms - The values of each term.
@@ -127,6 +127,11 @@ function shapeResult(total, formula, terms) {
          [],
       ];
       result.dice.push(entry);
+      // A term that rolls no dice (`0d6`) has no values to append, so its empty entry is measured on its own.
+      if (!fits(result)) {
+         result.dice.pop();
+         return result;
+      }
       if (!appendWhileFits(result, entry[1], term.active)) {
          if (entry[1].length === 0) {
             result.dice.pop();

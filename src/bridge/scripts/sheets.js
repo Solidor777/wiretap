@@ -9,7 +9,7 @@
 
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { cleanForLog, describeCause } from '$shared/logText.js';
-import { utf8Bytes } from '$shared/utf8.js';
+import { truncateUtf8, utf8Bytes } from '$shared/utf8.js';
 
 /**
  * Most bytes the sheet id takes in a result's JSON, its quotes and escapes included. A sheet id is
@@ -48,20 +48,24 @@ const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 /**
  * Make a sheet id safe and small for a result: control characters become spaces, and the text is cut until its JSON
- * form, quotes and escapes included, is at most `APP_ID_MAX_BYTES`.
+ * form, quotes and escapes included, is at most `APP_ID_MAX_BYTES`. The id is cleaned and cut to `APP_ID_MAX_BYTES`
+ * raw bytes once; the repeated cuts work on that short text, which gives the same result as cutting the whole id each
+ * time, because `truncateUtf8` cuts a text it already cut at the same character boundaries.
  * @param {string} appId - The sheet id, from this client's sheet or from the target client's reply.
  * @returns {string} The cleaned, bounded id.
  */
 export function boundAppId(appId) {
+   /** @type {string} The id cleaned and cut to `APP_ID_MAX_BYTES` raw bytes. */
+   const cleaned = cleanForLog(appId, APP_ID_MAX_BYTES);
    /** @type {number} The raw byte bound of the cut. */
    let limit = APP_ID_MAX_BYTES;
-   /** @type {string} The id cleaned and cut to the raw byte bound. */
-   let bounded = cleanForLog(appId, limit);
+   /** @type {string} The id cut to the raw byte bound. */
+   let bounded = cleaned;
    // Each step lowers the raw bound by one byte; JSON escapes at most double a cleaned text's bytes, so the loop ends
    // by half the bound, and an empty text's JSON form always fits.
    while (utf8Bytes(JSON.stringify(bounded)) > APP_ID_MAX_BYTES) {
       limit -= 1;
-      bounded = cleanForLog(appId, limit);
+      bounded = truncateUtf8(cleaned, limit);
    }
    return bounded;
 }

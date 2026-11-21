@@ -119,6 +119,18 @@ describe('drawTableHandler', () => {
       ]);
    });
 
+   it('shows character references in the text as the characters they stand for', async () => {
+      drawn = [
+         {
+            name: 'MOCK_entities',
+            description: '<p>Salt&nbsp;&amp; pepper &lt;b&gt; &quot;hot&quot; &#39;mild&#39; &#233;&#x00E9;</p>',
+         },
+      ];
+      expect((await drawTableHandler({ uuid: TABLE_UUID }, ctx)).results[0].text).toBe(
+         'Salt & pepper <b> "hot" \'mild\' éé',
+      );
+   });
+
    it('reports a null total when the draw has no roll', async () => {
       table.draw = vi.fn(async () => ({
          roll: undefined,

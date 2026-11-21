@@ -270,6 +270,36 @@ describe('rollHandler', () => {
       expect(utf8Bytes(JSON.stringify(longer))).toBeGreaterThan(512);
    });
 
+   it('stays within 512 bytes when the last terms roll no dice', async () => {
+      // Fifty-five 1d6 terms fit the cut result; a 0d6 term evaluates to a term with no results.
+      /** @type {object[]} Fifty-five 1d6 terms, then ten 0d6 terms. */
+      const dice = [
+         ...Array.from({ length: 55 }, () => ({
+            faces: 6,
+            results: active([3]),
+         })),
+         ...Array.from({ length: 10 }, () => ({
+            faces: 6,
+            results: [],
+         })),
+      ];
+      outcomes.set('many', {
+         total: 165,
+         dice,
+      });
+      const result = await rollHandler({ formula: 'many' }, ctx);
+      expect(utf8Bytes(JSON.stringify(result))).toBeLessThanOrEqual(512);
+      expect(result.cut).toBe(true);
+      // Listing stops only when one more term would not fit.
+      /** @type {object} The result with one more empty term listed. */
+      const longer = structuredClone(result);
+      longer.dice.push([
+         6,
+         [],
+      ]);
+      expect(utf8Bytes(JSON.stringify(longer))).toBeGreaterThan(512);
+   });
+
    it('bounds the formula to 128 bytes', async () => {
       /** @type {string} A long formula of constant terms. */
       const formula = Array.from({ length: 80 }, () => '1').join('+');
