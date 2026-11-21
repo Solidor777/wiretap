@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultConfigRoot, writeMcpConfig } from '../../server/mcpConfigFile.ts';
+import { defaultConfigRoot, ensureWiretapDir, refuseSymbolicLink, writeMcpConfig } from '../../server/mcpConfigFile.ts';
 
 /** @type {boolean} Whether the tests run on Windows, where POSIX file modes are not enforced. */
 const isWindows = process.platform === 'win32';
@@ -50,6 +50,34 @@ afterEach(() => {
 describe('defaultConfigRoot', () => {
    it('is the module root (the parent of server/), independent of the working directory', () => {
       expect(defaultConfigRoot()).toBe(MODULE_ROOT);
+   });
+});
+
+describe('refuseSymbolicLink', () => {
+   it('refuses a symbolic link with the purpose in the message', () => {
+      /** @type {string} The root used by this test. */
+      const root = freshRoot('refuse');
+      /** @type {string} A real directory the link points at. */
+      const target = path.join(root, 'target');
+      fs.mkdirSync(target, { recursive: true });
+      /** @type {string} The link under test. */
+      const link = path.join(root, 'link');
+      fs.symlinkSync(target, link, isWindows ? 'junction' : 'dir');
+      expect(() => refuseSymbolicLink(link, 'do x')).toThrow(`refusing to do x: ${link} is a symbolic link`);
+      expect(() => refuseSymbolicLink(target, 'do x')).not.toThrow();
+      expect(() => refuseSymbolicLink(path.join(root, 'missing'), 'do x')).not.toThrow();
+   });
+});
+
+describe('ensureWiretapDir', () => {
+   it('ensureWiretapDir creates .wiretap and returns its path', () => {
+      /** @type {string} The root used by this test. */
+      const root = freshRoot('ensure');
+      /** @type {string} The returned directory. */
+      const dir = ensureWiretapDir(root);
+      expect(dir).toBe(path.join(root, '.wiretap'));
+      expect(fs.statSync(dir).isDirectory()).toBe(true);
+      expect(ensureWiretapDir(root)).toBe(dir);
    });
 });
 
