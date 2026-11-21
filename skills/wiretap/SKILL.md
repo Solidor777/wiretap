@@ -1,6 +1,6 @@
 ---
 name: wiretap
-description: Use when working with the live Foundry VTT world through the Wiretap MCP server (tools named mcp__wiretap__*), for example reading, creating, updating, replacing or deleting documents, backing up or restoring documents, opening or closing sheets, rolling dice or drawing from a table, running a macro, or reading a large stored result.
+description: Use when working with the live Foundry VTT world through the Wiretap MCP server (tools named mcp__wiretap__*), for example reading, creating, updating, replacing or deleting documents, backing up or restoring documents, opening or closing sheets, rolling dice or drawing from a table, running a macro, creating or deleting a compendium pack, or reading a large stored result.
 ---
 # Wiretap: Foundry VTT tools
 Wiretap acts on the live Foundry world through MCP tools that work via a connected GM's browser. With none connected, a
@@ -33,16 +33,21 @@ deleted; omit `flags`: other modules' flags go). Leave `ownership` out; `_id`, `
 (patches) and `deletes`, run in that order; a key an entry does not list (`parent` for `parentUuid`) is refused. Not
 atomic: Foundry checks all first, stops at the first failure and keeps what it did; `WRITE_NOT_APPLIED` says "N of M
 operations applied". `actAs` (a user id) on any write only checks that user's permission first (`ACT_AS_DENIED`).
-- **Backups.** Before a bulk update (about 10+ documents), any `replace_document` or delete, or a document-changing
-`execute_macro`, make or offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded one saves its parent)
-or one `folderUuid`, `documentName` or `pack`, and a `note`. Tell the user its `file` and `folder` (`default`: the
-module's `.wiretap/backups`; `setting`: the GM's Backup folder). `mcp__wiretap__list_backups` lists them and
-`mcp__wiretap__delete_backup` moves one to the recycle bin, both also with no GM (default folder only). Another `folder`
-needs `allowBackupAnyFolder`. `mcp__wiretap__restore_backup` (`file`, `uuids`, `dryRun`) only if the user asks: not
-atomic, hooks run. Needs `allowReplace`; `allowOwnershipWrites` if ownership differs or to re-create a deleted document;
-`allowDelete` if embedded ones were added since; for a pack, `allowCompendiumWrites` and an unlocked pack. `dryRun`
-checks the real gates, writes nothing. Embedded documents below the first level get default ownership. Whole world:
-Foundry's setup screen, world shut down.
+- **Compendium packs.** `mcp__wiretap__create_pack` (`label`, `type` a document type like `Actor`, optional `name`)
+makes an empty world pack; needs `allowCompendiumWrites`. `mcp__wiretap__delete_pack` (`id` is `world.<name>`) removes
+an unlocked world pack and every document in it for good; needs `allowPackDeletion`; Claude Code asks the human on every
+call. `dryRun` on both works with every gate closed (`delete_pack`'s lists the document count). Locked: `PACK_LOCKED`
+(the GM unlocks it in Foundry); absent: `PACK_NOT_FOUND`; system and module packs are refused.
+- **Backups.** Before a bulk update (about 10+ documents), any `replace_document`, delete or `delete_pack`, or a
+document-changing `execute_macro`, make or offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded one
+saves its parent) or one `folderUuid`, `documentName` or `pack` (`pack` before `delete_pack`), and a `note`. Tell the
+user its `file` and `folder` (`default`: the module's `.wiretap/backups`; `setting`: the GM's Backup folder).
+`mcp__wiretap__list_backups` lists them and `mcp__wiretap__delete_backup` moves one to the recycle bin, both also with
+no GM (default folder only). Another `folder` needs `allowBackupAnyFolder`. `mcp__wiretap__restore_backup` (`file`,
+`uuids`, `dryRun`) only if the user asks: not atomic, hooks run. Needs `allowReplace`; `allowOwnershipWrites` if
+ownership differs or to re-create a deleted document; `allowDelete` if embedded ones were added since; for a pack,
+`allowCompendiumWrites` and an unlocked pack. `dryRun` checks the real gates, writes nothing. Embedded documents below
+the first level get default ownership. Whole world: Foundry's setup screen, world shut down.
 - **Read a large result.** A result over 8,000 bytes is returned as `{"handle", "bytes", "summary"}`. Call
 `mcp__wiretap__read_handle` with that `handle` and `paths` (up to 20, `*` is one wildcard over a list), or `offset` and
 `length` for non-JSON text, or a larger `maxBytes`. A handle expires after 30 minutes unused (`HANDLE_NOT_FOUND`). To
@@ -56,15 +61,14 @@ the data instead. `mcp__wiretap__roll` takes a `formula` (no `@` references), `m
 `uuid` for `actorUuid` / `tokenUuid` (on the viewed scene), needs `allowMacroExecution` and returns its value within
 `timeoutMs` (1 s to 5 min; default 8 s). A null chat `value`: no message of its own, or its command failed; a `/macro`
 or a module may have. `tooLarge: true` (with `bytes`): it ran, its value dropped: that alone does not show it worked.
-## Errors you may meet
-- `ARGS_INVALID` (names the argument), `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `PATH_*`, `CURSOR_INVALID`, `SCRIPT_BUSY`
-  (retry), `VALIDATION_FAILED` (up to 10 failures and the count; nothing written), `TABLE_EMPTY` (nothing left to draw),
-  `MACRO_FAILED` (did not compile, so nothing ran; or threw, so it may have partly run), `USER_OFFLINE`, `SHEET_DENIED`
-  (no OBSERVER), `SHEET_UNAVAILABLE`, `SHEET_QUERY_FAILED`, `DELETE_REFUSED` (the signed-in user or last GM),
-  `BACKUP_NOT_FOUND`, `BACKUP_BUSY` (one at a time; retry), `BACKUP_TOO_LARGE` (10,000 documents or 64,000,000 bytes).
-- `GATE_DENIED`: a GM setting is closed (`allowDelete`: delete_documents, batch deletes, removing embedded documents;
-  `allowReplace`: replace_document; `allowMacroExecution`: execute_macro, writing macro code (a Macro command, a type
-  set to script, an Adventure's macros); others), or the write is never allowed (a `wiretap.*` setting, a User password,
-  the `flags.wiretap` scope, erasing `flags`). Tell the user which gate; you cannot open it.
-- `WRITE_NOT_APPLIED`, `SCRIPT_TIMEOUT`, `ENDPOINT_TIMEOUT`, or your MCP client giving up before `timeoutMs` (a macro
-  may run on): it may still have applied; check before retrying. `RESULT_TOO_LARGE`: read with `paths`.
+- **Errors you may meet.** `ARGS_INVALID` (names the argument), `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `PATH_*`,
+`CURSOR_INVALID`, `SCRIPT_BUSY` (retry), `VALIDATION_FAILED` (up to 10 failures and the count; nothing written),
+`TABLE_EMPTY` (nothing left to draw), `MACRO_FAILED` (did not compile, so nothing ran; or threw, so it may have partly
+run), `USER_OFFLINE`, `SHEET_DENIED` (no OBSERVER), `SHEET_UNAVAILABLE`, `SHEET_QUERY_FAILED`, `DELETE_REFUSED` (the
+signed-in user or last GM), `BACKUP_NOT_FOUND`, `BACKUP_BUSY` (one at a time; retry), `BACKUP_TOO_LARGE` (10,000
+documents or 64,000,000 bytes). `RESULT_TOO_LARGE`: read with `paths`. `WRITE_NOT_APPLIED`, `SCRIPT_TIMEOUT`,
+`ENDPOINT_TIMEOUT`, or your MCP client giving up before `timeoutMs` (a macro may run on): it may still have applied;
+check before retrying. `GATE_DENIED`: a GM setting is closed (`allowDelete`: delete_documents, batch deletes, removing
+embedded documents; `allowReplace`: replace_document; `allowMacroExecution`: execute_macro, writing macro code (a Macro
+command, a type set to script, an Adventure's macros); others), or the write is never allowed (a `wiretap.*` setting, a
+User password, the `flags.wiretap` scope, erasing `flags`). Tell the user which gate; you cannot open it.

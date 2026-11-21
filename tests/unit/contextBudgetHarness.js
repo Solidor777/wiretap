@@ -402,6 +402,24 @@ function restoreHandler() {
 }
 
 /**
+ * Give a pack ack row the longest ASCII label that keeps its JSON within `ACK_MAX_BYTES`: the worst case the pack
+ * handlers' label cut produces.
+ * @param {Record<string, unknown>} row - The ack row without a label.
+ * @returns {Record<string, unknown>} The row with a `label` that fills the budget exactly.
+ */
+function withFittedLabel(row) {
+   /** @type {number} The bytes the row's JSON holds with an empty label. */
+   const emptyBytes = Buffer.byteLength(JSON.stringify({
+      ...row,
+      label: '',
+   }));
+   return {
+      ...row,
+      label: 'L'.repeat(getBudget('ACK_MAX_BYTES').value - emptyBytes),
+   };
+}
+
+/**
  * The representative-result fixtures, keyed by tool name. Every listed tool needs an entry; the data is synthetic.
  * @type {Record<string, FixtureCase[]>}
  */
@@ -1026,6 +1044,66 @@ export const FIXTURES = {
                throw new Error(`execute_macro returned no handle: ${result.content[0].text}`);
             }
             return result;
+         },
+      },
+   ],
+   create_pack: [
+      {
+         label: 'dry run with a 64-character name and a label cut to fit',
+         budget: 'ACK_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck(withFittedLabel({
+               dryRun: true,
+               id: `world.${'n'.repeat(64)}`,
+               type: 'JournalEntry',
+            })));
+            return client.callTool({
+               name: 'create_pack',
+               arguments: {
+                  label: 'L'.repeat(128),
+                  type: 'JournalEntry',
+                  name: 'n'.repeat(64),
+                  dryRun: true,
+               },
+            });
+         },
+      },
+   ],
+   delete_pack: [
+      {
+         label: 'dry run with the largest count and a long label',
+         budget: 'ACK_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck(withFittedLabel({
+               dryRun: true,
+               id: `world.${'n'.repeat(64)}`,
+               type: 'JournalEntry',
+               documents: Number.MAX_SAFE_INTEGER,
+            })));
+            return client.callTool({
+               name: 'delete_pack',
+               arguments: {
+                  id: `world.${'n'.repeat(64)}`,
+                  dryRun: true,
+               },
+            });
+         },
+      },
+      {
+         label: 'locked pack',
+         budget: 'ERROR_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck({
+               ok: false,
+               error: {
+                  code: 'PACK_LOCKED',
+                  message: 'The pack is locked; unlock it in Foundry first.',
+               },
+            });
+            return client.callTool({
+               name: 'delete_pack',
+               arguments: { id: `world.${'n'.repeat(64)}` },
+            });
          },
       },
    ],

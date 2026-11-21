@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { GATES } from '$shared/gates.js';
 import { GATE_DENIED } from '$shared/protocol.js';
+import { deletePackHandler } from '~/bridge/scripts/deletePack.js';
 import { executeMacroDefinition } from '~/bridge/scripts/macroDefinitions.js';
 import { batchDocuments } from '~/bridge/scripts/writeBatch.js';
 import { replaceDocument } from '~/bridge/scripts/writeReplace.js';
@@ -16,6 +17,9 @@ let gates;
 
 /** @type {object} A live actor the calls address. */
 let actor;
+
+/** @type {object} An unlocked world compendium pack the pack calls address. */
+let pack;
 
 beforeEach(() => {
    world = installWriteWorld(vi.fn, {
@@ -39,6 +43,16 @@ beforeEach(() => {
       name: 'MOCK_actor',
       type: 'npc',
    });
+   pack = {
+      collection: 'world.mock-pack',
+      title: 'MOCK_pack',
+      documentName: 'Actor',
+      metadata: { packageType: 'world' },
+      locked: false,
+      index: { size: 0 },
+      deleteCompendium: vi.fn(async () => {}),
+   };
+   globalThis.game.packs = { get: (id) => (id === 'world.mock-pack' ? pack : undefined) };
 });
 
 afterEach(() => {
@@ -96,6 +110,13 @@ const RISKY = {
          dryRun,
       }),
    },
+   delete_pack: {
+      gate: 'allowPackDeletion',
+      run: (dryRun) => deletePackHandler({
+         id: 'world.mock-pack',
+         dryRun,
+      }, {}),
+   },
 };
 
 describe('the delete and replace gates', () => {
@@ -117,6 +138,7 @@ describe('the delete and replace gates', () => {
          expect(world.byUuid.has(actor.uuid)).toBe(true);
          expect(actor.update).not.toHaveBeenCalled();
          expect(foundry.documents.modifyBatch).not.toHaveBeenCalled();
+         expect(pack.deleteCompendium).not.toHaveBeenCalled();
       });
 
       it(`${name} previews with a dry run while the gate is closed, calling no write API`, async () => {
@@ -127,6 +149,7 @@ describe('the delete and replace gates', () => {
          expect(world.classes.Actor.deleteDocuments).not.toHaveBeenCalled();
          expect(foundry.documents.modifyBatch).not.toHaveBeenCalled();
          expect(world.calls.filter((call) => /create|update|delete|modify/i.test(call))).toEqual([]);
+         expect(pack.deleteCompendium).not.toHaveBeenCalled();
       });
 
       it(`${name} runs once ${risky.gate} is open`, async () => {

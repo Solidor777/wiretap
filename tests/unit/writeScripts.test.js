@@ -138,6 +138,8 @@ describe('shipped scripts', () => {
          'roll',
          'draw_table',
          'execute_macro',
+         'create_pack',
+         'delete_pack',
       ]);
    });
 
