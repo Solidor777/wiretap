@@ -130,6 +130,14 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   kept). The load runs also showed 1000 ms waits for the identify or the invocation and 5000 ms test timeouts
   expiring under that overload; those are CPU starvation, not a defect of one test.
 
+- Title: The backup list cap test ran close to the default 5 s test limit. Summary: `tests/unit/backups.test.js`
+  "stops reading headers after 1000" writes 1001 files and reads 1000 headers on real disk. Measured: the whole file
+  takes 2.66 s in an idle `npm test`; with three `npx vitest run` at once it timed out at 5000 ms in two of three
+  runs, the same load that failed the older process-spawning tests listed above (terminal, serverModes,
+  SuperviseServer). Two builders hit one unnamed single failure each during the parallel M21 run. Status: MEASURED;
+  the test now carries a 30 s limit (per-test limits are exempt from the 1000 ms wait rule), since the cap cannot be
+  reached without the files.
+
 
 - Title: A scene created while no scene is active becomes active. Summary: `Scene.create({ name })` in a world with no
   active scene makes the new scene active and viewed (`client/documents/scene.mjs` `_preCreateOperation`, READ at

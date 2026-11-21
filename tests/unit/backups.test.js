@@ -416,7 +416,9 @@ describe('list', () => {
       });
    });
 
-   it('stops reading headers after 1000', () => {
+   // The cap is only reachable with 1001 real files on disk, so this test writes 1001 files and reads 1000 headers:
+   // about 2.5 s on an idle Windows machine, which passes the 5 s default limit when other test runs share the CPU.
+   it('stops reading headers after 1000', { timeout: 30000 }, () => {
       /** @type {Fixture} A store over a fresh scratch root. */
       const fixture = setup();
       /** @type {ResolvedFolder} A named folder. */
