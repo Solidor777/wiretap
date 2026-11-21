@@ -739,10 +739,20 @@ describe('validateScriptDefinition: requiresUserInteraction', () => {
          requiresUserInteraction: true,
       };
       expect(shipped(flagged).ok).toBe(true);
-      const { definition } = shipped(flagged);
-      expect(definitionBytes(definition.name, definition.description, definition.inputSchema)).toBe(
-         definitionBytes(plain.name, plain.description, plain.inputSchema),
-      );
+      /** @type {object} The argument schema that puts the listed definition one byte over the limit. */
+      const overSchema = padded(limit + 1 - fixed);
+      const overPlain = shipped(script('fat_tool', {
+         description: 'Synthetic.',
+         inputSchema: overSchema,
+      }));
+      const overFlagged = shipped(script('fat_tool', {
+         description: 'Synthetic.',
+         inputSchema: overSchema,
+         requiresUserInteraction: true,
+      }));
+      expect(overPlain.reason).toBe(`definition is ${limit + 1} bytes, at most ${limit} bytes`);
+      expect(overFlagged.ok).toBe(false);
+      expect(overFlagged.reason).toBe(overPlain.reason);
    });
 
    it('exports the meta key and the forced tool names', () => {
@@ -752,14 +762,27 @@ describe('validateScriptDefinition: requiresUserInteraction', () => {
    });
 
    it.each([
-      'plugin',
-      'agent',
-   ])('refuses a %s definition named delete_pack whatever flag it carries', (source) => {
-      for (const overrides of [
+      [
+         'plugin',
+         { moduleId: 'my-module' },
+         'name must be <moduleId>__<skill>',
+      ],
+      [
+         'agent',
+         {},
+         'name must be agent__<name>',
+      ],
+   ])('refuses a %s definition named delete_pack whatever flag it carries', (source, owner, reason) => {
+      for (const flag of [
          { requiresUserInteraction: true },
          {},
       ]) {
-         expect(validateScriptDefinition(script('delete_pack', overrides), source).ok).toBe(false);
+         const outcome = validateScriptDefinition(script('delete_pack', {
+            ...owner,
+            ...flag,
+         }), source);
+         expect(outcome.ok).toBe(false);
+         expect(outcome.reason).toBe(reason);
       }
    });
 });
