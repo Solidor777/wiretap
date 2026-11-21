@@ -16,9 +16,10 @@ export const TEST_WORLD = process.env.FOUNDRY_WORLD || 'test-titan';
 
 /**
  * The world document types a flow may create and the teardown or sweep may delete, in deletion order: documents that
- * point at others (chat messages, combats, settings, accounts, scenes whose tokens name actors) come first, and
- * Folders come last so their contents are removed first. Every type here is a top-level world collection; embedded
- * documents are never recorded because they are deleted with their parent.
+ * point at others (chat messages, combats, settings, accounts, scenes whose tokens name actors) come first, Folders
+ * follow so their contents are removed first, and world compendium packs (`Compendium`, read from `game.packs`) come
+ * last because the documents inside a pack are removed with it. Every other type here is a top-level world
+ * collection; embedded documents are never recorded because they are deleted with their parent.
  * @type {readonly string[]}
  */
 export const ALLOWED_DOCUMENT_NAMES = Object.freeze([
@@ -35,7 +36,11 @@ export const ALLOWED_DOCUMENT_NAMES = Object.freeze([
    'Actor',
    'Item',
    'Folder',
+   'Compendium',
 ]);
+
+/** @type {string} The document name of a recorded world compendium pack. */
+const PACK_DOCUMENT_NAME = 'Compendium';
 
 /** @type {string} The key prefix of every Setting document an e2e flow creates; a Setting has no name. */
 export const E2E_SETTING_KEY_PREFIX = 'wiretap-e2e.';
@@ -59,6 +64,9 @@ export const IDENTITY_RULES = Object.freeze({
 /** @type {RegExp} A Foundry document id: 16 alphanumeric characters. */
 const ID_PATTERN = /^[A-Za-z0-9]{16}$/;
 
+/** @type {RegExp} A world compendium pack id, `world.<name>`, with a pack name of 1 to 64 characters. */
+const PACK_ID_PATTERN = /^world\.[A-Za-z0-9_-]{1,64}$/;
+
 /** @type {number} The most entries a record may hold; a longer record is corrupt. */
 const ENTRIES_MAX = 1000;
 
@@ -76,8 +84,9 @@ const REPORT_MAX = 10;
 /**
  * @typedef {object} RegistryEntry
  * @property {string} documentName - The document class, one of `ALLOWED_DOCUMENT_NAMES`.
- * @property {string} id - The document id.
- * @property {string} uuid - The document uuid, `<documentName>.<id>`; resolved with `fromUuid` at teardown.
+ * @property {string} id - The document id, or for a `Compendium` the pack collection id `world.<name>`.
+ * @property {string} uuid - The document uuid, `<documentName>.<id>`; resolved with `fromUuid` at teardown, except a
+ * `Compendium`, which is resolved by its id with `game.packs.get`.
  * @property {string} createdBy - The spec that created it.
  */
 
@@ -113,7 +122,11 @@ export function entryProblem(entry) {
    if (typeof fields.documentName !== 'string' || !ALLOWED_DOCUMENT_NAMES.includes(fields.documentName)) {
       return `documentName '${String(fields.documentName).slice(0, 40)}' is not an allowed world document type`;
    }
-   if (typeof fields.id !== 'string' || !ID_PATTERN.test(fields.id)) {
+   if (fields.documentName === PACK_DOCUMENT_NAME) {
+      if (typeof fields.id !== 'string' || !PACK_ID_PATTERN.test(fields.id)) {
+         return 'a Compendium entry id is not a world pack id';
+      }
+   } else if (typeof fields.id !== 'string' || !ID_PATTERN.test(fields.id)) {
       return 'an entry id is not a 16-character document id';
    }
    if (fields.uuid !== `${fields.documentName}.${fields.id}`) {
@@ -277,14 +290,27 @@ export async function recordDocument(page, entry, { file = DEFAULT_RECORD_FILE, 
 /**
  * Check, in the page, that every recorded document is still one the teardown may delete, without deleting anything.
  * Runs in the browser: it reads only its argument and the Foundry globals.
- * @param {{ entries: RegistryEntry[], prefix: string, rules: IdentityRules }} input
- * - The recorded entries, the e2e name prefix and the identity rules of the types that do not carry it in `name`.
+ * A pack is safe only when it is a world pack whose title starts with the e2e prefix.
+ * @param {{ entries: RegistryEntry[], prefix: string, rules: IdentityRules, packType: string }} input
+ * - The recorded entries, the e2e name prefix, the identity rules of the types that do not carry it in `name` and the
+ * document name of a recorded pack.
  * @returns {Promise<string[]>} One line per document that must not be deleted; empty when all are safe.
  */
-async function inspectRecorded({ entries, prefix, rules }) {
+async function inspectRecorded({ entries, prefix, rules, packType }) {
    /** @type {string[]} The violations found. */
    const violations = [];
    for (const entry of entries) {
+      if (entry.documentName === packType) {
+         /** @type {any} The recorded pack, or undefined when it no longer exists. */
+         const pack = game.packs.get(entry.id);
+         if (
+            pack &&
+            (pack.metadata.packageType !== 'world' || typeof pack.title !== 'string' || !pack.title.startsWith(prefix))
+         ) {
+            violations.push(`${entry.id} is not a world pack titled with the e2e prefix`);
+         }
+         continue;
+      }
       /** @type {any} The resolved document, or null when it no longer exists. */
       const document = await fromUuid(entry.uuid);
       if (!document) {
@@ -313,17 +339,35 @@ async function inspectRecorded({ entries, prefix, rules }) {
 }
 
 /**
- * Delete the recorded documents, in the page, through `document.delete()`. Runs in the browser; every entry was
- * inspected first.
- * @param {{ entries: RegistryEntry[], order: string[], prefix: string, rules: IdentityRules }} input - The recorded
- * entries, the type deletion order, the e2e name prefix and the identity rules.
- * @returns {Promise<void>} Resolves once the documents are gone.
- * @throws {Error} When a document no longer passes the identity test just before its deletion.
+ * Delete the recorded documents, in the page, through `document.delete()`, and the recorded packs through
+ * `pack.deleteCompendium()`, unlocking a locked pack first because `deleteCompendium` throws for a locked one
+ * (`client/documents/collections/compendium-collection.mjs`). Runs in the browser; every entry was inspected first.
+ * @param {{ entries: RegistryEntry[], order: string[], prefix: string, rules: IdentityRules, packType: string }} input
+ * - The recorded entries, the type deletion order, the e2e name prefix, the identity rules and the document name of a
+ * recorded pack.
+ * @returns {Promise<void>} Resolves once the documents and packs are gone.
+ * @throws {Error} When a document or pack no longer passes the identity test just before its deletion.
  */
-async function deleteRecorded({ entries, order, prefix, rules }) {
+async function deleteRecorded({ entries, order, prefix, rules, packType }) {
    /** @type {RegistryEntry[]} The entries sorted so that each type is deleted in its place in the order. */
    const sorted = [...entries].sort((a, b) => order.indexOf(a.documentName) - order.indexOf(b.documentName));
    for (const entry of sorted) {
+      if (entry.documentName === packType) {
+         /** @type {any} The recorded pack, or undefined when it no longer exists. */
+         const pack = game.packs.get(entry.id);
+         if (!pack) {
+            continue;
+         }
+         // The same test as the inspection, repeated for this pack immediately before it is deleted.
+         if (pack.metadata.packageType !== 'world' || typeof pack.title !== 'string' || !pack.title.startsWith(prefix)) {
+            throw new Error(`${entry.id} is no longer a world pack titled with the e2e prefix.`);
+         }
+         if (pack.locked) {
+            await pack.configure({ locked: false });
+         }
+         await pack.deleteCompendium();
+         continue;
+      }
       /** @type {any} The resolved document, or null when it no longer exists. */
       const document = await fromUuid(entry.uuid);
       if (!document) {
@@ -350,9 +394,9 @@ async function deleteRecorded({ entries, order, prefix, rules }) {
 }
 
 /**
- * Delete every recorded document through a Foundry document call, never by touching files, then mark the record as
- * restored. Every entry is validated first (document type, uuid shape, world document, e2e prefix); if any is not
- * safe, nothing is deleted, the record stays pending and the call throws.
+ * Delete every recorded document and pack through a Foundry call, never by touching files, then mark the record as
+ * restored. Every entry is validated first (document type, id and uuid shape, world document or world pack, e2e
+ * prefix); if any is not safe, nothing is deleted, the record stays pending and the call throws.
  * @param {EvaluatePage} page - The logged-in GM page.
  * @param {RegistryOptions} [options] - The file and world.
  * @returns {Promise<void>} Resolves once the recorded documents are gone; does nothing when nothing is pending.
@@ -370,6 +414,7 @@ export async function teardownRecorded(page, { file = DEFAULT_RECORD_FILE, world
       entries: record.entries,
       prefix: E2E_PREFIX,
       rules: IDENTITY_RULES,
+      packType: PACK_DOCUMENT_NAME,
    });
    if (violations.length > 0) {
       throw new Error(`e2e registry refuses to delete: ${listed(violations)}. Nothing was deleted.`);
@@ -379,6 +424,7 @@ export async function teardownRecorded(page, { file = DEFAULT_RECORD_FILE, world
       order: [...ALLOWED_DOCUMENT_NAMES],
       prefix: E2E_PREFIX,
       rules: IDENTITY_RULES,
+      packType: PACK_DOCUMENT_NAME,
    });
    writeRecord(file, {
       ...record,
@@ -388,21 +434,42 @@ export async function teardownRecorded(page, { file = DEFAULT_RECORD_FILE, world
 }
 
 /**
- * Find and delete, in the page, the world documents named with the e2e prefix. Runs in the browser. A candidate is
- * deleted only when it is a world document of an allowed type; anything else named with the prefix is reported as a
- * violation and left alone.
- * @param {{ prefix: string, order: string[], rules: IdentityRules }} input - The e2e name
- * prefix, the allowed types in deletion order and the identity rules of the types that do not carry it in `name`.
- * @returns {Promise<{ swept: string[], violations: string[] }>} The documents deleted and the ones left alone.
+ * Find and delete, in the page, the world documents named with the e2e prefix and the packs titled with it. Runs in
+ * the browser. A candidate is deleted only when it is a world document of an allowed type or a world pack; anything
+ * else named with the prefix is reported as a violation and left alone. A locked pack is unlocked first because
+ * `deleteCompendium` throws for a locked one (`client/documents/collections/compendium-collection.mjs`).
+ * @param {{ prefix: string, order: string[], rules: IdentityRules, packType: string }} input - The e2e name prefix,
+ * the allowed types in deletion order, the identity rules of the types that do not carry it in `name` and the
+ * document name of a pack.
+ * @returns {Promise<{ swept: string[], violations: string[] }>} The documents and packs deleted and the ones left
+ * alone.
  */
-async function sweepPrefixed({ prefix, order, rules }) {
+async function sweepPrefixed({ prefix, order, rules, packType }) {
    /** @type {string[]} The documents deleted. */
    const swept = [];
    /** @type {string[]} The documents named with the prefix that were not deleted. */
    const violations = [];
    /** @type {Array<{ document: any, line: string }>} The documents to delete, in deletion order. */
    const doomed = [];
+   /** @type {Array<{ pack: any, line: string }>} The world packs to delete after the documents. */
+   const doomedPacks = [];
    for (const documentName of order) {
+      if (documentName === packType) {
+         for (const pack of [...game.packs]) {
+            if (typeof pack.title !== 'string' || !pack.title.startsWith(prefix)) {
+               continue;
+            }
+            if (pack.metadata.packageType !== 'world') {
+               violations.push(`${packType} ${pack.collection}`);
+               continue;
+            }
+            doomedPacks.push({
+               pack,
+               line: `${packType} ${pack.title}`,
+            });
+         }
+         continue;
+      }
       /** @type {any} The world collection of this type, or undefined when the world has none. */
       const collection = game.collections.get(documentName);
       /** @type {{ field: string, prefix: string }} The field that must carry the e2e prefix. */
@@ -435,6 +502,13 @@ async function sweepPrefixed({ prefix, order, rules }) {
          await document.delete();
          swept.push(line);
       }
+      for (const { pack, line } of doomedPacks) {
+         if (pack.locked) {
+            await pack.configure({ locked: false });
+         }
+         await pack.deleteCompendium();
+         swept.push(line);
+      }
    }
    return {
       swept,
@@ -443,13 +517,15 @@ async function sweepPrefixed({ prefix, order, rules }) {
 }
 
 /**
- * Sweep the world documents named with the e2e prefix that no running list recorded, deleting them through Foundry
- * document calls (`document.delete()`) with the same validation as the recorded teardown. Call it after
- * `teardownRecorded`: whatever it finds is unrecorded.
+ * Sweep the world documents named with the e2e prefix and the packs titled with it that no running list recorded,
+ * deleting them through Foundry calls (`document.delete()`, `pack.deleteCompendium()`) with the same validation as the
+ * recorded teardown. Call it after `teardownRecorded`: whatever it finds is unrecorded.
  * @param {EvaluatePage} page - The logged-in GM page.
  * @param {RegistryOptions} [options] - The world.
- * @returns {Promise<string[]>} `<DocumentName> <name>` of each unrecorded document that was deleted.
- * @throws {Error} When a document named with the prefix is not a world document of an allowed type.
+ * @returns {Promise<string[]>} `<DocumentName> <name>` of each unrecorded document and `Compendium <title>` of each
+ * unrecorded pack that was deleted.
+ * @throws {Error} When a document named with the prefix is not a world document of an allowed type, or a pack titled
+ * with it is not a world pack.
  */
 export async function sweepUnrecorded(page, { world = TEST_WORLD } = {}) {
    await assertTestWorld(page, world);
@@ -458,6 +534,7 @@ export async function sweepUnrecorded(page, { world = TEST_WORLD } = {}) {
       prefix: E2E_PREFIX,
       order: [...ALLOWED_DOCUMENT_NAMES],
       rules: IDENTITY_RULES,
+      packType: PACK_DOCUMENT_NAME,
    });
    if (outcome.violations.length > 0) {
       throw new Error(`e2e sweep refuses to delete: ${listed(outcome.violations)}.`);
@@ -467,14 +544,23 @@ export async function sweepUnrecorded(page, { world = TEST_WORLD } = {}) {
 
 /**
  * List, in the page, what the census counts. Runs in the browser.
- * @param {{ prefix: string, order: string[], rules: IdentityRules }} input - The e2e name
- * prefix, the world document types to scan and the identity rules of the types that do not carry it in `name`.
+ * @param {{ prefix: string, order: string[], rules: IdentityRules, packType: string }} input - The e2e name prefix,
+ * the world document types to scan, the identity rules of the types that do not carry it in `name` and the document
+ * name of a pack.
  * @returns {string[]} One line per leftover.
  */
-function countLeftovers({ prefix, order, rules }) {
+function countLeftovers({ prefix, order, rules, packType }) {
    /** @type {string[]} The leftovers found. */
    const found = [];
    for (const documentName of order) {
+      if (documentName === packType) {
+         for (const pack of game.packs) {
+            if (pack.metadata.packageType === 'world' && typeof pack.title === 'string' && pack.title.startsWith(prefix)) {
+               found.push(`${packType} ${pack.title}`);
+            }
+         }
+         continue;
+      }
       /** @type {{ field: string, prefix: string }} The field that must carry the e2e prefix. */
       const rule = rules[documentName] ?? {
          field: 'name',
@@ -500,12 +586,13 @@ function countLeftovers({ prefix, order, rules }) {
 }
 
 /**
- * Count what a finished run must not leave in the test world: world documents named with the e2e prefix, every combat,
- * and every token whose actor no longer resolves. A non-empty result means a flow created something it did not record,
+ * Count what a finished run must not leave in the test world: world documents named with the e2e prefix, world packs
+ * titled with it, every combat, and every token whose actor no longer resolves. A non-empty result means a flow created something it did not record,
  * a teardown failed, or another run left combats behind.
  * @param {EvaluatePage} page - The logged-in GM page.
  * @param {RegistryOptions} [options] - The world.
- * @returns {Promise<string[]>} One line per leftover: `<DocumentName> <name>`, `Combat <id>`, `Token <scene>.<id>`.
+ * @returns {Promise<string[]>} One line per leftover: `<DocumentName> <name>`, `Compendium <title>`, `Combat <id>`,
+ * `Token <scene>.<id>`.
  */
 export async function censusPrefixed(page, { world = TEST_WORLD } = {}) {
    await assertTestWorld(page, world);
@@ -513,6 +600,7 @@ export async function censusPrefixed(page, { world = TEST_WORLD } = {}) {
       prefix: E2E_PREFIX,
       order: [...ALLOWED_DOCUMENT_NAMES],
       rules: IDENTITY_RULES,
+      packType: PACK_DOCUMENT_NAME,
    });
 }
 
