@@ -1,6 +1,6 @@
 ---
 name: wiretap
-description: Use when working with the live Foundry VTT world through the Wiretap MCP server (tools named mcp__wiretap__*), for example reading, creating, updating, replacing or deleting documents, or reading a large stored result.
+description: Use when working with the live Foundry VTT world through the Wiretap MCP server (tools named mcp__wiretap__*), for example reading, creating, updating, replacing or deleting documents, opening or closing sheets, rolling dice or drawing from a table, running a macro, or reading a large stored result.
 ---
 
 # Wiretap: Foundry VTT tools

@@ -805,29 +805,41 @@ export const FIXTURES = {
       {
          label: 'small value',
          budget: 'RESULT_HARD_CAP_DEFAULT_BYTES',
-         run: ({ client, setGmAck }) => {
+         run: async ({ client, setGmAck }) => {
             setGmAck(okAck({
                type: 'script',
                value: 5,
             }));
-            return client.callTool({
+            /** @type {{ isError?: boolean, content: { text: string }[] }} The result of the call. */
+            const result = await client.callTool({
                name: 'execute_macro',
                arguments: { uuid: 'Macro.MOCKMACRO0000001' },
             });
+            // An error here is the sidecar's gate denial, which would measure a refusal instead of a macro result.
+            if (result.isError) {
+               throw new Error(`execute_macro did not reach the fake GM: ${result.content[0].text}`);
+            }
+            return result;
          },
       },
       {
          label: 'a 12 KB value becomes a handle',
          budget: 'ACK_MAX_BYTES',
-         run: ({ client, setGmAck }) => {
+         run: async ({ client, setGmAck }) => {
             setGmAck(okAck({
                type: 'script',
                value: 'v'.repeat(12000),
             }));
-            return client.callTool({
+            /** @type {{ isError?: boolean, content: { text: string }[] }} The result of the call. */
+            const result = await client.callTool({
                name: 'execute_macro',
                arguments: { uuid: 'Macro.MOCKMACRO0000001' },
             });
+            // Only a result the fake GM returned is over the cap, so only it is stored behind a handle.
+            if (result.isError || typeof JSON.parse(result.content[0].text).handle !== 'string') {
+               throw new Error(`execute_macro returned no handle: ${result.content[0].text}`);
+            }
+            return result;
          },
       },
    ],

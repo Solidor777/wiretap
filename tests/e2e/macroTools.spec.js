@@ -234,10 +234,12 @@ test.describe('wiretap macro tools', () => {
    });
 
    test('a macro that throws reports MACRO_FAILED within 512 bytes', async ({ page }) => {
+      /** @type {string} An error message longer than the error limit, so the check fails when it is not cut. */
+      const message = `${E2E_PREFIX}macro failure ${'x'.repeat(ERROR_MAX_BYTES)}`;
       /** @type {string} The uuid of a macro that throws while it runs. */
       const uuid = await createMacro(page, {
          type: 'script',
-         command: `throw new Error('${E2E_PREFIX}macro failure');`,
+         command: `throw new Error('${message}');`,
       });
       await openGate(page);
       const failed = await callText('execute_macro', { uuid });

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { login } from './fixtures.js';
-import { firstSubtype, idOf } from './writeHelpers.js';
+import { firstSubtype } from './writeHelpers.js';
 import { E2E_MCP_PORT } from './ports.js';
 import { startGateSidecar, stopSidecar } from './sidecar.js';
 import { recordGateSettings, restoreGateSettings } from './gates.js';
