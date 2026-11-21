@@ -1,6 +1,6 @@
 ---
 name: wiretap-mcp-bridge
-description: Wiretap MCP tools and Foundry bridge — the built-in tools (read_handle and the backup tools backup_documents, list_backups, restore_backup, delete_backup) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents, delete_documents, replace_document, batch, open_sheet, close_sheet, roll, draw_table and execute_macro), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
+description: Wiretap MCP tools and Foundry bridge — the built-in tools (read_handle and the backup tools backup_documents, list_backups, restore_backup, delete_backup) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents, delete_documents, replace_document, batch, open_sheet, close_sheet, roll, draw_table, execute_macro, create_pack and delete_pack), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
 paths:
   - "server/mcp.ts"
   - "server/endpoints.ts"
@@ -38,6 +38,12 @@ validates the arguments against the listed schema → `makeRegistryToolHandler` 
 way as the tool result. The sidecar waits for the client's reply `DEFAULT_REPLY_WAIT_MS` (10 s, `server/endpoints.ts`),
 or `timeoutMs` + 2 s for a registry tool whose listed schema declares `timeoutMs` and whose call sets it
 (`toolReplyWaitMs`); a missing reply is `ENDPOINT_TIMEOUT` whose message names that call's wait.
+
+Listing: `syncRegistryTools` in `server/mcp.ts` registers each registry tool with `annotations: { readOnlyHint:
+!mutates }` and, only when `RegistryTool.requiresUserInteraction` is true (today `delete_pack`, forced by name), with
+`_meta: { 'anthropic/requiresUserInteraction': true }` (`USER_INTERACTION_META_KEY` of `shared/scripts.js`), which the
+sidecar builds itself; no client `_meta` is ever copied (`wiretap-mcp-sessions`). The pack tools are in
+`wiretap-packs`.
 
 ## Reaching the endpoint
 

@@ -1,6 +1,6 @@
 ---
 name: wiretap-write-guard
-description: Wiretap write guard - guardWrite and its gates (allowDelete, allowReplace, user, setting, ownership, file upload, macro and region script code, compendium), the one reader of Foundry update operators (shared/writeKeys.js), the schema-based embedded-field analysis and cleaned-changes backstop (writeFields.js), the write path grammar (shared/docPath.js groupWrites) and the generated operator grid. Use when reading or editing the guard, operators, gates or their tests.
+description: Wiretap write guard - guardWrite and its gates (allowDelete, allowReplace, allowPackDeletion beside them, user, setting, ownership, file upload, macro and region script code, compendium), the one reader of Foundry update operators (shared/writeKeys.js), the schema-based embedded-field analysis and cleaned-changes backstop (writeFields.js), the write path grammar (shared/docPath.js groupWrites) and the generated operator grid. Use when reading or editing the guard, operators, gates or their tests.
 paths:
   - "src/bridge/scripts/writeGuard.js"
   - "src/bridge/scripts/writeFields.js"
@@ -89,6 +89,14 @@ the executing client at call time and a `dryRun` preview needs none. What needs 
 - `create_documents` and `batch` creates never need these gates, but `keepId` is refused when the `_id` exists
   (`refuseTakenIds`, `ARGS_INVALID`): MEASURED on 14.364, the server overwrites the stored document, world and embedded,
   while the client keeps its old copy.
+
+`allowPackDeletion` (world-scope, restricted, default closed; `shared/gates.js`, `lang/en.json` "Risk gate: delete
+compendium packs") guards `delete_pack` only and is not read by `guardWrite`: `deletePackHandler` checks it itself
+through `requireOpenGate` of `packCommon.js` on a real run, before any pack lookup, and a dry run needs no gate
+(`create_pack` does the same with `allowCompendiumWrites`; see `wiretap-packs`). `tests/unit/gates.test.js` pins the
+twelve boolean gates and the plugin module list; `tests/unit/riskGates.test.js` runs `delete_pack` beside the delete
+and replace tools (denied while closed and calling no `deleteCompendium`, previewed with the gate closed, run once
+open).
 
 No definition declares `gate` (that check would stop previews and cannot cover `batch`). The grid
 (`operatorGrid.test.js` with `operatorGridCases.js`) generates its cases from the field schemas of the mock world (each

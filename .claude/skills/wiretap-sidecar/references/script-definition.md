@@ -1,10 +1,11 @@
 # Script definition (`shared/scripts.js`)
 
-Plain JS with JSDoc, imported by both sides: `server/toolRegistry.ts`, `server/mcp.ts` (`RESERVED_SCRIPT_NAMES`), `src/bridge/foundryBridge.js` (`SCRIPT_API_VERSION`) and `src/bridge/scripts/registry.js`. The module header documents every
+Plain JS with JSDoc, imported by both sides: `server/toolRegistry.ts` (with `USER_INTERACTION_TOOLS`), `server/mcp.ts` (`RESERVED_SCRIPT_NAMES`, `USER_INTERACTION_META_KEY`), `src/bridge/foundryBridge.js` (`SCRIPT_API_VERSION`) and `src/bridge/scripts/registry.js`. The module header documents every
 field of a script definition `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate?,
-moduleId? }`. Exports: `SCRIPT_API_VERSION` (1), `SCRIPT_SOURCES` (`shipped`, `plugin`, `agent`), `SCRIPT_REQUIRES` (`none`, `api`,
+handleArgs?, strictNested?, moduleId?, requiresUserInteraction? }`. Exports: `SCRIPT_API_VERSION` (1), `SCRIPT_SOURCES` (`shipped`, `plugin`, `agent`), `SCRIPT_REQUIRES` (`none`, `api`,
 `dom`), `RESERVED_SCRIPT_NAMES` (`read_handle`, `backup_documents`, `list_backups`, `restore_backup`, `delete_backup`:
-the sidecar's own tools), `definitionBytes(name, description, inputSchema)`,
+the sidecar's own tools), `USER_INTERACTION_META_KEY` (`'anthropic/requiresUserInteraction'`), `USER_INTERACTION_TOOLS`
+(`['delete_pack']`, the names the sidecar always lists with that meta entry), `definitionBytes(name, description, inputSchema)`,
 `validateScriptDefinition(input, source)` and `parseRegistryPayload(payload)`.
 
 - `validateScriptDefinition` returns `{ ok: true, definition, warnings }` (a fresh copy of the known fields; a description over the
@@ -15,7 +16,8 @@ the sidecar's own tools), `definitionBytes(name, description, inputSchema)`,
   refused as "not supported by this version of Wiretap". `mutates` (boolean) and `requires` are required and never defaulted;
   `version` is `MAJOR.MINOR.PATCH` with optional `-prerelease` and `+build` within `SCRIPT_VERSION_MAX_CHARS` (32); `result.budgetBytes` is
   an integer 1 to `RESULT_HARD_CAP_MAX_BYTES`; `gate` is a name in `GATES` except `allowedPluginModules`; `moduleId` exists on
-  plugin scripts only; `{name, description, inputSchema}` is held to `DEFINITION_MAX_BYTES` in UTF-8 bytes. The JSON Schema subset check
+  plugin scripts only; `strictNested` and `requiresUserInteraction` may only be `true` (neither is listed or counted in
+  the definition size; the sidecar's use of the second is in `wiretap-mcp-sessions`); `{name, description, inputSchema}` is held to `DEFINITION_MAX_BYTES` in UTF-8 bytes. The JSON Schema subset check
   and the conversion to zod are sidecar-only (`server/toolRegistry.ts`).
 - `parseRegistryPayload` opens `{ apiVersion, scripts }` and refuses everything else (a plain array included) with a reason that
   names `apiVersion`.

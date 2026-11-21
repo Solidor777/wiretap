@@ -142,8 +142,9 @@ or its name is in `USER_INTERACTION_TOOLS` (`shared/scripts.js`, `['delete_pack'
 `_meta: { 'anthropic/requiresUserInteraction': true }` (`USER_INTERACTION_META_KEY`), built by the sidecar and never
 copied from the client; every other tool has no `_meta`. The SDK client's `listTools()` returns that object
 (`tests/integration/userInteractionMeta.test.js`). The flag is the last element of `signature` and not part of
-`schemaSignature`; a call is forwarded unchanged. The prompt is shown by the MCP client (Claude Code); another client or
-a local process is not prompted.
+`schemaSignature`, so a call does not compare it with the picked endpoint's declaration (unreachable for `delete_pack`,
+whose flag is forced by name); a call is forwarded unchanged. The prompt is shown by the MCP client (Claude Code);
+another client or a local process is not prompted.
 
 `jsonSchemaToZodShape(schema)` converts a documented subset: a root object whose properties are string (`enum`,
 `minLength`, `maxLength`), number, integer (`minimum`, `maximum`), boolean, array (`items`, `minItems`, `maxItems`) or
@@ -182,7 +183,9 @@ and sends its registry after every acknowledged identify and on each registry ch
 - `tests/integration/scriptRegistry.test.js`: `create_documents` through the registry, argument validation before sending, payload shape
   refusals, annotations and `requires` routing over real sockets.
 - `tests/integration/userInteractionMeta.test.js`: the `_meta` entry as the SDK client lists it (flagged, forced by
-  name, absent otherwise) and an unchanged forwarded call.
+  name, absent otherwise); a hostile client that registers its own `_meta` and `annotations` (the listing holds only
+  the sidecar's one meta key and `readOnlyHint` from `mutates`); a re-registered tool whose flag goes off, on, off,
+  with one `tools/list_changed` each time; and an unchanged forwarded call.
 - `tests/integration/mcpSessions.test.js`: real HTTP with the SDK client (lifecycle, methods, late tools and
   `list_changed`, endpoint choice, gates, expiry, cap, 503).
 - `tests/integration/mcpHardening.test.js` (with `mcpHarness.js`): body, header, idle-socket and connection limits, no body

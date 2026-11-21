@@ -81,6 +81,18 @@
   a socket.io client connect; a connection to the non-loopback IPv4 address is refused (the test skips on a machine
   without one); `dispose()` stops the HTTP server and releases the port.
 
+## `create_pack` accepted a name that differs from a world pack's only in case
+
+- **Was:** `src/bridge/scripts/createPack.js` checked a collision with `game.packs.has('world.<name>')`, the same
+  case-sensitive test the Foundry server makes. The server stores a world pack in the folder `packs/<name>`, and
+  folder names ignore case on Windows, so `create_pack` with `name: "Monsters"` beside an existing `world.monsters`
+  passed the check and would point the new pack at the existing pack's folder. Found and fixed before the live e2e run.
+- **Fix:** the handler compares the new id with every key of `game.packs` in lowercase and refuses a match with
+  `ARGS_INVALID` naming the existing pack id, on a real run and a dry run (`b41ab2e`).
+- **Verified:** `tests/unit/createPack.test.js` "refuses a name that equals a world pack name when case is ignored, on
+  a real run and on a dry run" asserts `ARGS_INVALID` with "already exists" for `name: "Foo"` beside `world.foo`, and
+  that `createCompendium` is not called.
+
 ## `mcpConfigFile.test.js` failed when a process id was reused
 
 - **Was:** `tests/unit/mcpConfigFile.test.js` `freshRoot(name)` named roots `test/tmp/mcpConfigFile/<pid>-<counter>`. One

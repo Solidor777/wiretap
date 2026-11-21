@@ -156,3 +156,26 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   the write path, is not measured. No live e2e restores into a compendium pack or re-creates Folders: the unit tests
   over mocked `game` (`tests/unit/restoreBackup.test.js`) re-create a Folder and refuse a gone or locked pack, but
   have no case that restores a document into an unlocked pack. Status: NOT MEASURED.
+
+- Title: A deleted pack leaves its key in `compendiumConfiguration`. Summary: after `delete_pack` removes a world pack
+  on the live world (14.364), the core world setting `compendiumConfiguration` still holds an entry for the deleted
+  pack id, `{"folder":null,"locked":false}`. Inferred, not measured: a pack created later with the same name reads
+  that entry. Status: MEASURED in the M18 pack e2e run (`tests/e2e/packTools.spec.js`); left as Foundry's own
+  setting, which Wiretap does not write.
+
+- Title: The `delete_pack` prompt is not verified in Claude Code itself. Summary: the sidecar lists `delete_pack` with
+  `_meta["anthropic/requiresUserInteraction"]: true`, and `tests/integration/userInteractionMeta.test.js` proves the
+  MCP SDK client receives it. Whether Claude Code shows a prompt on it, and whether it still prompts when
+  `mcp__wiretap__*` is allow-listed, is not tested. The `allowPackDeletion` gate is the Wiretap-side control either
+  way. Status: UNVERIFIED.
+
+- Title: The `create_pack` collision check scans every pack id. Summary: the check that ignores case compares
+  `world.<name>` with every key of `game.packs`, not only world packs, so a package whose id is `world` in another
+  letter case (for example a module `World`) could make a free name read as taken. Status: INFERRED from
+  `src/bridge/scripts/createPack.js`; needs an oddly named package to occur, not measured.
+
+- Title: Dispatch does not compare `requiresUserInteraction` between endpoints. Summary: the registry tool's prompt
+  flag is part of its `signature`, but dispatch compares only `schemaSignature` between the listed tool and the chosen
+  endpoint's declaration (`server/endpoints.ts`), and the flag is not in it. For `delete_pack` the flag is forced by
+  name (`USER_INTERACTION_TOOLS`), so it cannot differ; it would matter only for a future prompted tool that is not on
+  that list. Status: READ (`server/toolRegistry.ts`, `server/endpoints.ts`); unreachable today.
