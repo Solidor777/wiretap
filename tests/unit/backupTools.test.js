@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { z } from 'zod';
 import { createBackupTools, createBackupSink, fitListResult, fitRestoreResult } from '../../server/backupTools.ts';
 import { createBackupStore } from '../../server/backups.ts';
 import { BridgeError } from '../../server/endpoints.ts';
@@ -14,6 +15,8 @@ import { ENDPOINT_GONE, OP_BACKUP_EXPORT, OP_BACKUP_RESTORE } from '../../shared
 import { closedGateState } from '../../shared/gates.js';
 import { defaultBridgeSettings } from '../../shared/bridgeSettings.js';
 import { fakeTrash, scratchRoot } from './backupTestHelpers.js';
+import { definitionBytes } from '../../shared/scripts.js';
+import { getBudget } from '../../shared/budgets.js';
 
 /** @typedef {import('../../server/backups.ts').BackupStore} BackupStore */
 /** @typedef {import('../../server/backups.ts').TrashFunction} TrashFunction */
@@ -333,6 +336,29 @@ function writeBackup(store, folderPath = store.defaultFolder, content = {}) {
    });
    return writer.file;
 }
+
+describe('backup tool definitions', () => {
+   it('lists each definition within DEFINITION_MAX_BYTES, measured as the MCP SDK lists it', () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      /** @type {number} The per-definition budget. */
+      const limit = getBudget('DEFINITION_MAX_BYTES').value;
+      expect(fixture.tools.map((tool) => tool.name)).toEqual([
+         'backup_documents',
+         'list_backups',
+         'restore_backup',
+         'delete_backup',
+      ]);
+      for (const tool of fixture.tools) {
+         /** @type {unknown} The input schema as the SDK converts a raw shape for `tools/list`. */
+         const listed = z.toJSONSchema(z.object(tool.inputSchema), {
+            target: 'draft-7',
+            io: 'input',
+         });
+         expect(definitionBytes(tool.name, tool.description, listed), tool.name).toBeLessThanOrEqual(limit);
+      }
+   });
+});
 
 describe('backup_documents arguments', () => {
    it('refuses no selector and two selectors with ARGS_INVALID', async () => {

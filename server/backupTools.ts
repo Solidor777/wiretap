@@ -805,20 +805,21 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
    return (endpoint: EndpointKind | undefined): ToolRegistration[] => {
       // The session's routing options.
       const routing: InvokeOptions = endpoint === undefined ? {} : { endpoint };
+      // An argument has a `.describe` only where its name and type do not say what it is and what it accepts: each
+      // listed definition must fit DEFINITION_MAX_BYTES (800 bytes), which `tests/unit/backupTools.test.js` measures.
       // The shared `folder` argument.
       const folderArg: z.ZodOptional<z.ZodString> = z
          .string()
          .max(1024)
          .optional()
-         .describe('Absolute folder; default the backup folder.');
+         .describe('Absolute; default the backup folder.');
       // The shared `timeoutMs` argument.
       const timeoutArg: z.ZodOptional<z.ZodNumber> = z
          .number()
          .int()
          .min(BACKUP_TIMEOUT_MIN_MS)
          .max(BACKUP_TIMEOUT_MAX_MS)
-         .optional()
-         .describe('Time limit in ms.');
+         .optional();
       // The shared `uuids` argument.
       const uuidsArg: z.ZodOptional<z.ZodArray<z.ZodString>> = z
          .array(z.string().max(256))
@@ -831,10 +832,10 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
             description: 'Save documents (uuids, or one folderUuid, documentName or pack) to a new backup file in the '
                + 'sidecar. Offer before bulk or risky changes.',
             inputSchema: {
-               uuids: uuidsArg.describe('Documents to back up.'),
-               folderUuid: z.string().max(256).optional().describe('A Folder, with its subfolders.'),
-               documentName: z.string().max(32).optional().describe('A world document type.'),
-               pack: z.string().max(128).optional().describe('A compendium pack id.'),
+               uuids: uuidsArg,
+               folderUuid: z.string().max(256).optional(),
+               documentName: z.string().max(32).optional(),
+               pack: z.string().max(128).optional(),
                folder: folderArg,
                note: z.string().optional().describe('Short note, at most 200 bytes.'),
                dryRun: z.boolean().optional().describe('Measure only.'),
@@ -848,7 +849,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
             description: 'List the backup files of a folder, newest first, as [file, created, documents, note] rows.',
             inputSchema: {
                folder: folderArg,
-               limit: z.number().int().min(1).max(LIST_LIMIT_MAX).optional().describe('Most rows.'),
+               limit: z.number().int().min(1).max(LIST_LIMIT_MAX).optional(),
             },
             handler: (args: ListArgs) => listBackups(args, routing),
             budgetBytes: getBudget('BACKUP_LIST_MAX_BYTES').value,

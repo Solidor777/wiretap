@@ -63,6 +63,11 @@ flag is shared by every session: a backup or restore (dry runs included) or a de
 bridge used (`invoke`, `snapshot`, `expectPieces`, `sendPiece`). Not yet registered in `server/mcp.ts` or measured by
 `tests/unit/contextBudget.test.js`.
 
+- Definitions: each listed definition (`z.toJSONSchema(z.object(inputSchema), { target: 'draft-7', io: 'input' })`, the
+  SDK's conversion) is at most `DEFINITION_MAX_BYTES` (800 B), measured by `tests/unit/backupTools.test.js`;
+  `backup_documents` is exactly 800 B. An argument has a `.describe` only where its name and type do not say what it
+  is: `folder` (absolute, default the backup folder), `note`, `dryRun`, and `file` and `uuids` of `restore_backup`.
+
 - Folder and gate: `store.resolveFolder(args.folder, settings.backupFolder)`; kind `named` with
   `allowBackupAnyFolder` closed is `GATE_DENIED`. Backup and restore judge it inside the invoke's `prepare` on the
   picked endpoint; list and delete on `bridge.snapshot(...)`, or the closed gates and default settings with no endpoint.
