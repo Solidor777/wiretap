@@ -53,18 +53,18 @@ with `userId` on every tab that connected user has open (who needs OBSERVER; the
 `mcp__wiretap__close_sheet` with the same arguments closes it there. With no human connected no one sees a sheet: read
 the data instead. `mcp__wiretap__roll` takes a `formula` (no `@` references), `mcp__wiretap__draw_table` a RollTable
 `uuid` (drawn results are marked); `toChat` (default false) posts to chat. `mcp__wiretap__execute_macro` runs a Macro
-`uuid` for `actorUuid` / `tokenUuid` (on the viewed scene), needs `allowMacroExecution` and returns its value;
-`timeoutMs` (1,000 to 300,000; default 8,000) is its time limit. A chat macro whose `value` is null sent no message.
-`tooLarge: true` (with `bytes`) means it ran but its value was dropped: that alone does not show it did what you wanted.
+`uuid` for `actorUuid` / `tokenUuid` (on the viewed scene), needs `allowMacroExecution` and returns its value within
+`timeoutMs` (1 s to 5 min; default 8 s). A null chat `value`: it created no message itself; a `/macro` command or
+another module may have. `tooLarge: true` (with `bytes`): it ran, its value dropped: that alone does not show it worked.
 
 ## Errors you may meet
 - `ARGS_INVALID` (names the argument), `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `PATH_*`, `CURSOR_INVALID`, `SCRIPT_BUSY`
   (retry), `VALIDATION_FAILED` (up to 10 failures and the count; nothing written), `TABLE_EMPTY` (nothing left to draw),
   `MACRO_FAILED` (did not compile, so nothing ran; or threw, so it may have partly run), `USER_OFFLINE`, `SHEET_DENIED`
-  (no OBSERVER), `SHEET_UNAVAILABLE`, `SHEET_QUERY_FAILED`.
+  (no OBSERVER), `SHEET_UNAVAILABLE`, `SHEET_QUERY_FAILED`, `DELETE_REFUSED` (the signed-in user or last GM).
 - `GATE_DENIED`: a GM setting is closed (`allowDelete`: delete_documents, batch deletes, removing embedded documents;
   `allowReplace`: replace_document; `allowMacroExecution`: execute_macro, writing macro code (a Macro command, a type
   set to script, an Adventure's macros); others), or the write is never allowed (a `wiretap.*` setting, a User password,
   the `flags.wiretap` scope, erasing `flags`). Tell the user which gate; you cannot open it.
-- `WRITE_NOT_APPLIED`, `SCRIPT_TIMEOUT` (8 s; a macro may run on), `ENDPOINT_TIMEOUT`: it may still have applied; check
-  before retrying. `RESULT_TOO_LARGE`: read with `paths`. `DELETE_REFUSED`: the signed-in user or last GM.
+- `WRITE_NOT_APPLIED`, `SCRIPT_TIMEOUT`, `ENDPOINT_TIMEOUT`, or your MCP client giving up before `timeoutMs` (a macro
+  may run on): it may still have applied; check before retrying. `RESULT_TOO_LARGE`: read with `paths`.

@@ -83,7 +83,7 @@ export function createCallTool({ registry, timeoutMs = SCRIPT_TIMEOUT_MS }) {
             reject(
                new ScriptError(
                   'SCRIPT_TIMEOUT',
-                  `The script did not finish in ${Math.round(limit / 1000)} s; the operation may still have ` +
+                  `The script did not finish in ${limit / 1000} s; the operation may still have ` +
                      'applied.',
                ),
             );

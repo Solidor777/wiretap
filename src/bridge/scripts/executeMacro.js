@@ -18,7 +18,7 @@ import { ScriptError } from '~/bridge/scripts/registry.js';
 const SHOWN_MAX_BYTES = 64;
 
 /**
- * Most UTF-8 bytes of a macro error's text in the `MACRO_FAILED` message. With the longer of the two prefixes (42
+ * Most UTF-8 bytes of a macro error's text in the `MACRO_FAILED` message. With the longer of the two prefixes (41
  * bytes) the message stays within the 256-byte bound.
  * @type {number}
  */

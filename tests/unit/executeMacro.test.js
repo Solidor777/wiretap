@@ -248,8 +248,15 @@ describe('execute_macro time limit', () => {
       vi.useFakeTimers();
       /** @type {Promise<Error | null>} The pending call. */
       const pending = hangingCall({ uuid });
-      await vi.advanceTimersByTimeAsync(8000);
-      expect((await pending)?.code).toBe('SCRIPT_TIMEOUT');
+      /** @type {Error | null | undefined} The call's outcome once it settles. */
+      let settled;
+      pending.then((error) => {
+         settled = error;
+      });
+      await vi.advanceTimersByTimeAsync(7999);
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled?.code).toBe('SCRIPT_TIMEOUT');
    });
 });
 

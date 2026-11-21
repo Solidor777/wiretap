@@ -447,6 +447,18 @@ describe('callTool: timeout', () => {
       expect(vi.getTimerCount()).toBe(0);
    });
 
+   it('states a timeoutMs that is not whole seconds without rounding it', async () => {
+      vi.useFakeTimers();
+      registry.register(timedScript('slow'), () => new Promise(() => {}));
+      const call = track({
+         name: 'slow',
+         arguments: { timeoutMs: 1500 },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(call.settled()?.code).toBe('SCRIPT_TIMEOUT');
+      expect(call.settled().message).toBe('The script did not finish in 1.5 s; the operation may still have applied.');
+   });
+
    it('runs a script that declares timeoutMs under 8 s when the call omits it', async () => {
       vi.useFakeTimers();
       registry.register(timedScript('slow'), () => new Promise(() => {}));
