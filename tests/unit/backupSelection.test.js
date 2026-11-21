@@ -50,7 +50,7 @@ describe('planSelection by uuids', () => {
       });
    });
 
-   it('keeps one entry for a uuid listed twice and for a document named by uuid and by its folder', async () => {
+   it('keeps one entry for a uuid listed twice, puts named folders first, parent first, and keeps a pack', async () => {
       const { docs } = installBackupWorld(vi.fn);
       const plan = await planSelection({
          uuids: [

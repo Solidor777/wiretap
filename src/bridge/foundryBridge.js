@@ -4,6 +4,8 @@ import {
    BRIDGE_INVOKE,
    BRIDGE_PING,
    BRIDGE_REGISTRY,
+   OP_BACKUP_EXPORT,
+   OP_BACKUP_RESTORE,
    OP_CALL_TOOL,
    OP_FAILED,
    PROTOCOL_MISMATCH,
@@ -13,6 +15,8 @@ import { getBudget } from '$shared/budgets.js';
 import { cleanForLog, describeCause } from '$shared/logText.js';
 import { SCRIPT_API_VERSION } from '$shared/scripts.js';
 import { truncateUtf8 } from '$shared/utf8.js';
+import { exportBackup } from '~/bridge/backup/exportBackup.js';
+import { restoreBackup } from '~/bridge/backup/restoreBackup.js';
 import { isBridgeSettingKey, readBridgeSettings } from '~/bridge/bridgeSettings.js';
 import { gateNameFromSettingKey, readGateState } from '~/bridge/gates.js';
 import { createPieceChannel } from '~/bridge/pieces.js';
@@ -168,6 +172,10 @@ export function initFoundryBridge(connection, { scripts = scriptRegistry } = {})
     */
    const opHandlers = {
       [OP_CALL_TOOL]: createCallTool({ registry: scripts }),
+      // Exports the selected documents and streams the backup lines to the sidecar as backup pieces.
+      [OP_BACKUP_EXPORT]: exportBackup,
+      // Reads the backup file from the sidecar as restore pieces and writes the chosen documents back.
+      [OP_BACKUP_RESTORE]: restoreBackup,
    };
 
    connection.onSocket((socket) => {
