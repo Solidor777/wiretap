@@ -316,7 +316,7 @@ describe('context budgets of the real MCP server', () => {
       it('fails when all definitions together exceed their total', async () => {
          /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of the tools. */
          const fixtures = {};
-         /** @type {number} As many tools as the count budget leaves beside the sidecar built-ins: only the total breaks. */
+         /** @type {number} The tool count left beside the sidecar built-ins, so only the total breaks. */
          const count = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
          const extra = Array.from({ length: count }, (_, index) => {
             const name = `test_total_${index}`;
@@ -538,7 +538,8 @@ describe('context budgets of the real MCP server', () => {
             expect(listed).toContain(name);
          }
          expect(instructions).toContain('tools/list_changed');
-         // No skill ships yet, so the text must not send the model looking for one.
+         // Every MCP client receives the instructions, and the Wiretap skill is installed by hand in only some, so
+         // the text must not send the model looking for one.
          expect(instructions.toLowerCase()).not.toContain('skill');
       });
 

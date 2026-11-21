@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
  * The four backup tools through the real sidecar, Socket.IO and the MCP SDK client, with a fake GM client: pieces in
- * both directions, a lost piece, a refused restore piece, disconnects, the busy lock, the folder gate, the Backup folder
- * setting, the absence of document text in MCP messages, and the transport time of a 2,048,000-byte backup.
+ * both directions, a lost piece, a refused restore piece, disconnects, the busy lock, the folder gate, the Backup
+ * folder setting, the absence of document text in MCP messages, and the transport time of a 2,048,000-byte backup.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -151,7 +151,8 @@ function restoreHandler(record) {
       let held = 0;
       /**
        * Hold one piece, ack it, and answer the restore once the end marker is acked.
-       * @param {{ requestId: string, seq: number, end?: true, data?: Uint8Array }} piece - A data piece or the end marker.
+       * @param {{ requestId: string, seq: number, end?: true, data?: Uint8Array }} piece - A data piece or the end
+       * marker.
        * @param {(ack: { ok: true }) => void} reply - Acks the piece.
        * @returns {void}
        */
@@ -201,14 +202,6 @@ function parsed(result) {
  */
 function backupNames(dir) {
    return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => BACKUP_FILE_PATTERN.test(name)) : [];
-}
-
-/**
- * Make a promise with its resolver outside.
- * @returns {{ promise: Promise<void>, resolve: () => void }} The promise and its resolver.
- */
-function deferred() {
-   return Promise.withResolvers();
 }
 
 describe('backup tools over a real socket', () => {
@@ -346,44 +339,45 @@ describe('backup tools over a real socket', () => {
          });
       });
 
-   it('a lost piece fails the backup with BACKUP_INCOMPLETE and moves the partial file to the recycle bin', async () => {
-      /** @type {Buffer[]} Lines spanning two pieces. */
-      const lines = [
-         documentLine(600000, 0),
-         documentLine(200, 1),
-      ];
-      /** @type {Buffer[]} The two data pieces. */
-      const pieces = splitPieces(Buffer.concat(lines));
-      /** @type {unknown[]} The sidecar's acks of the two pieces. */
-      const acks = [];
-      harness.setGmHandler(async (request, gm) => {
-         acks.push(await gm.emitWithAck(BRIDGE_BACKUP_PIECE, {
-            requestId: request.requestId,
-            seq: 0,
-            data: pieces[0],
-         }));
-         acks.push(await gm.emitWithAck(BRIDGE_BACKUP_PIECE, {
-            requestId: request.requestId,
-            seq: 2,
-            data: pieces[1],
-         }));
-         return exportAck(lines);
+   it('a lost piece fails the backup with BACKUP_INCOMPLETE and moves the partial file to the recycle bin',
+      async () => {
+         /** @type {Buffer[]} Lines spanning two pieces. */
+         const lines = [
+            documentLine(600000, 0),
+            documentLine(200, 1),
+         ];
+         /** @type {Buffer[]} The two data pieces. */
+         const pieces = splitPieces(Buffer.concat(lines));
+         /** @type {unknown[]} The sidecar's acks of the two pieces. */
+         const acks = [];
+         harness.setGmHandler(async (request, gm) => {
+            acks.push(await gm.emitWithAck(BRIDGE_BACKUP_PIECE, {
+               requestId: request.requestId,
+               seq: 0,
+               data: pieces[0],
+            }));
+            acks.push(await gm.emitWithAck(BRIDGE_BACKUP_PIECE, {
+               requestId: request.requestId,
+               seq: 2,
+               data: pieces[1],
+            }));
+            return exportAck(lines);
+         });
+         /** @type {ToolResult} What the call returned. */
+         const result = await call('backup_documents', { uuids: ['Actor.MOCKACTOR0000000'] });
+         expect(result.isError).toBe(true);
+         expect(textOf(result)).toBe('BACKUP_INCOMPLETE: A backup piece arrived out of order.');
+         expect(acks[0]).toEqual({ ok: true });
+         expect(acks[1]).toMatchObject({
+            ok: false,
+            error: { code: 'BACKUP_INCOMPLETE' },
+         });
+         expect(backupNames(defaultFolder)).toEqual([]);
+         /** @type {string[]} The recycled files. */
+         const recycled = backupNames(binDir);
+         expect(recycled).toHaveLength(1);
+         expect(fs.statSync(path.join(binDir, recycled[0])).size).toBe(HEADER_LINE_BYTES + BACKUP_PIECE_MAX_BYTES);
       });
-      /** @type {ToolResult} What the call returned. */
-      const result = await call('backup_documents', { uuids: ['Actor.MOCKACTOR0000000'] });
-      expect(result.isError).toBe(true);
-      expect(textOf(result)).toBe('BACKUP_INCOMPLETE: A backup piece arrived out of order.');
-      expect(acks[0]).toEqual({ ok: true });
-      expect(acks[1]).toMatchObject({
-         ok: false,
-         error: { code: 'BACKUP_INCOMPLETE' },
-      });
-      expect(backupNames(defaultFolder)).toEqual([]);
-      /** @type {string[]} The recycled files. */
-      const recycled = backupNames(binDir);
-      expect(recycled).toHaveLength(1);
-      expect(fs.statSync(path.join(binDir, recycled[0])).size).toBe(HEADER_LINE_BYTES + BACKUP_PIECE_MAX_BYTES);
-   });
 
    it('a restore piece the client refuses stops the pump', async () => {
       /** @type {Record<string, unknown>} A backup of two data pieces. */
@@ -391,8 +385,8 @@ describe('backup tools over a real socket', () => {
          documentLine(600000, 0),
          documentLine(200, 1),
       ]);
-      /** @type {{ promise: Promise<void>, resolve: () => void }} Settles when the sidecar logs the stopped pump. */
-      const stopped = deferred();
+      /** @type {PromiseWithResolvers<void>} Settles when the sidecar logs the stopped pump. */
+      const stopped = Promise.withResolvers();
       /** @type {string[]} The sidecar log lines about the pump. */
       const pumpLines = [];
       vi.spyOn(console, 'log').mockImplementation((line) => {
@@ -491,10 +485,10 @@ describe('backup tools over a real socket', () => {
       /** @type {string} The refusal text of a busy call. */
       const busy = 'BACKUP_BUSY: A backup or restore is already running; retry when it ends.';
 
-      /** @type {{ promise: Promise<void>, resolve: () => void }} Settles when the held backup reaches the GM. */
-      const backupStarted = deferred();
-      /** @type {{ promise: Promise<void>, resolve: () => void }} Releases the held backup. */
-      const releaseBackup = deferred();
+      /** @type {PromiseWithResolvers<void>} Settles when the held backup reaches the GM. */
+      const backupStarted = Promise.withResolvers();
+      /** @type {PromiseWithResolvers<void>} Releases the held backup. */
+      const releaseBackup = Promise.withResolvers();
       harness.setGmHandler(exportHandler(lines, {
          before: () => {
             backupStarted.resolve();
@@ -509,10 +503,10 @@ describe('backup tools over a real socket', () => {
       releaseBackup.resolve();
       parsed(await running);
 
-      /** @type {{ promise: Promise<void>, resolve: () => void }} Settles when the held restore received its pieces. */
-      const restoreHeld = deferred();
-      /** @type {{ promise: Promise<void>, resolve: () => void }} Releases the held restore. */
-      const releaseRestore = deferred();
+      /** @type {PromiseWithResolvers<void>} Settles when the held restore received its pieces. */
+      const restoreHeld = Promise.withResolvers();
+      /** @type {PromiseWithResolvers<void>} Releases the held restore. */
+      const releaseRestore = Promise.withResolvers();
       harness.setGmHandler(restoreHandler({
          pieces: [],
          violations: [],
@@ -530,7 +524,7 @@ describe('backup tools over a real socket', () => {
       expect(parsed(await restoring)).toMatchObject({ replaced: 1 });
    });
 
-   it('a folder outside the default and the setting needs allowBackupAnyFolder on the picked endpoint', async () => {
+   it('a named folder is refused until the GM pushes allowBackupAnyFolder open, then written', async () => {
       /** @type {string} A folder that is neither the default nor the setting. */
       const named = scratchRoot('backupTools-named');
       /** @type {Buffer[]} One short line. */

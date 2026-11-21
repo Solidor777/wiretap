@@ -329,7 +329,7 @@ function backupExportHandler() {
  * @param {Client} client - The SDK client of the running fixture.
  * @param {string} name - The tool to call.
  * @param {Record<string, unknown>} args - The arguments of the call.
- * @returns {Promise<{ isError?: boolean, content: { text: string }[] }>} The successful result.
+ * @returns {Promise<{ content: { text: string }[] }>} The successful result.
  * @throws {Error} When the call returns an error result; the message carries its text.
  */
 async function callBackupTool(client, name, args) {
@@ -348,7 +348,7 @@ async function callBackupTool(client, name, args) {
  * Make one backup through the client with the fake GM answer of `backupExportHandler`.
  * @param {FixtureContext} context - The client and the fake GM controls of the running fixture.
  * @param {string} [note] - The `note` argument of the call; none when absent.
- * @returns {Promise<{ isError?: boolean, content: { text: string }[] }>} The `backup_documents` result.
+ * @returns {Promise<{ content: { text: string }[] }>} The `backup_documents` result.
  * @throws {Error} When the call fails, so a fixture never measures a refusal instead of a backup.
  */
 async function makeBackup({ client, setGmHandler }, note) {
@@ -1123,9 +1123,9 @@ function defaultBackupOptions() {
 
 /**
  * Start the sidecar bridge with a fake GM client, an MCP server and a connected SDK client. The server lists the
- * sidecar built-ins (`read_handle` and the four backup tools), the test-local helper tool, `extraTools`, and the scripts the fake GM client registers: the
- * shipped scripts and those in `registry` before the session starts, and later ones through the returned
- * `registerTools`.
+ * sidecar built-ins (`read_handle` and the four backup tools), the test-local helper tool, `extraTools`, and the
+ * scripts the fake GM client registers: the shipped scripts and those in `registry` before the session starts, and
+ * later ones through the returned `registerTools`.
  * @param {object} [options] - What to register.
  * @param {import('../../server/mcp.ts').ToolRegistration[]} [options.tools] - Tools registered after the helper tool.
  * @param {string} [options.instructions] - The server instructions text; the production text when absent.
