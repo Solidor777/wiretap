@@ -50,7 +50,13 @@ describe('script constants', () => {
          'dom',
       ]);
       expect(SCRIPT_API_VERSION).toBe(1);
-      expect(RESERVED_SCRIPT_NAMES).toEqual(['read_handle']);
+      expect(RESERVED_SCRIPT_NAMES).toEqual([
+         'read_handle',
+         'backup_documents',
+         'list_backups',
+         'restore_backup',
+         'delete_backup',
+      ]);
    });
 });
 

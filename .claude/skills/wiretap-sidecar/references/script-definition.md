@@ -3,7 +3,8 @@
 Plain JS with JSDoc, imported by both sides: `server/toolRegistry.ts`, `server/mcp.ts` (`RESERVED_SCRIPT_NAMES`), `src/bridge/foundryBridge.js` (`SCRIPT_API_VERSION`) and `src/bridge/scripts/registry.js`. The module header documents every
 field of a script definition `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate?,
 moduleId? }`. Exports: `SCRIPT_API_VERSION` (1), `SCRIPT_SOURCES` (`shipped`, `plugin`, `agent`), `SCRIPT_REQUIRES` (`none`, `api`,
-`dom`), `RESERVED_SCRIPT_NAMES` (`read_handle`), `definitionBytes(name, description, inputSchema)`,
+`dom`), `RESERVED_SCRIPT_NAMES` (`read_handle`, `backup_documents`, `list_backups`, `restore_backup`, `delete_backup`:
+the sidecar's own tools), `definitionBytes(name, description, inputSchema)`,
 `validateScriptDefinition(input, source)` and `parseRegistryPayload(payload)`.
 
 - `validateScriptDefinition` returns `{ ok: true, definition, warnings }` (a fresh copy of the known fields; a description over the

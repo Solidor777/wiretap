@@ -70,16 +70,19 @@ The constants are `MCP_REQUEST_TIMEOUT_MS`, `MCP_HEADERS_TIMEOUT_MS`, `MCP_TIMEO
 
 ## Per-session server
 
-`buildServer(bridge, store, extraTools, instructions, ownerKey, ownerLive)` builds a `SessionMcpServer`: an `McpServer`
-named `wiretap` whose own `sendToolListChanged` is a no-op (the sidecar debounces), with `notifyToolListChanged()` sending
-one `tools/list_changed` when connected. It registers `read_handle` (the only built-in tool) and the extra tools, each behind the
+`buildServer(bridge, store, backupTools, extraTools, instructions, ownerKey, ownerLive)` builds a `SessionMcpServer`: an
+`McpServer` named `wiretap` whose own `sendToolListChanged` is a no-op (the sidecar debounces), with
+`notifyToolListChanged()` sending one `tools/list_changed` when connected. It registers `read_handle`, then the four
+backup tools (`createSession` passes `backupTools(endpoint)`, built from the one `createBackupTools({ bridge, store, log })`
+of `startMcpServer` over `createBackupStore(options.backups)`; see `wiretap-sidecar`), then the extra tools, each behind the
 result enforcer with the session id as owner and `ownerLive` = "the manager still holds the session". `fixedNames`
 (names a registry tool may not reuse) come from `RESERVED_SCRIPT_NAMES` (`shared/scripts.js`) plus the extra tools. An over-limit result for an
 ended session is answered `SESSION_ENDED: ...` and stores nothing.
 
 `WIRETAP_INSTRUCTIONS` is the `instructions` every session receives: a short orientation naming
-`mcp__wiretap__read_handle` only (every other tool is a registered script that may be absent), how handles are paged and that
-tools can appear or vanish (`tools/list_changed`). It names no skill (none ships yet); `INSTRUCTIONS_MAX_CHARS` is 600. `tests/unit/contextBudget.test.js`
+`mcp__wiretap__read_handle` only, how handles are paged, that the backup tools run in the sidecar and that every other
+tool is a script the GM client registers, which can appear or vanish (`tools/list_changed`). It names no skill;
+`INSTRUCTIONS_MAX_CHARS` is 600. `tests/unit/contextBudget.test.js`
 holds length, listed tool names and the absence of the word "skill".
 
 ## Session manager and debouncer (`server/mcpSessions.ts`)
@@ -117,11 +120,11 @@ holding the session is not lost.
 array included, is refused as a whole. Entries are judged one by one by the shared `validateScriptDefinition(entry, 'shipped')`
 (the registering route implies the source; plugin and agent definitions are refused as not supported) plus the sidecar-only
 checks: a refused entry is logged with its reason (`cleanForLog`, 200 bytes) and dropped, a description over the 160-character
-target is accepted with a logged warning. At most `ALWAYS_LISTED_TOOLS_MAX` (30) less the 1 built-in name are accepted and at most twice
-that many examined (the rest refused with one summary line). The listed definitions of the accepted tools together stay
-within `ALL_DEFINITIONS_MAX_BYTES` less one `DEFINITION_MAX_BYTES` kept for `read_handle`: a tool that would overflow it is
+target is accepted with a logged warning. At most `ALWAYS_LISTED_TOOLS_MAX` (30) less the 5 built-in names (25) are accepted and at most
+twice `ALWAYS_LISTED_TOOLS_MAX` examined (the rest refused with one summary line). The listed definitions of the accepted
+tools together stay within `ALL_DEFINITIONS_MAX_BYTES` less one `DEFINITION_MAX_BYTES` per built-in name: a tool that would overflow it is
 refused with a logged reason. Per entry (`shared/scripts.js` documents each field): `name` 1 to
-`CORE_TOOL_NAME_MAX_CHARS` (32) of `[a-z][a-z0-9_-]*`, not in `RESERVED_SCRIPT_NAMES` (`read_handle`), not an `Object.prototype`
+`CORE_TOOL_NAME_MAX_CHARS` (32) of `[a-z][a-z0-9_-]*`, not in `RESERVED_SCRIPT_NAMES` (`read_handle` and the four backup tool names), not an `Object.prototype`
 member, unique; `version` a semver-like string of at most `SCRIPT_VERSION_MAX_CHARS` (32); `description` 1 to
 `DESCRIPTION_MAX_CHARS` (240) characters on one line; `inputSchema` an object within `DEFINITION_MAX_BYTES` both as received and
 as the SDK lists it, every array schema declaring a `maxItems` of at most `SCHEMA_ARRAY_ITEMS_MAX` (1000); `result.budgetBytes` an integer 1 to 16000; `requires` `'api'` or `'dom'` (`'none'` is refused: it runs on

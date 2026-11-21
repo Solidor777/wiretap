@@ -6,6 +6,7 @@ import { startMcpServer } from './mcp.ts';
 import { truncateUtf8 } from './utf8.ts';
 import { createLogThrottle } from './logThrottle.ts';
 import { ALLOWED_ORIGINS, isOriginAllowed } from './origins.ts';
+import type { BackupStoreOptions } from './backups.ts';
 import type { ServerMode } from './serverMode.ts';
 
 // Length in milliseconds of the window that bounds refused-origin log lines.
@@ -24,6 +25,8 @@ const MAX_LOGGED_ORIGIN_BYTES: number = 64;
  *        used by tests).
  * @param {number} mcpPort - The TCP port the MCP HTTP server listens on.
  * @param {ServerMode} [mode] - `'full'` (terminal + MCP, default) or `'mcp-only'` (MCP and the Foundry bridge only).
+ * @param {{ backups?: BackupStoreOptions }} [options] - The backup store options passed to the MCP server; production
+ *        passes none, so backups use the module root and the `trash` package.
  * @returns {{ io: Server; bridge: ReturnType<typeof createFoundryBridge>; ready: Promise<void>; dispose: () => void }}
  *          The started server; the Foundry bridge (its `invoke` accepts the per-call `endpoint` option); a promise
  *          that resolves once both ports are bound (or rejects when either bind fails); and a dispose function that
@@ -33,6 +36,7 @@ export function createWiretapServer(
    port: number,
    mcpPort: number,
    mode: ServerMode = 'full',
+   options: { backups?: BackupStoreOptions } = {},
 ): {
    io: Server;
    bridge: ReturnType<typeof createFoundryBridge>;
@@ -87,7 +91,7 @@ export function createWiretapServer(
    // The Foundry bridge that routes MCP operations to an identified GM client.
    const bridge: ReturnType<typeof createFoundryBridge> = createFoundryBridge();
    // The MCP HTTP server.
-   const mcp: ReturnType<typeof startMcpServer> = startMcpServer(bridge, mcpPort);
+   const mcp: ReturnType<typeof startMcpServer> = startMcpServer(bridge, mcpPort, { backups: options.backups });
    // Resolves once both the Socket.IO and MCP ports are bound; rejects with the first bind failure.
    const ready: Promise<void> = Promise.all([socketReady, mcp.ready]).then(() => undefined);
 

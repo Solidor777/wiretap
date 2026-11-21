@@ -41,7 +41,8 @@ wire side (sidecar, router, `bridge:registry` sanitizing) is in `wiretap-mcp-bri
 bridge wiring that pushes the registry and acks ops is in `wiretap-client`.
 
 A **script** is a named, versioned routine the Foundry client registers (definition: `shared/scripts.js`; handler:
-client-only, never on the wire). Every MCP tool except the sidecar's `read_handle` is a script. Scripts call ops
+client-only, never on the wire). Every MCP tool except the sidecar's built-ins (`read_handle` and the four backup tools,
+the names in `RESERVED_SCRIPT_NAMES`) is a script. Scripts call ops
 (`ctx.core`), never the reverse.
 
 ## Files
@@ -74,9 +75,9 @@ client-only, never on the wire). Every MCP tool except the sidecar's `read_handl
 logged as `Wiretap | script registry refused "<name>": <reason>` (name and reason cleaned and bounded). Checks, in order:
 the shared `validateScriptDefinition(def, 'shipped')` (name, version, description, definition ≤ 800 B, budget ≤ 16,000,
 `requires`, `mutates`, gate); `requires: 'none'` refused; handler is a function; name not registered; count ≤
-`ALWAYS_LISTED_TOOLS_MAX` − `RESERVED_SCRIPT_NAMES.length` (29); `inputSchema` compiles with `compileSchema`; the listed
+`ALWAYS_LISTED_TOOLS_MAX` − `RESERVED_SCRIPT_NAMES.length` (25); `inputSchema` compiles with `compileSchema`; the listed
 definition (`definitionBytes(name, description, compiled.listed)`, the form the sidecar lists) ≤ `DEFINITION_MAX_BYTES`;
-the sum of listed bytes plus one `DEFINITION_MAX_BYTES` kept for the sidecar built-ins ≤ `ALL_DEFINITIONS_MAX_BYTES`
+the sum of listed bytes plus one `DEFINITION_MAX_BYTES` per sidecar built-in (five) ≤ `ALL_DEFINITIONS_MAX_BYTES`
 (the sidecar enforces the same total in `sanitizeRegistry`). The stored
 definition is a deep copy; `definitions()` returns fresh copies. `subscribe(listener)` fires after each accepted script
 (a throwing listener is logged and skipped). The bridge subscribes and pushes `bridge:registry`.
@@ -135,7 +136,9 @@ Covers the four read scripts (list_document_types, get_document, search_document
 ## User-facing skill
 
 `skills/wiretap/SKILL.md` (module root, installed by copying; README). It may name only existing tools as
-`mcp__wiretap__<tool>` and must stay ≤ 70 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test).
+`mcp__wiretap__<tool>` (it names every shipped script and every sidecar built-in; its Backups recipe tells the agent
+to offer `backup_documents` before a bulk update, a replace, a delete or a document-changing macro, and to restore only
+when the user asks) and must stay ≤ 70 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test).
 
 ## Tests
 

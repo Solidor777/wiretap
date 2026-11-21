@@ -9,6 +9,8 @@ import { z, type ZodRawShape } from 'zod';
 import { getBudget } from '../shared/budgets.js';
 import { ENDPOINT_KINDS } from '../shared/protocol.js';
 import { RESERVED_SCRIPT_NAMES } from '../shared/scripts.js';
+import { createBackupTools, type BackupBridge } from './backupTools.ts';
+import { createBackupStore, type BackupStoreOptions } from './backups.ts';
 import { type EndpointKind, type InvokeOptions, type Router } from './endpoints.ts';
 import { createHandleStore, type HandleStore, type SliceResult } from './handles.ts';
 import {
@@ -28,8 +30,8 @@ import { failureResult, withResultBudget, type ResultBudgetOptions, type ToolHan
 import { resolveHandleArgs, type HandleInputOutcome } from './handleInput.ts';
 import { argumentSchema, type RegistryTool } from './toolRegistry.ts';
 
-/** The slice of the Foundry bridge the MCP layer needs. */
-interface FoundryBridge {
+/** The slice of the Foundry bridge the MCP layer needs, the backup tools' slice included. */
+interface FoundryBridge extends BackupBridge {
    // Runs a registry tool on the picked endpoint, resolving it by name there (see `Router.invokeTool`).
    invokeTool: Router['invokeTool'];
    // The tools the endpoint a call with the same `endpoint` option would reach has registered.
@@ -40,13 +42,12 @@ interface FoundryBridge {
 
 // The server `instructions` every session receives at initialize: a short orientation, not documentation. Constraint:
 // at most `INSTRUCTIONS_MAX_CHARS` characters, and every `mcp__wiretap__<tool>` it names must be a tool the server
-// lists (the context-budget test checks both), so it names only the built-in `read_handle`. It names no skill: none
-// ships yet.
+// lists (the context-budget test checks both), so it names only `read_handle`. It names no skill.
 export const WIRETAP_INSTRUCTIONS: string =
    'Wiretap connects this session to the live Foundry VTT world through a GM browser. ' +
    'A result over the size cap comes back as a handle: page it with mcp__wiretap__read_handle (offset and length, ' +
-   'or paths into the stored JSON). Every other tool is a script the GM client registers; tools can appear or ' +
-   'vanish while the session runs (the server sends tools/list_changed).';
+   'or paths into the stored JSON). The backup tools run in this sidecar; every other tool is a script the GM ' +
+   'client registers, and those can appear or vanish while the session runs (the server sends tools/list_changed).';
 
 /** A tool the server registers behind the result enforcer. */
 export interface ToolRegistration {
@@ -113,6 +114,8 @@ export interface McpServerOptions {
    sessions?: McpSessionSettings;
    /** Limits of the HTTP server (defaults: the `MCP_*` constants and the `MCP_BODY_MAX_BYTES` budget). */
    limits?: McpHttpLimits;
+   /** The backup store behind the backup tools (defaults: the module root and the `trash` package). */
+   backups?: BackupStoreOptions;
 }
 
 /** The arguments of `read_handle`. */
@@ -344,10 +347,11 @@ function makeRegistryToolHandler(
 
 /**
  * Construct an MCP server for one session with the built-in tools and the given extra tools registered, each behind
- * the result enforcer. The enforcer and `read_handle` use the session id as the handle owner, so a session reads
- * only the handles its own calls stored.
+ * the result enforcer: `read_handle`, then the session's backup tools, then the extra tools. The enforcer and
+ * `read_handle` use the session id as the handle owner, so a session reads only the handles its own calls stored.
  * @param {FoundryBridge} bridge - The Foundry bridge passed to the tool handler.
  * @param {HandleStore} store - The store receiving results over the limit.
+ * @param {ToolRegistration[]} backupTools - The backup tools built for the session's endpoint kind.
  * @param {ToolRegistration[]} extraTools - Tools registered after the built-in ones.
  * @param {string} instructions - The server instructions text.
  * @param {string} ownerKey - The session id, the owner of the session's handles.
@@ -357,6 +361,7 @@ function makeRegistryToolHandler(
 function buildServer(
    bridge: FoundryBridge,
    store: HandleStore,
+   backupTools: ToolRegistration[],
    extraTools: ToolRegistration[],
    instructions: string,
    ownerKey: string,
@@ -370,7 +375,7 @@ function buildServer(
       },
       { instructions },
    );
-   // The tools to register: the built-in ones, then the caller's.
+   // The tools to register: `read_handle`, the backup tools, then the caller's.
    const tools: ToolRegistration[] = [
       {
          name: 'read_handle',
@@ -394,6 +399,7 @@ function buildServer(
          },
          handler: makeReadHandleHandler(store, ownerKey),
       },
+      ...backupTools,
       ...extraTools,
    ];
    for (const tool of tools) {
@@ -630,7 +636,8 @@ function sessionIdOf(req: http.IncomingMessage): string | undefined {
  * `notifications/tools/list_changed`. Sessions expire after an idle period and are capped in number.
  * @param {FoundryBridge} bridge - The Foundry bridge the tools execute against.
  * @param {number} port - The TCP port to listen on.
- * @param {McpServerOptions} [options] - Extra tools, the server instructions, a handle store and session settings.
+ * @param {McpServerOptions} [options] - Extra tools, the server instructions, a handle store, session settings, HTTP
+ *        limits and the backup store options.
  * @returns {{ close: () => void; ready: Promise<void>; port: () => number; sessions: () => number }} A handle with a
  *          `close` method that ends every session and stops the HTTP server, a promise that resolves once the port is
  *          bound or rejects (for example EADDRINUSE) when binding fails, `port()`, the port actually bound (the
@@ -651,6 +658,12 @@ export function startMcpServer(
    const instructions: string = options.instructions ?? WIRETAP_INSTRUCTIONS;
    // The sidecar log sink.
    const log: (line: string) => void = settings.log ?? ((line) => console.log(line));
+   // Builds a session's backup tools for its endpoint kind; one store and one busy lock serve every session.
+   const backupTools: (endpoint: EndpointKind | undefined) => ToolRegistration[] = createBackupTools({
+      bridge,
+      store: createBackupStore(options.backups),
+      log,
+   });
    // The names of the tools every session has, which a registered tool may not reuse.
    const fixedNames: Set<string> = new Set([
       ...RESERVED_SCRIPT_NAMES,
@@ -792,6 +805,7 @@ export function startMcpServer(
       const server: SessionMcpServer = buildServer(
          bridge,
          store,
+         backupTools(endpoint),
          extraTools,
          instructions,
          id,

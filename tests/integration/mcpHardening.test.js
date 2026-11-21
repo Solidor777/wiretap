@@ -337,7 +337,13 @@ describe('MCP HTTP hardening and session robustness', () => {
          });
          await gm.register([entry('boom')]);
          await expect.poll(() => harness.mcp().sessions(), { timeout: 1000 }).toBe(1);
-         expect(await harness.toolNames(agent.client)).toEqual(['read_handle']);
+         expect(await harness.toolNames(agent.client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
+            'read_handle',
+            'restore_backup',
+         ]);
          await expect(human.client.listTools()).rejects.toThrow();
          const line = harness.logs().find((text) => text.includes('tool sync failed, ending it'));
          expect(line).toBeDefined();
@@ -391,8 +397,12 @@ describe('MCP HTTP hardening and session robustness', () => {
          await harness.start({ bridge: lateBridge(tool) });
          const { client } = await harness.connectClient();
          expect(await harness.toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
             'late_tool',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
       });
 

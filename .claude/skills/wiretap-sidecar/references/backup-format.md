@@ -60,8 +60,15 @@ proxy gives the defaults). Tests: `tests/unit/bridgeSettings.test.js`.
 for a session (every invoke and snapshot passes `{ endpoint }` when the session restricts its kind, else `{}`). One busy
 flag is shared by every session: a backup or restore (dry runs included) or a delete while one runs is `BACKUP_BUSY`;
 `list_backups` is never refused. The flag clears when the invoke settles. `BackupBridge` is the slice of the Foundry
-bridge used (`invoke`, `snapshot`, `expectPieces`, `sendPiece`). Not yet registered in `server/mcp.ts` or measured by
-`tests/unit/contextBudget.test.js`.
+bridge used (`invoke`, `snapshot`, `expectPieces`, `sendPiece`); the `FoundryBridge` interface of `server/mcp.ts`
+extends it. `startMcpServer` builds one store (`createBackupStore(options.backups)`) and one `createBackupTools({ bridge,
+store, log })`, so the busy flag is one per MCP server; every session registers `read_handle`, then the four tools for
+its endpoint kind, then the caller's `tools`. Their names are in `RESERVED_SCRIPT_NAMES`, so no script can take them.
+`createWiretapServer(port, mcpPort, mode, { backups? })` passes `backups` through; production passes none (module root,
+real `trash`). Measured listed sizes (`npx tsx tests/measure/measureContext.mjs`): `backup_documents` 800 B,
+`list_backups` 378 B, `restore_backup` 730 B, `delete_backup` 369 B. `tests/unit/contextBudget.test.js` holds each
+result to its budget through the `FIXTURES` of `contextBudgetHarness.js` (fake GM pieces and acks; measured 132, 1971,
+3921 and 69 B).
 
 - Definitions: each listed definition (`z.toJSONSchema(z.object(inputSchema), { target: 'draft-7', io: 'input' })`, the
   SDK's conversion) is at most `DEFINITION_MAX_BYTES` (800 B), measured by `tests/unit/backupTools.test.js`;
