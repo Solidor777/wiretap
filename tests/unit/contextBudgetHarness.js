@@ -16,8 +16,17 @@ import { z } from 'zod';
 import { createWiretapServer } from '../../server/server.ts';
 import { startMcpServer } from '../../server/mcp.ts';
 import { getBudget } from '../../shared/budgets.js';
-import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, BRIDGE_REGISTRY, PROTOCOL_VERSION } from '../../shared/protocol.js';
+import { HEADER_LINE_BYTES } from '../../shared/backup.js';
+import {
+   BRIDGE_BACKUP_PIECE,
+   BRIDGE_IDENTIFY,
+   BRIDGE_INVOKE,
+   BRIDGE_REGISTRY,
+   BRIDGE_RESTORE_PIECE,
+   PROTOCOL_VERSION,
+} from '../../shared/protocol.js';
 import { registryPayload, script, shippedScripts } from './scriptFixtures.js';
+import { fakeTrash, scratchRoot } from './backupTestHelpers.js';
 import { reservePort } from '../portPool.js';
 
 /**
@@ -28,9 +37,18 @@ import { reservePort } from '../portPool.js';
  */
 
 /**
+ * A fake GM client's answer to one invocation: it may emit events on the GM socket before it resolves the ack.
+ * @typedef {(request: { op: string, params: object, requestId: string }, gm: import('socket.io-client').Socket) =>
+ * Promise<GmAck>} GmHandler
+ */
+
+/**
  * @typedef {object} FixtureContext
  * @property {Client} client - The SDK client connected to the server under test.
- * @property {(ack: GmAck) => void} setGmAck - Sets the ack the fake GM client answers the next invocations with.
+ * @property {(ack: GmAck) => void} setGmAck - Sets the ack the fake GM client answers the next invocations with and
+ * drops any handler.
+ * @property {(handler: GmHandler) => void} setGmHandler - Makes the fake GM client answer the next invocations with
+ * the handler's ack.
  */
 
 /**
@@ -258,10 +276,174 @@ function mockCreateArguments() {
 }
 
 /**
+ * Build a world description whose four fields each have the most bytes a backup header accepts, 128 ASCII characters.
+ * @returns {{ worldId: string, foundryVersion: string, systemId: string, systemVersion: string }} The description.
+ */
+function mockWorld() {
+   return {
+      worldId: 'W'.repeat(128),
+      foundryVersion: 'F'.repeat(128),
+      systemId: 'S'.repeat(128),
+      systemVersion: 'V'.repeat(128),
+   };
+}
+
+/**
+ * Build a fake GM answer to a backup export: it streams one document line and the end marker on the GM socket, then
+ * acks the largest counts the result can carry: 9,999 unreadable documents, 199 parents, 128-character world fields.
+ * @returns {GmHandler} Answers an export invocation with that stream and ack.
+ */
+function backupExportHandler() {
+   return async (request, gm) => {
+      /** @type {Buffer} The one document line of the backup. */
+      const line = Buffer.from(`${JSON.stringify({
+         uuid: 'Actor.MOCKACTOR0000001',
+         documentName: 'Actor',
+         data: { name: 'MOCK_ACTOR' },
+      })}\n`);
+      await gm.emitWithAck(BRIDGE_BACKUP_PIECE, {
+         requestId: request.requestId,
+         seq: 0,
+         data: line,
+      });
+      await gm.emitWithAck(BRIDGE_BACKUP_PIECE, {
+         requestId: request.requestId,
+         seq: 1,
+         end: true,
+         pieces: 1,
+         bytes: line.length,
+      });
+      return okAck({
+         documents: 1,
+         bytes: HEADER_LINE_BYTES + line.length,
+         unreadable: 9999,
+         parents: 199,
+         world: mockWorld(),
+      });
+   };
+}
+
+/**
+ * Make one backup through the client with the fake GM answer of `backupExportHandler`.
+ * @param {FixtureContext} context - The client and the fake GM controls of the running fixture.
+ * @param {string} [note] - The `note` argument of the call; none when absent.
+ * @returns {Promise<{ isError?: boolean, content: { text: string }[] }>} The `backup_documents` result.
+ * @throws {Error} When the call fails, so a fixture never measures a refusal instead of a backup.
+ */
+async function makeBackup({ client, setGmHandler }, note) {
+   setGmHandler(backupExportHandler());
+   /** @type {{ isError?: boolean, content: { text: string }[] }} The result of the call. */
+   const result = await client.callTool({
+      name: 'backup_documents',
+      arguments: {
+         uuids: ['Actor.x'],
+         ...(note === undefined ? {} : { note }),
+      },
+   });
+   if (result.isError) {
+      throw new Error(`backup_documents failed: ${result.content[0].text}`);
+   }
+   return result;
+}
+
+/**
+ * Build a fake GM answer to a restore: it acks every restore piece it receives and, once the end marker arrives,
+ * answers 20 rows with 256-byte uuids and 160-byte reasons and three differences, the largest result the sidecar
+ * accepts before cutting rows.
+ * @returns {GmHandler} Answers a restore invocation once its pieces have arrived.
+ */
+function restoreHandler() {
+   return (request, gm) => new Promise((resolve) => {
+      /**
+       * Ack one restore piece of this request and answer the restore after its end marker.
+       * @param {{ requestId: string, end?: true }} piece - A data piece or the end marker the sidecar sent.
+       * @param {(ack: { ok: true }) => void} reply - Sends the piece's ack back to the sidecar.
+       * @returns {void}
+       */
+      const onPiece = (piece, reply) => {
+         reply({ ok: true });
+         if (piece.requestId !== request.requestId || piece.end !== true) {
+            return;
+         }
+         gm.off(BRIDGE_RESTORE_PIECE, onPiece);
+         resolve(okAck({
+            replaced: 20,
+            created: 0,
+            skipped: 0,
+            failed: 0,
+            secretLost: 0,
+            rows: Array.from({ length: 20 }, (_, index) => [
+               `Actor.${String(index).padStart(2, '0')}${'U'.repeat(248)}`,
+               'replaced',
+               'R'.repeat(160),
+            ]),
+            differences: [
+               `foundryVersion: ${'F'.repeat(110)} -> ${'G'.repeat(110)}`,
+               `systemId: ${'S'.repeat(110)} -> ${'T'.repeat(110)}`,
+               `systemVersion: ${'V'.repeat(110)} -> ${'X'.repeat(110)}`,
+            ],
+         }));
+      };
+      gm.on(BRIDGE_RESTORE_PIECE, onPiece);
+   });
+}
+
+/**
  * The representative-result fixtures, keyed by tool name. Every listed tool needs an entry; the data is synthetic.
  * @type {Record<string, FixtureCase[]>}
  */
 export const FIXTURES = {
+   backup_documents: [
+      {
+         label: 'largest ack: longest counts',
+         budget: 'BACKUP_RESULT_MAX_BYTES',
+         run: (context) => makeBackup(context),
+      },
+   ],
+   list_backups: [
+      {
+         label: 'fifty rows cut to the budget',
+         budget: 'BACKUP_LIST_MAX_BYTES',
+         run: async (context) => {
+            for (let index = 0; index < 50; index += 1) {
+               await makeBackup(context, `MOCK_NOTE_${String(index).padStart(2, '0')}_${'n'.repeat(187)}`);
+            }
+            return context.client.callTool({
+               name: 'list_backups',
+               arguments: { limit: 50 },
+            });
+         },
+      },
+   ],
+   restore_backup: [
+      {
+         label: 'twenty long rows',
+         budget: 'RESTORE_RESULT_MAX_BYTES',
+         run: async (context) => {
+            /** @type {string} The backup file to restore. */
+            const { file } = JSON.parse((await makeBackup(context)).content[0].text);
+            context.setGmHandler(restoreHandler());
+            return context.client.callTool({
+               name: 'restore_backup',
+               arguments: { file },
+            });
+         },
+      },
+   ],
+   delete_backup: [
+      {
+         label: 'trashed ack',
+         budget: 'BACKUP_DELETE_MAX_BYTES',
+         run: async (context) => {
+            /** @type {string} The backup file to recycle. */
+            const { file } = JSON.parse((await makeBackup(context)).content[0].text);
+            return context.client.callTool({
+               name: 'delete_backup',
+               arguments: { file },
+            });
+         },
+      },
+   ],
    create_documents: [
       {
          label: 'ack of 50 created documents',
@@ -923,8 +1105,21 @@ export function registryEntry(name, overrides = {}) {
 }
 
 /**
+ * Build the default backup store options of a harness: a new scratch root, whose `bin` directory is the recycle bin.
+ * @returns {import('../../server/backups.ts').BackupStoreOptions} The root and the recycle bin stand-in.
+ */
+function defaultBackupOptions() {
+   /** @type {string} The scratch root that holds `.wiretap/backups` and the bin. */
+   const root = scratchRoot('harness');
+   return {
+      root,
+      trash: fakeTrash(path.join(root, 'bin')),
+   };
+}
+
+/**
  * Start the sidecar bridge with a fake GM client, an MCP server and a connected SDK client. The server lists the
- * built-in `read_handle`, the test-local helper tool, `extraTools`, and the scripts the fake GM client registers: the
+ * sidecar built-ins (`read_handle` and the four backup tools), the test-local helper tool, `extraTools`, and the scripts the fake GM client registers: the
  * shipped scripts and those in `registry` before the session starts, and later ones through the returned
  * `registerTools`.
  * @param {object} [options] - What to register.
@@ -932,13 +1127,17 @@ export function registryEntry(name, overrides = {}) {
  * @param {string} [options.instructions] - The server instructions text; the production text when absent.
  * @param {object[]} [options.registry] - Script definitions the fake GM client sends beside the shipped scripts,
  * before the SDK client connects.
- * @returns {Promise<{ client: Client, setGmAck: Function, registerTools: Function, nextToolListChange: Function,
- * close: Function }>} The client, the control for the fake GM client's answers, `registerTools(entries)` (sends a
- * registry of the shipped scripts plus the entries and resolves with its ack, which counts the shipped scripts too),
- * `nextToolListChange()` (resolves when the client receives its next
+ * @param {import('../../server/backups.ts').BackupStoreOptions} [options.backups] - The backup store of the sidecar
+ * and of the MCP server under test; default a new scratch root whose recycle bin is `fakeTrash(<root>/bin)`.
+ * @returns {Promise<{ client: Client, gm: import('socket.io-client').Socket, setGmAck: Function,
+ * setGmHandler: Function, registerTools: Function, nextToolListChange: Function, close: Function }>} The client, the
+ * fake GM socket, the controls for the fake GM client's answers (`setGmAck(ack)` answers with a fixed ack and drops
+ * any handler; `setGmHandler(handler)` answers with the ack the handler resolves, after whatever it emits on the GM
+ * socket), `registerTools(entries)` (sends a registry of the shipped scripts plus the entries and resolves with its
+ * ack, which counts the shipped scripts too), `nextToolListChange()` (resolves when the client receives its next
  * `notifications/tools/list_changed`, rejects after one second) and the teardown.
  */
-export async function startHarness({ tools = [], instructions, registry } = {}) {
+export async function startHarness({ tools = [], instructions, registry, backups } = {}) {
    /** @type {Array<() => unknown>} Teardown steps for what has been started, in start order. */
    const teardown = [];
    /**
@@ -956,17 +1155,32 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
       teardown.length = 0;
    };
    try {
+      /** @type {import('../../server/backups.ts').BackupStoreOptions} The backup store options of both servers. */
+      const backupOptions = backups ?? defaultBackupOptions();
       /** @type {ReturnType<typeof createWiretapServer>} The sidecar providing the Socket.IO bridge. */
-      const server = createWiretapServer(0, await reservePort(), 'mcp-only');
+      const server = createWiretapServer(0, await reservePort(), 'mcp-only', { backups: backupOptions });
       teardown.push(() => server.dispose());
       await server.ready;
-      /** @type {GmAck} The ack the fake GM client answers invocations with. */
+      /** @type {GmAck} The ack the fake GM client answers invocations with when no handler is set. */
       let gmAck = okAck({});
+      /** @type {GmHandler | undefined} The handler that answers invocations instead of `gmAck`. */
+      let gmHandler;
       /** @type {import('socket.io-client').Socket} The fake GM client. */
       const gm = ioClient(`http://127.0.0.1:${server.io.httpServer.address().port}`);
       teardown.push(() => gm.close());
       gm.on(BRIDGE_INVOKE, (request, ack) => {
-         ack(gmAck);
+         if (gmHandler === undefined) {
+            ack(gmAck);
+            return;
+         }
+         // A failing handler answers with its message, so the fixture fails at once instead of waiting out the call.
+         gmHandler(request, gm).then(ack, (error) => ack({
+            ok: false,
+            error: {
+               code: 'OP_FAILED',
+               message: String(error),
+            },
+         }));
       });
       await new Promise((resolve) => gm.on('connect', resolve));
       await gm.emitWithAck(BRIDGE_IDENTIFY, {
@@ -994,6 +1208,7 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
             listChangedQuietMs: 10,
             listChangedMaxWaitMs: 50,
          },
+         backups: backupOptions,
       });
       teardown.push(() => mcp.close());
       await mcp.ready;
@@ -1013,8 +1228,13 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
       await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${mcp.port()}/mcp`)));
       return {
          client,
+         gm,
          setGmAck: (ack) => {
             gmAck = ack;
+            gmHandler = undefined;
+         },
+         setGmHandler: (handler) => {
+            gmHandler = handler;
          },
          registerTools: (entries) => gm.emitWithAck(
             BRIDGE_REGISTRY,
@@ -1099,6 +1319,8 @@ function makeBreachRecorder(failures, warnings) {
  * @param {object} options - What to check.
  * @param {Client} options.client - The SDK client connected to the server under test.
  * @param {(ack: GmAck) => void} options.setGmAck - Sets the fake GM client's answer.
+ * @param {(handler: GmHandler) => void} options.setGmHandler - Sets the handler that answers the fake GM client's
+ * invocations.
  * @param {Record<string, FixtureCase[]>} options.fixtures - The fixtures keyed by tool name.
  * @param {string} [options.skillsRoot] - The shipped skills directory; a missing directory holds no skills.
  * @param {string[]} [options.helperTools] - Test-local tools that are measured per tool but do not count toward the
@@ -1109,6 +1331,7 @@ function makeBreachRecorder(failures, warnings) {
 export async function collectReport({
    client,
    setGmAck,
+   setGmHandler,
    fixtures,
    skillsRoot = DEFAULT_SKILLS_ROOT,
    helperTools = [HELPER_TOOL_NAME],
@@ -1162,6 +1385,7 @@ export async function collectReport({
    const context = {
       client,
       setGmAck,
+      setGmHandler,
    };
    for (const tool of tools) {
       /** @type {FixtureCase[] | undefined} This tool's fixture. */

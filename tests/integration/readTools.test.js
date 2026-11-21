@@ -57,18 +57,22 @@ describe('the core read tools over the bridge', () => {
       /** @type {{ client: import('@modelcontextprotocol/sdk/client/index.js').Client }} The connected MCP client. */
       const { client } = await harness.connectClient();
       await expect.poll(() => harness.toolNames(client), { timeout: 1000 }).toEqual([
+         'backup_documents',
          'batch',
          'close_sheet',
          'create_documents',
+         'delete_backup',
          'delete_documents',
          'describe_schema',
          'draw_table',
          'execute_macro',
          'get_document',
+         'list_backups',
          'list_document_types',
          'open_sheet',
          'read_handle',
          'replace_document',
+         'restore_backup',
          'roll',
          'search_documents',
          'update_documents',

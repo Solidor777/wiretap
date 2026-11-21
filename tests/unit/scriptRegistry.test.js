@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { getBudget } from '$shared/budgets.js';
 import { compileSchema } from '$shared/schemaValidate.js';
-import { definitionBytes } from '$shared/scripts.js';
+import { RESERVED_SCRIPT_NAMES, definitionBytes } from '$shared/scripts.js';
 import { createScriptRegistry, registerScript, scriptRegistry, ScriptError } from '~/bridge/scripts/registry.js';
 import { paddedSchema, script } from './scriptFixtures.js';
 
@@ -193,13 +193,13 @@ describe('script registry: refusals', () => {
 
    it('refuses the script past the always-listed tool budget, leaving room for the sidecar built-ins', () => {
       const { registry } = make();
-      const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - 1;
+      const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
       for (let index = 0; index < room; index += 1) {
          expect(registry.register(script(`tool_${index}`), noop).ok).toBe(true);
       }
       const outcome = registry.register(script('one_too_many'), noop);
       expect(outcome.ok).toBe(false);
-      expect(outcome.reason).toMatch(/at most 29 scripts/);
+      expect(outcome.reason).toContain(`at most ${30 - RESERVED_SCRIPT_NAMES.length} scripts`);
       expect(registry.definitions()).toHaveLength(room);
    });
 
@@ -212,9 +212,10 @@ describe('script registry: refusals', () => {
       expect(each).toBeGreaterThan(740);
       /** @type {number} How many fit beside the room kept for the sidecar built-ins. */
       const fits = Math.floor(
-         (getBudget('ALL_DEFINITIONS_MAX_BYTES').value - getBudget('DEFINITION_MAX_BYTES').value) / each,
+         (getBudget('ALL_DEFINITIONS_MAX_BYTES').value
+            - getBudget('DEFINITION_MAX_BYTES').value * RESERVED_SCRIPT_NAMES.length) / each,
       );
-      expect(fits).toBeLessThan(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - 1);
+      expect(fits).toBeLessThan(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length);
       for (let index = 0; index < fits; index += 1) {
          const outcome = registry.register(
             script(`padded_script_${String(index).padStart(2, '0')}`, { description: 'd'.repeat(20), inputSchema }),

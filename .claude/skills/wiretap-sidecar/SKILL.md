@@ -19,7 +19,8 @@ Current-state reference; verify against code before relying on a detail. Core co
   print only after both ports are bound. Disposes on SIGINT/SIGTERM.
 - `server/serverMode.ts` — `ServerMode = 'full' | 'mcp-only'`; `resolveMode(argv, env)`: `--mcp-only` wins over
   `WIRETAP_MODE=mcp-only|full`; unset means `full`; any other value throws.
-- `server/server.ts` — `createWiretapServer(port, mcpPort, mode = 'full')` returns `{ io, bridge, ready, dispose }` (`bridge` is the Foundry bridge; its `invoke` takes the per-call `endpoint` option). Creates an
+- `server/server.ts` — `createWiretapServer(port, mcpPort, mode = 'full', options = {})` (`options.backups`: the
+  backup store options passed to `startMcpServer`; production passes none) returns `{ io, bridge, ready, dispose }` (`bridge` is the Foundry bridge; its `invoke` takes the per-call `endpoint` option). Creates an
   `http.Server`, listens on `127.0.0.1` only (not configurable; port 0 selects an ephemeral port), and attaches a
   Socket.IO `Server` to it (CORS origin list and `allowRequest` both read `ALLOWED_ORIGINS`; a handshake whose `Origin`
   header is present and not listed is refused, one with no `Origin` is accepted, and a refusal is logged as

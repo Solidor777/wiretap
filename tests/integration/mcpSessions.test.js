@@ -434,7 +434,11 @@ describe('stateful MCP sessions', () => {
          }) });
          const { client, notifications } = await connectClient();
          expect(await toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
          expect(await gm.register([entry('late_tool')])).toEqual({
             ok: true,
@@ -443,8 +447,12 @@ describe('stateful MCP sessions', () => {
          });
          await expect.poll(notifications, { timeout: 1000 }).toBe(1);
          expect(await toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
             'late_tool',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
          const result = await client.callTool({
             name: 'late_tool',
@@ -469,8 +477,12 @@ describe('stateful MCP sessions', () => {
          await gm.register([entry('early_tool')]);
          const { client, notifications } = await connectClient();
          expect(await toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
             'early_tool',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
          await new Promise((resolve) => setTimeout(resolve, 100));
          expect(notifications()).toBe(0);
@@ -499,7 +511,11 @@ describe('stateful MCP sessions', () => {
          await gm.register([entry('second_tool')]);
          await expect.poll(notifications, { timeout: 1000 }).toBe(1);
          expect(await toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
             'second_tool',
          ]);
          await expect(client.callTool({ name: 'first_tool', arguments: { text: 'x' } })).resolves.toMatchObject({
@@ -545,7 +561,11 @@ describe('stateful MCP sessions', () => {
          gm.socket.close();
          await expect.poll(notifications, { timeout: 1000 }).toBe(1);
          expect(await toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
       });
 
@@ -570,8 +590,12 @@ describe('stateful MCP sessions', () => {
          expect(notifications()).toBe(1);
          vi.useRealTimers();
          expect(await toolNames(client)).toEqual([
+            'backup_documents',
             `burst_${burst - 1}`,
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
       });
 
@@ -681,7 +705,11 @@ describe('stateful MCP sessions', () => {
          expect(ack.ok).toBe(false);
          const { client } = await connectClient();
          expect(await toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
       });
 
@@ -712,12 +740,20 @@ describe('stateful MCP sessions', () => {
          const humanSession = await connectClient('?endpoint=human');
          const defaultSession = await connectClient();
          expect(await toolNames(humanSession.client)).toEqual([
+            'backup_documents',
+            'delete_backup',
             'human_only',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
          expect(await toolNames(defaultSession.client)).toEqual([
             'agent_only',
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
          const fromHuman = await humanSession.client.callTool({
             name: 'human_only',
@@ -950,10 +986,18 @@ describe('stateful MCP sessions', () => {
          expect(refused.headers['mcp-session-id']).toBeUndefined();
          expect(mcp.sessions()).toBe(2);
          expect(await toolNames(first.client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
          expect(await toolNames(second.client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
          expect(logs.some((line) => line.includes('cap of 2 reached: initialize refused'))).toBe(true);
       });

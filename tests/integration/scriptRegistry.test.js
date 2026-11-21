@@ -23,11 +23,17 @@ describe('scripts registered over the bridge', () => {
    });
 
    describe('create_documents through the registry', () => {
-      it('lists only read_handle until a client registers scripts', async () => {
+      it('lists only the sidecar built-ins until a client registers scripts', async () => {
          harness = createHarness();
          await harness.start();
          const { client } = await harness.connectClient();
-         expect(await harness.toolNames(client)).toEqual(['read_handle']);
+         expect(await harness.toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
+            'read_handle',
+            'restore_backup',
+         ]);
       });
 
       it('lists create_documents once the client registers it, with no hard-coded handler behind it', async () => {
@@ -41,8 +47,12 @@ describe('scripts registered over the bridge', () => {
             refused: 0,
          });
          await expect.poll(() => harness.toolNames(client), { timeout: 1000 }).toEqual([
+            'backup_documents',
             'create_documents',
+            'delete_backup',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
       });
 
@@ -181,7 +191,13 @@ describe('scripts registered over the bridge', () => {
          expect(ack.error.code).toBe('OP_FAILED');
          expect(ack.error.message).toContain('apiVersion');
          const { client } = await harness.connectClient();
-         expect(await harness.toolNames(client)).toEqual(['read_handle']);
+         expect(await harness.toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
+            'list_backups',
+            'read_handle',
+            'restore_backup',
+         ]);
       });
 
       it('refuses another api version', async () => {
@@ -212,8 +228,12 @@ describe('scripts registered over the bridge', () => {
          });
          const { client } = await harness.connectClient();
          expect(await harness.toolNames(client)).toEqual([
+            'backup_documents',
+            'delete_backup',
             'fine_tool',
+            'list_backups',
             'read_handle',
+            'restore_backup',
          ]);
       });
 

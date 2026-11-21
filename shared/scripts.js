@@ -124,7 +124,13 @@ export const SCRIPT_REQUIRES = Object.freeze([
  * Names the sidecar registers itself; no script may use them.
  * @type {readonly string[]}
  */
-export const RESERVED_SCRIPT_NAMES = Object.freeze(['read_handle']);
+export const RESERVED_SCRIPT_NAMES = Object.freeze([
+   'read_handle',
+   'backup_documents',
+   'list_backups',
+   'restore_backup',
+   'delete_backup',
+]);
 
 /**
  * A shipped or agent tool name: lowercase letters, digits, `_` and `-`, starting with a letter.

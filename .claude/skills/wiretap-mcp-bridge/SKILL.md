@@ -1,6 +1,6 @@
 ---
 name: wiretap-mcp-bridge
-description: Wiretap MCP tools and Foundry bridge — the built-in tool (read_handle) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents, delete_documents, replace_document, batch, open_sheet, close_sheet, roll, draw_table and execute_macro), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
+description: Wiretap MCP tools and Foundry bridge — the built-in tools (read_handle and the backup tools backup_documents, list_backups, restore_backup, delete_backup) and the registered scripts (list_document_types, get_document, search_documents, describe_schema, create_documents, update_documents, delete_documents, replace_document, batch, open_sheet, close_sheet, roll, draw_table and execute_macro), the result enforcer and handle store, endpoint registry and router (gates, health, routing), sidecar-to-GM-client op dispatch, client-side op handlers, wire ops. Use when reading or editing MCP tools, bridge ops, routing, result budgets or the bridge handshake. Sessions and the tool registry are in wiretap-mcp-sessions.
 paths:
   - "server/mcp.ts"
   - "server/endpoints.ts"

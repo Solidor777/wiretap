@@ -1,8 +1,9 @@
 /**
  * Manual context-budget calibration. Starts the real MCP server in-process (no Foundry needed), lists its real tools
  * and runs every tool's representative-result fixture, then prints the byte sizes against the budgets. It only reports:
- * it never fails a build, is not run by `npm test`, writes no file and deletes nothing. To keep a run, redirect the
- * output into the `debug/dumps/` sink.
+ * it never fails a build and is not run by `npm test`. The only files it writes are the backup fixtures' files under a
+ * new scratch root in the gitignored `test/tmp/`, and nothing goes to the real recycle bin. To keep a run, redirect
+ * the output into the `debug/dumps/` sink.
  *
  * Run it with `npx tsx tests/measure/measureContext.mjs`.
  *
@@ -32,6 +33,7 @@ try {
    const report = await collectReport({
       client: harness.client,
       setGmAck: harness.setGmAck,
+      setGmHandler: harness.setGmHandler,
       fixtures: FIXTURES,
    });
    // The helper tool is test-local, so the listing shows only the tools the module ships.

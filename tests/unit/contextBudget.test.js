@@ -96,6 +96,7 @@ describe('context budgets of the real MCP server', () => {
       return collectReport({
          client: harness.client,
          setGmAck: harness.setGmAck,
+         setGmHandler: harness.setGmHandler,
          fixtures: {
             ...FIXTURES,
             ...extraFixtures,
@@ -112,25 +113,29 @@ describe('context budgets of the real MCP server', () => {
       expect(report.failures).toEqual([]);
       expect(report.listing.map((tool) => tool.name).sort()).toEqual(
          [
+            'backup_documents',
             'batch',
             'close_sheet',
             'create_documents',
+            'delete_backup',
             'delete_documents',
             'describe_schema',
             'draw_table',
             'execute_macro',
             'get_document',
             HELPER_TOOL_NAME,
+            'list_backups',
             'list_document_types',
             'open_sheet',
             'read_handle',
             'replace_document',
+            'restore_backup',
             'roll',
             'search_documents',
             'update_documents',
          ].sort(),
       );
-      expect(report.totals.count).toBe(1 + SHIPPED_COUNT);
+      expect(report.totals.count).toBe(RESERVED_SCRIPT_NAMES.length + SHIPPED_COUNT);
       expect(report.helperTotals.count).toBe(1);
       expect(report.fixtureRuns.length).toBeGreaterThanOrEqual(8);
    });
@@ -311,7 +316,9 @@ describe('context budgets of the real MCP server', () => {
       it('fails when all definitions together exceed their total', async () => {
          /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of the tools. */
          const fixtures = {};
-         const extra = Array.from({ length: 26 }, (_, index) => {
+         /** @type {number} As many tools as the count budget leaves beside the sidecar built-ins: only the total breaks. */
+         const count = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
+         const extra = Array.from({ length: count }, (_, index) => {
             const name = `test_total_${index}`;
             fixtures[name] = trivialFixture(name);
             return makeTool(name, 'd'.repeat(240), makeShape(3, 60));
@@ -395,6 +402,7 @@ describe('context budgets of the real MCP server', () => {
          return collectReport({
             client: harness.client,
             setGmAck: harness.setGmAck,
+            setGmHandler: harness.setGmHandler,
             fixtures: {
                ...FIXTURES,
                ...fixtures,
@@ -407,7 +415,7 @@ describe('context budgets of the real MCP server', () => {
          const report = await reportOn({ registry_one: registryFixture('registry_one') });
          expect(report.failures).toEqual([]);
          expect(report.listing.map((tool) => tool.name)).toContain('registry_one');
-         expect(report.totals.count).toBe(2 + SHIPPED_COUNT);
+         expect(report.totals.count).toBe(RESERVED_SCRIPT_NAMES.length + 1 + SHIPPED_COUNT);
          expect(report.fixtureRuns.filter((run) => run.tool === 'registry_one')).toHaveLength(2);
       });
 
@@ -419,7 +427,7 @@ describe('context budgets of the real MCP server', () => {
 
       it('counts a tool registered after the session started once the client has been told', async () => {
          harness = await startHarness();
-         expect((await reportOn({})).totals.count).toBe(1 + SHIPPED_COUNT);
+         expect((await reportOn({})).totals.count).toBe(RESERVED_SCRIPT_NAMES.length + SHIPPED_COUNT);
          const changed = harness.nextToolListChange();
          expect(await harness.registerTools([registryEntry('registry_late')])).toEqual({
             ok: true,
@@ -429,7 +437,7 @@ describe('context budgets of the real MCP server', () => {
          await changed;
          const without = await reportOn({});
          expect(without.failures).toEqual(['tool "registry_late": no representative-result fixture']);
-         expect(without.totals.count).toBe(2 + SHIPPED_COUNT);
+         expect(without.totals.count).toBe(RESERVED_SCRIPT_NAMES.length + 1 + SHIPPED_COUNT);
          const report = await reportOn({ registry_late: registryFixture('registry_late') });
          expect(report.failures).toEqual([]);
       });
@@ -510,7 +518,7 @@ describe('context budgets of the real MCP server', () => {
             accepted: SHIPPED_COUNT,
             refused: 3,
          });
-         expect((await reportOn({})).totals.count).toBe(1 + SHIPPED_COUNT);
+         expect((await reportOn({})).totals.count).toBe(RESERVED_SCRIPT_NAMES.length + SHIPPED_COUNT);
       });
    });
 
