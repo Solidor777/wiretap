@@ -70,7 +70,10 @@ parts fit, the file store and the client halves.
   the file on the first data piece and appends each in order. After the reply the sidecar checks the client's
   `{ documents, bytes, unreadable, parents, world }` against what the sink received (end marker seen, `documents`
   equal to the newline count, `bytes` equal to the file size), writes the header in place and returns
-  `{ file, folder, documents, bytes }`. Any failure after the file exists recycles the partial file.
+  `{ file, folder, documents, bytes }`. Any failure after the file exists recycles the partial file
+  (`discardPartial`). If the recycle bin refuses it, the backup keeps its own error code, not `TRASH_FAILED`: a
+  `BridgeError` gains ` The partial file <name> could not be moved to the recycle bin.` (`namePartialFile`, fitted to
+  512 B), any other error is thrown unchanged, and the sidecar log names the file either way.
 - **Restore.** `restore_backup` takes the lock; `prepare` resolves and gate-checks the folder, checks it, opens the
   file (`openFile` checks name, header and size) and sends `{ header, uuids?, dryRun?, timeoutMs }`; `onSent` starts
   the pump, which reads 512,000-byte pieces and sends each with `bridge.sendPiece` (`bridge:restorePiece`), then the
@@ -107,7 +110,8 @@ parts fit, the file store and the client halves.
   reads; `total` counts every matching name, `invalid` the ones that failed with `BACKUP_INVALID`.
 - `trashPath(path)`: `trash([path], { glob: false })`, then confirms nothing is left at the path; a throw or a file
   still there is `TRASH_FAILED` naming the file and the reason (at most 120 bytes). `trashFile(folder, file)` runs
-  `openFile` first, so only a checked backup file is ever recycled.
+  `openFile` first, so only a checked backup file is ever recycled. Only `delete_backup` (through `trashFile`)
+  surfaces `TRASH_FAILED`; the backup tool catches it from `trashPath` and keeps the backup's own code.
 - Residual risk (documented in the file): each link check and the following open are separate calls, so a link
   swapped in between is not caught; no `O_NOFOLLOW` open is used.
 

@@ -86,8 +86,9 @@ result to its budget through the `FIXTURES` of `contextBudgetHarness.js` (fake G
   `bytes` equals the file size, `unreadable`/`parents` are non-negative integers and the four `world` fields pass
   `isWorldField`; more than `BACKUP_MAX_DOCUMENTS` (10,000) documents is `BACKUP_TOO_LARGE` (`parseHeaderLine` refuses
   such a header, so the file could not be opened, restored or recycled). Then `writer.finish` writes the header. Any failure after the file exists closes it and sends it to
-  `store.trashPath`; if that fails the message gains `The partial file <name> could not be moved to the recycle bin.`
-  (fitted to 512 B). Result `{ file, folder, documents, bytes }` (+ `unreadable`, `parents` when above 0); a dry run
+  `store.trashPath`; if that fails the backup keeps its own error code (not `TRASH_FAILED`), and a `BridgeError`'s
+  message gains `The partial file <name> could not be moved to the recycle bin.` (fitted to 512 B); any other error
+  is thrown unchanged, and the sidecar log names the file either way. Result `{ file, folder, documents, bytes }` (+ `unreadable`, `parents` when above 0); a dry run
   `{ dryRun: true, folder, documents, bytes }` (+ the same).
 - `createBackupSink(openWriter)`: data pieces must come with `seq` 0, 1, 2, …; the file is created on the first;
   header plus received bytes over `BACKUP_MAX_BYTES` is `BACKUP_TOO_LARGE`; the end marker's `seq`/`pieces` must equal

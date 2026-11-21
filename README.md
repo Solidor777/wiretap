@@ -312,9 +312,11 @@ shows up to 20 rows (failures first) and lists `differences` when the Foundry or
 backup's.
 
 **Recycle bin only.** Wiretap never deletes a file permanently: `delete_backup`, and a partial file left by a failed
-backup, go through the recycle bin (the `trash` package). If the recycle bin refuses, the file stays and the call fails
-with `TRASH_FAILED` naming it. Limit, per the `trash` README: a sidecar running as the Windows SYSTEM account (or
-another service account) sends files to that account's recycle bin, not the signed-in user's.
+backup, go through the recycle bin (the `trash` package). If the recycle bin refuses, the file stays. `delete_backup`
+then fails with `TRASH_FAILED` naming the file. A failed backup keeps its own error code (for example
+`BACKUP_INCOMPLETE` or `ENDPOINT_GONE`); when the sidecar built that error, its message ends by naming the partial
+file, and the sidecar log names it in every case. Limit, per the `trash` README: a sidecar running as the Windows
+SYSTEM account (or another service account) sends files to that account's recycle bin, not the signed-in user's.
 
 **Whole-world backups** are not made by these tools: make one on Foundry's setup screen with the world shut down.
 
