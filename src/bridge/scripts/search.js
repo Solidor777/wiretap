@@ -400,7 +400,7 @@ function liveValue(item, name) {
  * Yield to the event loop for one macrotask. A message event is used because timers are clamped to 4 ms once nested.
  * @returns {Promise<void>} Resolves after the event loop has run its other queued tasks.
  */
-function yieldToEventLoop() {
+export function yieldToEventLoop() {
    return new Promise((resolve) => {
       /** @type {MessageChannel} A one-shot channel. */
       const channel = new MessageChannel();

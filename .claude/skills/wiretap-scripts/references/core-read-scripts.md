@@ -56,8 +56,9 @@ nextCursor? }`; a lone row whose `fields` overflow the page degrades to `[uuid, 
   document is exported (once, kept on the candidate) only for a filter on another path or for a page row with `fields`,
   at most `SEARCH_EXPORT_MAX` (300) per call. At a cap the call reports `cut: true` and `scanned` and `nextCursor` resumes
   after the last candidate examined. `total` counts the matches among the candidates examined from the cursor on. Every
-  `SEARCH_BATCH_SIZE` (25) candidates the loop awaits a `MessageChannel` message (a macrotask) and throws `SEARCH_ABORTED`
-  when `ctx.signal` (passed by the handler) aborted.
+  `SEARCH_BATCH_SIZE` (25) candidates the loop awaits `yieldToEventLoop()` (a `MessageChannel` message, one
+  macrotask; exported, and also used by the backup export) and throws `SEARCH_ABORTED` when `ctx.signal` (passed by the
+  handler) aborted.
 - Sources: world collection (`game.collections`), `parent.getEmbeddedCollection`, or `pack.getIndex({ fields })` with only the
   filter and field paths (no document is loaded; `Setting` and `User` are refused with a pack). Index paths are bounded
   (`indexPathsOf`: <= `SEARCH_INDEX_FIELDS_MAX` (5) distinct, <= `SEARCH_INDEX_SEGMENTS_MAX` (3) segments, no whole

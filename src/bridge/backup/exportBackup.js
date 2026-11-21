@@ -14,8 +14,17 @@ import {
 import { utf8Bytes } from '$shared/utf8.js';
 import { exportForBackup } from '~/bridge/scripts/canonical.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
+import { yieldToEventLoop } from '~/bridge/scripts/search.js';
 import { createPieceWriter } from './pieceWriter.js';
 import { loadEntries, planSelection } from './selection.js';
+
+/**
+ * Longest run of export work between two yields to the event loop, in milliseconds. A task of 50 ms or more is a long
+ * task that delays input (Long Tasks API, https://wicg.github.io/longtasks/), so the export lets the browser paint
+ * and handle input at least that often.
+ * @type {number}
+ */
+const SLICE_MS = 50;
 
 /**
  * @typedef {object} ExportParams
@@ -65,7 +74,8 @@ function backupLine(entry, outcome) {
 }
 
 /**
- * Export the planned entries in order, calling `onLine` for each readable document.
+ * Export the planned entries in order, calling `onLine` for each readable document. World documents load without an
+ * await that leaves the microtask queue, so the loop yields to the event loop once a run of work reaches `SLICE_MS`.
  * @param {import('./selection.js').SelectionEntry[]} entries - The planned entries.
  * @param {number} deadline - The time (`Date.now()` scale) after which the export stops.
  * @param {(line: string) => Promise<void> | void} onLine - Receives each line.
@@ -77,7 +87,13 @@ async function exportLines(entries, deadline, onLine) {
    let documents = 0;
    /** @type {number} The documents that were gone or could not be exported. */
    let unreadable = 0;
+   /** @type {number} When the current run of work began. */
+   let sliceStart = Date.now();
    for await (const { entry, document } of loadEntries(entries)) {
+      if (Date.now() - sliceStart >= SLICE_MS) {
+         await yieldToEventLoop();
+         sliceStart = Date.now();
+      }
       if (Date.now() > deadline) {
          throw new ScriptError('SCRIPT_TIMEOUT', 'The backup stopped at its time limit; nothing was saved.');
       }

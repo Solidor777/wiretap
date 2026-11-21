@@ -242,6 +242,35 @@ describe('exportBackup', () => {
       expect(invocation.pieces.send).not.toHaveBeenCalled();
    });
 
+   it('yields to the event loop once a run of export work reaches 50 ms', async () => {
+      installBackupWorld(vi.fn);
+      /** @type {number} The mocked clock; each reading moves it on 60 ms, so every document ends a slice. */
+      let now = 0;
+      vi.spyOn(Date, 'now').mockImplementation(() => {
+         now += 60;
+         return now;
+      });
+      /** @type {boolean} Whether the export has settled. */
+      let settled = false;
+      /** @type {Promise<import('~/bridge/backup/exportBackup.js').ExportResult>} The running dry run. */
+      const running = exportBackup(
+         {
+            documentName: 'Actor',
+            dryRun: true,
+            timeoutMs: 1_000_000_000,
+         },
+         fakeInvocation(),
+      ).finally(() => {
+         settled = true;
+      });
+      // A dry run that only awaits microtasks settles well within this many microtask turns.
+      for (let turn = 0; turn < 1_000; turn += 1) {
+         await Promise.resolve();
+      }
+      expect(settled).toBe(false);
+      await expect(running).resolves.toMatchObject({ documents: 6 });
+   });
+
    it('passes a refused piece on as the error', async () => {
       const { docs } = installBackupWorld(vi.fn);
       const invocation = fakeInvocation();
