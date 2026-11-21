@@ -41,6 +41,11 @@
  *
  * `moduleId`: the owning module id of a plugin script (required for that source, refused for the others).
  *
+ * `requiresUserInteraction`: optional, only `true`. The sidecar lists the tool with
+ * `_meta[USER_INTERACTION_META_KEY]: true`, which asks the MCP client to prompt the human before every call. The
+ * sidecar also sets it for every name in `USER_INTERACTION_TOOLS`, whatever the definition says. It is not part of the
+ * definition size.
+ *
  * The total of `{name, description, inputSchema}` serialized is held to `DEFINITION_MAX_BYTES`.
  *
  * The `source` of a script ('shipped', 'plugin' or 'agent') is not a field of the definition: it is implied by the
@@ -74,6 +79,8 @@ import { CONTROL_PATTERN } from './logText.js';
  * @property {true} [strictNested] - Every object below the root refuses an undeclared key (not listed, so it costs no
  * definition budget).
  * @property {string} [moduleId] - The owning module id of a plugin script.
+ * @property {true} [requiresUserInteraction] - The MCP client prompts the human before every call (not listed in the
+ * definition size).
  */
 
 /**
@@ -131,6 +138,19 @@ export const RESERVED_SCRIPT_NAMES = Object.freeze([
    'restore_backup',
    'delete_backup',
 ]);
+
+/**
+ * The tool-level MCP `_meta` key that asks the client to prompt the human before every call of the tool.
+ * @type {string}
+ */
+export const USER_INTERACTION_META_KEY = 'anthropic/requiresUserInteraction';
+
+/**
+ * Tool names the sidecar always lists with the user-interaction meta entry, whether or not the definition sets
+ * `requiresUserInteraction`, so no client can register them without the prompt.
+ * @type {readonly string[]}
+ */
+export const USER_INTERACTION_TOOLS = Object.freeze(['delete_pack']);
 
 /**
  * A shipped or agent tool name: lowercase letters, digits, `_` and `-`, starting with a letter.
@@ -322,6 +342,8 @@ export function validateScriptDefinition(input, source) {
       const handleArgs = ownValue(input, 'handleArgs');
       /** @type {unknown} The untrusted nested-strictness flag. */
       const strictNested = ownValue(input, 'strictNested');
+      /** @type {unknown} The untrusted user-interaction flag. */
+      const requiresUserInteraction = ownValue(input, 'requiresUserInteraction');
       if (source === 'plugin' && !isModuleId(moduleId)) {
          return refuse('moduleId must be a module id for a plugin script');
       }
@@ -386,6 +408,9 @@ export function validateScriptDefinition(input, source) {
       if (strictNested !== undefined && strictNested !== true) {
          return refuse('strictNested may only be true');
       }
+      if (requiresUserInteraction !== undefined && requiresUserInteraction !== true) {
+         return refuse('requiresUserInteraction may only be true');
+      }
       if (
          gate !== undefined &&
          (typeof gate !== 'string' || !Object.hasOwn(GATES, gate) || gate === 'allowedPluginModules')
@@ -426,6 +451,7 @@ export function validateScriptDefinition(input, source) {
          ...(gate === undefined ? {} : { gate }),
          ...(handleArgs === undefined ? {} : { handleArgs: [...handleArgs] }),
          ...(strictNested === undefined ? {} : { strictNested: true }),
+         ...(requiresUserInteraction === undefined ? {} : { requiresUserInteraction: true }),
       };
       return {
          ok: true,
