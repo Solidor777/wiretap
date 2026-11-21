@@ -546,11 +546,17 @@ export function installWriteWorld(fn, options = {}) {
       'ActorDelta',
       'Macro',
       'Adventure',
+      'Region',
+      'RegionBehavior',
    ];
    /** @type {Record<string, Record<string, string>>} The embedded collections of every class but the Actor. */
    const childrenOf = {
       Item: { ActiveEffect: 'effects' },
-      Scene: { Token: 'tokens' },
+      Scene: {
+         Token: 'tokens',
+         Region: 'regions',
+      },
+      Region: { RegionBehavior: 'behaviors' },
       ActorDelta: {
          Item: 'items',
          ActiveEffect: 'effects',
@@ -579,6 +585,8 @@ export function installWriteWorld(fn, options = {}) {
          'ActiveEffect',
          'Token',
          'ActorDelta',
+         'Region',
+         'RegionBehavior',
       ],
       PRIMARY_DOCUMENT_TYPES: [
          'Actor',

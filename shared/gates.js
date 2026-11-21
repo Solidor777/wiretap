@@ -74,8 +74,8 @@ export const GATES = Object.freeze({
    allowMacroExecution: entry(
       'boolean',
       false,
-      'Running macros through execute_macro, and writing macro code: a Macro command, a Macro type set to script, an '
-         + 'Adventure\'s stored macros (arbitrary code).',
+      'Running macros through execute_macro, and writing macro code: a Macro command, a Macro type changed to script, '
+         + 'an Adventure\'s stored macros, or a region behavior that runs a script (arbitrary code).',
    ),
    allowUserWrites: entry('boolean', false, 'Creating, updating and deleting User documents, roles included.'),
    allowSettingWrites: entry('boolean', false, 'Writing Setting documents and world or user settings.'),

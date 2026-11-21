@@ -12,8 +12,9 @@
  * (`denyWiretapSettingWrite`); a `Setting` write with no resolvable key is refused.
  * 5. The category gates, judged from THIS client's world settings at call time (`requireGate`): User documents,
  * Setting documents, the module configuration setting, base64 data URIs, ownership changes, macro code
- * (`allowMacroExecution`: a Macro `command`, a Macro `type` set to `script`, an Adventure's stored `macros`, all code
- * a user later runs), compendium writes and, for a call that is not a `dryRun`, deleting (`allowDelete`) and replacing
+ * (`allowMacroExecution`: a Macro `command`, a Macro `type` changed to `script`, an Adventure's stored `macros`, a
+ * region behavior of type `executeScript` at any nesting, all code that later runs), compendium writes and, for a call
+ * that is not a `dryRun`, deleting (`allowDelete`) and replacing
  * (`allowReplace`) documents. The risky operations come from the `operations` the caller names and from the operators
  * of the cleaned `targets`, judged by the schema field they land on (`writeFields.js`).
  *
@@ -32,7 +33,7 @@ import { GATE_DENIED } from '$shared/protocol.js';
 import { denyWiretapSettingWrite, normalizeSettingKey, resolveSettingKey } from '$shared/gates.js';
 import { requireGate } from '~/bridge/gates.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
-import { analyzeChanges, isOperatorObject, isPlainObject } from '~/bridge/scripts/writeFields.js';
+import { analyzeChanges, isOperatorObject, isPlainObject, walkEmbedded } from '~/bridge/scripts/writeFields.js';
 
 /**
  * Matches a key or path segment that names a password: `password`, `passwordSalt`, `hashedPassword` and the like.
@@ -66,6 +67,18 @@ const OWNERSHIP_KEY = 'ownership';
 const SCRIPT_MACRO_TYPE = 'script';
 
 /**
+ * The document class of a region behavior.
+ * @type {string}
+ */
+const REGION_BEHAVIOR = 'RegionBehavior';
+
+/**
+ * The RegionBehavior type whose `system.source` runs as code when the region's events fire.
+ * @type {string}
+ */
+const SCRIPT_BEHAVIOR_TYPE = 'executeScript';
+
+/**
  * Tell whether any of some objects holds a top-level key whose first segment, read by `keyNames`, is a name. A dotted
  * key counts by its first segment because Foundry expands it into that field.
  * @param {Record<string, unknown>[]} objects - Data objects, patch objects or cleaned changes.
@@ -78,8 +91,9 @@ function writesField(objects, name) {
 
 /**
  * Tell whether a write sets macro code, which runs when a user executes the macro: a Macro `command` (any value and
- * any op), a Macro `type` changed to `script` in the cleaned changes (stored text becomes code; a deleted `type`
- * resets to `chat`), or an Adventure's stored `macros` (importing the adventure creates those Macros).
+ * any op), a Macro `type` changed to `script` in the cleaned changes from another stored type (stored text becomes
+ * code; a deleted `type` resets to `chat`), or an Adventure's stored `macros` (importing the adventure creates those
+ * Macros).
  * @param {WriteIntent} intent - What the call is about to write.
  * @returns {boolean} True when the write needs `allowMacroExecution`.
  */
@@ -97,13 +111,89 @@ function writesMacroCode(intent) {
    }
    return (
       writesField(objects, 'command') ||
-      (intent.targets ?? []).some((target) =>
-         Object.entries(target.changes).some(
-            ([key, value]) =>
-               keyNames(key)[0] === 'type' &&
-               foundry.data.operators.DataFieldOperator.get(value) === SCRIPT_MACRO_TYPE,
-         ))
+      (intent.targets ?? []).some(
+         (target) =>
+            target.document._source?.type !== SCRIPT_MACRO_TYPE &&
+            Object.entries(target.changes).some(
+               ([key, value]) =>
+                  keyNames(key)[0] === 'type' &&
+                  foundry.data.operators.DataFieldOperator.get(value) === SCRIPT_MACRO_TYPE,
+            ),
+      )
    );
+}
+
+/**
+ * Copy written data with every update operator replaced by what it writes: a `ForcedReplacement` by its value and a
+ * `ForcedDeletion` by null, so the key it deletes still counts as written. An empty element of an array becomes an
+ * empty object, because `walkEmbedded` reads the `_id` of every element of an embedded collection.
+ * @param {unknown} value - Create data, replace data or cleaned changes.
+ * @returns {unknown} The copy, free of operator objects.
+ */
+function writtenData(value) {
+   if (value instanceof foundry.data.operators.ForcedDeletion) {
+      return null;
+   }
+   if (isOperatorObject(value)) {
+      return writtenData(foundry.data.operators.DataFieldOperator.get(value));
+   }
+   if (Array.isArray(value)) {
+      return value.map((member) => (member === null || member === undefined ? {} : writtenData(member)));
+   }
+   if (isPlainObject(value)) {
+      return Object.fromEntries(Object.entries(value).map(([key, member]) => [key, writtenData(member)]));
+   }
+   return value;
+}
+
+/**
+ * Tell whether the data written to one RegionBehavior stores script code, by the rule Foundry applies with its
+ * `MACRO_SCRIPT` permission (`common/documents/region-behavior.mjs`, `region.mjs`): the behavior becomes of type
+ * `executeScript` (created so, or changed to it from another stored type), or a behavior of that type has its
+ * `system.source` written.
+ * @param {Record<string, unknown>} data - The data written to the behavior, operators replaced by `writtenData`.
+ * @param {Record<string, unknown> | undefined} stored - The stored source of the behavior, none for a new one.
+ * @returns {boolean} True when the write stores script code.
+ */
+function storesBehaviorScript(data, stored) {
+   /** @type {unknown} The type the behavior has after the write. */
+   const type = 'type' in data ? data.type : stored?.type;
+   if (type !== SCRIPT_BEHAVIOR_TYPE) {
+      return false;
+   }
+   return stored?.type !== SCRIPT_BEHAVIOR_TYPE || (isPlainObject(data.system) && 'source' in data.system);
+}
+
+/**
+ * Tell whether a write stores the code of a script region behavior anywhere in the data it writes: a RegionBehavior
+ * itself, the behaviors of a Region, the regions of a Scene, or the stored scenes of an Adventure. Each written
+ * behavior is paired with its stored source through the schema (`walkEmbedded`). An update is read from its cleaned
+ * changes, which hold every patch expanded against the live document; a create or replace is read from its data.
+ * @param {WriteIntent} intent - What the call is about to write.
+ * @returns {boolean} True when the write needs `allowMacroExecution`.
+ */
+function writesRegionScript(intent) {
+   /** @type {Array<{ model: object, data: unknown, stored: Record<string, unknown> | undefined }>} Each data tree. */
+   const trees =
+      intent.targets === undefined
+         ? (intent.values ?? []).map((value) => ({
+            model: CONFIG[intent.documentName].documentClass,
+            data: writtenData(value),
+            stored: undefined,
+         }))
+         : intent.targets.map((target) => ({
+            model: target.document.constructor,
+            data: writtenData(target.changes),
+            stored: target.document._source,
+         }));
+   /** @type {boolean} Whether a written behavior stores script code. */
+   let found = false;
+   for (const tree of trees) {
+      walkEmbedded(tree.model, tree.data, tree.stored, (model, data, stored) => {
+         found ||= model.documentName === REGION_BEHAVIOR && storesBehaviorScript(data, stored);
+      });
+   }
+   return found;
 }
 
 /**
@@ -272,7 +362,8 @@ function requireOpen(name) {
  * @param {WriteIntent} intent - What the call is about to write.
  * @returns {void}
  * @throws {ScriptError} `GATE_DENIED`: an operator spelling, a password field, the reserved flag scope, a Wiretap
- * setting, or a closed gate (a category gate, `allowMacroExecution` for macro code, `allowDelete` or `allowReplace`).
+ * setting, or a closed gate (a category gate, `allowMacroExecution` for macro or region script code, `allowDelete` or
+ * `allowReplace`).
  */
 export function guardWrite(intent) {
    /** @type {string} The class written. */
@@ -352,7 +443,7 @@ export function guardWrite(intent) {
    if (scan.ownership) {
       requireOpen('allowOwnershipWrites');
    }
-   if (writesMacroCode(intent)) {
+   if (writesMacroCode(intent) || writesRegionScript(intent)) {
       requireOpen('allowMacroExecution');
    }
    if (intent.inPack === true) {

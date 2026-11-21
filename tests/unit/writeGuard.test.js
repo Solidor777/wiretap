@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GATE_DENIED } from '$shared/protocol.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { guardWrite, scanWriteValues } from '~/bridge/scripts/writeGuard.js';
+import { installWriteWorld } from './mockWriteWorld.js';
 
 /** @type {Record<string, unknown>} Stored world setting values keyed by gate name. */
 let stored;
@@ -12,13 +13,12 @@ let reads;
 beforeEach(() => {
    stored = {};
    reads = 0;
-   globalThis.game = {
-      settings: {
-         get: (module, key) => {
-            reads += 1;
-            return stored[key];
-         },
-      },
+   // The guard walks create data through the written class's schema (`CONFIG[documentName].documentClass`), so the
+   // mock world supplies `CONFIG` and the document classes; the gate settings are then read from `stored`.
+   installWriteWorld(vi.fn);
+   globalThis.game.settings.get = (module, key) => {
+      reads += 1;
+      return stored[key];
    };
 });
 

@@ -168,6 +168,27 @@ describe('writing Macro code needs allowMacroExecution', () => {
       expect(macro.update).toHaveBeenCalledTimes(3);
    });
 
+   it.each([
+      'set',
+      'replace',
+   ])('update of a Macro already of type script that sets type script with op %s needs no gate', async (op) => {
+      /** @type {object} A live script Macro. */
+      const script = world.add('Macro', {
+         name: 'MOCK_script',
+         type: 'script',
+         command: 'MOCK_code',
+      });
+      expect(
+         await outcome(() => updateDocuments({
+            updates: [{
+               uuid: script.uuid,
+               patches: [patchOf('type', 'script', op)],
+            }],
+         })),
+      ).toBeNull();
+      expect(script.update).toHaveBeenCalledTimes(1);
+   });
+
    it('update of a Macro name needs no gate', async () => {
       expect(await outcome(() => updateMacro(patchOf('name', 'MOCK_renamed', 'set')))).toBeNull();
       expect(macro.update).toHaveBeenCalledTimes(1);
@@ -390,5 +411,246 @@ describe('writing Macro code needs allowMacroExecution', () => {
          })),
       ).toBeNull();
       expect(actor.update).toHaveBeenCalledTimes(1);
+   });
+});
+
+/**
+ * Build the data of a region behavior that runs a script.
+ * @param {string} [id] - The `_id` of the behavior, for data that names a stored one.
+ * @returns {Record<string, unknown>} The behavior data.
+ */
+function scriptBehavior(id) {
+   return {
+      ...(id === undefined ? {} : { _id: id }),
+      name: 'MOCK_behavior',
+      type: 'executeScript',
+      system: { source: 'MOCK_code' },
+   };
+}
+
+describe('writing a region script behavior needs allowMacroExecution', () => {
+   /** @type {object} A live Scene that holds the Region. */
+   let scene;
+
+   /** @type {object} A live Region of the Scene that holds the behaviors. */
+   let region;
+
+   /** @type {object} A live behavior that runs a script. */
+   let stored;
+
+   /** @type {object} A live behavior of a type that runs no code. */
+   let pause;
+
+   beforeEach(() => {
+      scene = world.add('Scene', { name: 'MOCK_scene' });
+      region = world.addChild(scene, 'Region', { name: 'MOCK_region' });
+      stored = world.addChild(region, 'RegionBehavior', scriptBehavior());
+      pause = world.addChild(region, 'RegionBehavior', {
+         name: 'MOCK_pause',
+         type: 'pauseGame',
+      });
+   });
+
+   /**
+    * Update one live document with patches.
+    * @param {object} document - The document addressed by its uuid.
+    * @param {Array<{ path: string, value?: unknown, op?: string }>} patches - The patches to write.
+    * @param {boolean} [dryRun] - Whether the call only previews.
+    * @returns {Promise<unknown>} The result of the update.
+    */
+   function updateOf(document, patches, dryRun = false) {
+      return updateDocuments({
+         updates: [{
+            uuid: document.uuid,
+            patches,
+         }],
+         dryRun,
+      });
+   }
+
+   /**
+    * Each write that stores the code of a script behavior, by name.
+    * @type {Record<string, () => Promise<unknown>>}
+    */
+   const storing = {
+      'create of a script behavior': () => createDocuments({
+         documentName: 'RegionBehavior',
+         parentUuid: region.uuid,
+         data: [scriptBehavior()],
+      }),
+      'create of a script behavior with no source': () => createDocuments({
+         documentName: 'RegionBehavior',
+         parentUuid: region.uuid,
+         data: [{
+            name: 'MOCK_behavior',
+            type: 'executeScript',
+         }],
+      }),
+      'update of a behavior type to executeScript': () => updateOf(pause, [patchOf('type', 'executeScript', 'set')]),
+      'update of a behavior type to executeScript with op replace': () =>
+         updateOf(pause, [patchOf('type', 'executeScript', 'replace')]),
+      'update of the source of a script behavior': () => updateOf(stored, [patchOf('system.source', 'x', 'set')]),
+      'update of the system of a script behavior with op replace': () =>
+         updateOf(stored, [patchOf('system', { source: 'x' }, 'replace')]),
+      'update of a Region that writes the source of its script behavior': () =>
+         updateOf(region, [patchOf(`behaviors.${stored.id}.system.source`, 'x', 'set')]),
+      'update of a Region that changes a behavior type to executeScript': () =>
+         updateOf(region, [patchOf(`behaviors.${pause.id}.type`, 'executeScript', 'set')]),
+      'create of a Region holding a script behavior': () => createDocuments({
+         documentName: 'Region',
+         parentUuid: scene.uuid,
+         data: [{
+            name: 'MOCK_region',
+            behaviors: [scriptBehavior()],
+         }],
+      }),
+      'create of a Scene holding a script behavior': () => createDocuments({
+         documentName: 'Scene',
+         data: [{
+            name: 'MOCK_scene',
+            regions: [{
+               name: 'MOCK_region',
+               behaviors: [scriptBehavior()],
+            }],
+         }],
+      }),
+      'update of a Scene region that adds a script behavior': () =>
+         updateOf(scene, [patchOf(`regions.${region.id}.behaviors`, [scriptBehavior()], 'set')]),
+      'update of a Scene region that rewrites a stored script behavior with its source': () =>
+         updateOf(scene, [patchOf(`regions.${region.id}.behaviors`, [scriptBehavior(stored.id)], 'set')]),
+      'replace of a Scene whose data holds a script behavior': () => replaceDocument({
+         uuid: scene.uuid,
+         data: {
+            name: 'MOCK_scene',
+            regions: [{
+               name: 'MOCK_region',
+               behaviors: [scriptBehavior()],
+            }],
+         },
+      }),
+      'batch create of a script behavior': () => batchDocuments({
+         creates: [{
+            documentName: 'RegionBehavior',
+            parentUuid: region.uuid,
+            data: [scriptBehavior()],
+         }],
+      }),
+      'batch update of the source of a script behavior': () => batchDocuments({
+         updates: [{
+            uuid: stored.uuid,
+            patches: [patchOf('system.source', 'x', 'set')],
+         }],
+      }),
+      'dry run of a script behavior create': () => createDocuments({
+         documentName: 'RegionBehavior',
+         parentUuid: region.uuid,
+         data: [scriptBehavior()],
+         dryRun: true,
+      }),
+      'dry run of a script behavior source update': () =>
+         updateOf(stored, [patchOf('system.source', 'x', 'set')], true),
+      'create of an Adventure whose scenes hold a script behavior': () => createDocuments({
+         documentName: 'Adventure',
+         pack: ADVENTURE_PACK,
+         data: [{
+            name: 'MOCK_adventure',
+            scenes: [{
+               name: 'MOCK_scene',
+               regions: [{
+                  name: 'MOCK_region',
+                  behaviors: [scriptBehavior()],
+               }],
+            }],
+         }],
+      }),
+      'update of an Adventure whose scenes hold a script behavior': async () => {
+         /** @type {object} A live Adventure inside the pack. */
+         const adventure = world.add(
+            'Adventure',
+            {
+               name: 'MOCK_adventure',
+               scenes: [],
+            },
+            { pack: ADVENTURE_PACK },
+         );
+         return updateOf(adventure, [patchOf(
+            'scenes',
+            [{
+               name: 'MOCK_scene',
+               regions: [{
+                  name: 'MOCK_region',
+                  behaviors: [scriptBehavior()],
+               }],
+            }],
+            'set',
+         )]);
+      },
+   };
+
+   it.each(Object.keys(storing))('%s is denied while the gate is closed', async (name) => {
+      gates.allowDelete = true;
+      gates.allowReplace = true;
+      gates.allowCompendiumWrites = true;
+      expectMacroDenial(await outcome(storing[name]));
+      for (const document of [
+         scene,
+         region,
+         stored,
+         pause,
+      ]) {
+         expect(document.update).not.toHaveBeenCalled();
+      }
+   });
+
+   it.each(Object.keys(storing))('%s runs once allowMacroExecution is open', async (name) => {
+      gates.allowMacroExecution = true;
+      gates.allowDelete = true;
+      gates.allowReplace = true;
+      gates.allowCompendiumWrites = true;
+      expect(await outcome(storing[name])).toBeNull();
+   });
+
+   it('writes that store no script code need no gate', async () => {
+      /**
+       * Each write that leaves script code untouched.
+       * @type {Array<() => Promise<unknown>>}
+       */
+      const writes = [
+         () => createDocuments({
+            documentName: 'RegionBehavior',
+            parentUuid: region.uuid,
+            data: [{
+               name: 'MOCK_pause',
+               type: 'pauseGame',
+            }],
+         }),
+         () => updateOf(stored, [patchOf('name', 'MOCK_renamed', 'set')]),
+         () => updateOf(stored, [patchOf('type', 'executeScript', 'set')]),
+         () => updateOf(stored, [patchOf('type', 'pauseGame', 'set')]),
+         () => updateOf(pause, [patchOf('name', 'MOCK_renamed', 'set')]),
+         () => updateOf(region, [patchOf(`behaviors.${stored.id}.name`, 'MOCK_renamed', 'set')]),
+         () => updateOf(scene, [patchOf(
+            `regions.${region.id}.behaviors`,
+            [{
+               _id: stored.id,
+               name: 'MOCK_renamed',
+            }],
+            'set',
+         )]),
+         () => createDocuments({
+            documentName: 'Region',
+            parentUuid: scene.uuid,
+            data: [{
+               name: 'MOCK_region',
+               behaviors: [{
+                  name: 'MOCK_pause',
+                  type: 'pauseGame',
+               }],
+            }],
+         }),
+      ];
+      for (const [index, write] of writes.entries()) {
+         expect(await outcome(write), `write ${index}`).toBeNull();
+      }
    });
 });

@@ -40,7 +40,7 @@
          "Gates": {
             "AllowMacroExecution": {
                "Name": "Risk gate: run macros",
-               "Hint": "Lets agents run macros and write the code a macro runs (its command, its type set to script, or an Adventure's stored macros). A macro is arbitrary code with GM authority and can call game.settings.set, so enabling this lets an agent change any gate; only enable it for agents you trust."
+               "Hint": "Lets agents run macros and write the code a macro runs (its command, its type changed to script, or an Adventure's stored macros), and write region behaviors that run a script, in a scene or an Adventure. A macro is arbitrary code with GM authority and can call game.settings.set, so enabling this lets an agent change any gate; only enable it for agents you trust."
             },
             "AllowUserWrites": {
                "Name": "Risk gate: write users",
