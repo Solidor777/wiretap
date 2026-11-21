@@ -50,6 +50,15 @@ class MockPacks extends Map {
 /** @type {MockPacks} The mock compendium packs of `game.packs`. */
 let packs;
 
+/** @type {string} A `compendiumConfiguration` key of a pack no e2e run created; it must always survive. */
+const UNRELATED_PACK_KEY = 'MOCK-module.pack';
+
+/** @type {Record<string, object>} The mock value of the core setting `compendiumConfiguration`, keyed by pack id. */
+let packConfiguration;
+
+/** @type {import('vitest').Mock} The mock `game.settings.set`. */
+let settingsSet;
+
 /** @type {number} Counter that makes each test's file distinct. */
 let serial = 0;
 
@@ -108,8 +117,9 @@ function entryOf(documentName, number) {
 }
 
 /**
- * Add a mock compendium pack. Its `deleteCompendium` records the id in `deleted` and removes the pack; its
- * `configure` applies the given configuration.
+ * Add a mock compendium pack. Its `deleteCompendium` records the id in `deleted` and removes the pack but not its
+ * `compendiumConfiguration` key; its `configure` applies the given configuration and, as Foundry's does
+ * (`client/documents/collections/compendium-collection.mjs`), writes it under the pack id in that setting.
  * @param {string} name - The pack name; the id is `world.<name>`.
  * @param {object} [overrides] - Fields replacing the defaults (`title`, `metadata`, `locked`).
  * @returns {Record<string, any>} The mock pack.
@@ -127,6 +137,13 @@ function addPack(name, overrides = {}) {
    };
    pack.configure = vi.fn(async (configuration) => {
       Object.assign(pack, configuration);
+      await game.settings.set('core', 'compendiumConfiguration', {
+         ...packConfiguration,
+         [collection]: {
+            ...packConfiguration[collection],
+            ...configuration,
+         },
+      });
    });
    pack.deleteCompendium = vi.fn(async () => {
       deleted.push(collection);
@@ -191,9 +208,19 @@ beforeEach(() => {
       scenes: [],
    };
    packs = new MockPacks();
+   packConfiguration = { [UNRELATED_PACK_KEY]: { folder: null } };
+   settingsSet = vi.fn(async (namespace, key, value) => {
+      if (namespace === 'core' && key === 'compendiumConfiguration') {
+         packConfiguration = value;
+      }
+   });
    globalThis.game = {
       world: { id: TEST_WORLD },
       packs,
+      settings: {
+         get: (namespace, key) => (namespace === 'core' && key === 'compendiumConfiguration' ? packConfiguration : {}),
+         set: settingsSet,
+      },
       get combats() {
          return world.combats;
       },
@@ -904,8 +931,8 @@ describe('compendium packs', () => {
       expect(JSON.parse(fs.readFileSync(file, 'utf8')).pending).toBe(false);
    });
 
-   it('refuses to delete a recorded pack that is a system pack or whose title lacks the e2e prefix, and deletes nothing',
-      async () => {
+   it('refuses to delete a recorded pack that is a system pack or whose title lacks the e2e prefix, and deletes '
+      + 'nothing', async () => {
          /** @type {Record<string, any>} A safe pack recorded beside the unsafe ones. */
          const safe = addPack('safe');
          /** @type {Record<string, any>} A system pack named with the prefix. */
@@ -983,8 +1010,8 @@ describe('compendium packs', () => {
       ]);
    });
 
-   it('sweeps unrecorded world packs titled with the prefix and spares system packs, module packs and unprefixed world '
-      + 'packs', async () => {
+   it('sweeps unrecorded world packs titled with the prefix and spares system packs, module packs and unprefixed '
+      + 'world packs', async () => {
       /** @type {Record<string, any>} A locked world pack titled with the prefix. */
       const locked = addPack('locked', { locked: true });
       addPack('open');
@@ -1058,5 +1085,74 @@ describe('compendium packs', () => {
          'world.unrecorded',
       ]);
       expect(packs.size).toBe(0);
+   });
+});
+
+describe('compendiumConfiguration keys of e2e packs', () => {
+   it('the teardown removes the key of each recorded pack it deleted or found gone, and nothing else', async () => {
+      addPack('wiretap-e2e-locked', { locked: true });
+      addPack('wiretap-e2e-open');
+      packConfiguration['world.wiretap-e2e-gone'] = {
+         folder: null,
+         locked: false,
+      };
+      packConfiguration['world.wiretap-e2e-unrecorded'] = {
+         folder: null,
+         locked: false,
+      };
+      writeRaw(pendingOf([
+         packEntryOf('wiretap-e2e-locked'),
+         packEntryOf('wiretap-e2e-open'),
+         packEntryOf('wiretap-e2e-gone'),
+      ]));
+      await teardownRecorded(page, { file });
+      expect(packConfiguration).toEqual({
+         [UNRELATED_PACK_KEY]: { folder: null },
+         'world.wiretap-e2e-unrecorded': {
+            folder: null,
+            locked: false,
+         },
+      });
+   });
+
+   it('the teardown writes no setting when no recorded pack has a key', async () => {
+      addPack('wiretap-e2e-open');
+      writeRaw(pendingOf([packEntryOf('wiretap-e2e-open')]));
+      await teardownRecorded(page, { file });
+      expect(settingsSet).not.toHaveBeenCalled();
+      expect(packConfiguration).toEqual({ [UNRELATED_PACK_KEY]: { folder: null } });
+   });
+
+   it('the sweep removes the key of each pack it deleted and leaves every other key', async () => {
+      addPack('wiretap-e2e-locked', { locked: true });
+      addPack('human', {
+         title: 'MOCK_monsters',
+         locked: true,
+      });
+      packConfiguration['world.human'] = { locked: true };
+      packConfiguration['world.wiretap-e2e-stale'] = {
+         folder: null,
+         locked: false,
+      };
+      expect(await sweepUnrecorded(page)).toEqual([`Compendium ${E2E_PREFIX}pack wiretap-e2e-locked`]);
+      expect(packConfiguration).toEqual({
+         [UNRELATED_PACK_KEY]: { folder: null },
+         'world.human': { locked: true },
+         'world.wiretap-e2e-stale': {
+            folder: null,
+            locked: false,
+         },
+      });
+   });
+
+   it('the census reports an e2e pack key whose pack no longer exists', async () => {
+      addPack('wiretap-e2e-live', { title: 'MOCK_live' });
+      packConfiguration['world.wiretap-e2e-live'] = { locked: false };
+      packConfiguration['world.wiretap-e2e-pack-1'] = {
+         folder: null,
+         locked: false,
+      };
+      packConfiguration['world.e2e-other-project'] = { locked: false };
+      expect(await censusPrefixed(page)).toEqual(['compendiumConfiguration world.wiretap-e2e-pack-1']);
    });
 });

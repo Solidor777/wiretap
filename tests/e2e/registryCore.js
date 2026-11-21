@@ -42,6 +42,17 @@ export const ALLOWED_DOCUMENT_NAMES = Object.freeze([
 /** @type {string} The document name of a recorded world compendium pack. */
 const PACK_DOCUMENT_NAME = 'Compendium';
 
+/**
+ * The core world setting that holds a configuration per pack id. `CompendiumCollection#configure` writes a pack's key
+ * and `deleteCompendium` leaves it (`client/documents/collections/compendium-collection.mjs`), so the teardown and the
+ * sweep remove the key of each e2e pack they delete.
+ * @type {string}
+ */
+const PACK_CONFIG_SETTING = 'compendiumConfiguration';
+
+/** @type {string} The id prefix of every world pack an e2e flow creates: `world.` and the slug of `E2E_PREFIX`. */
+const E2E_PACK_ID_PREFIX = 'world.wiretap-e2e-';
+
 /** @type {string} The key prefix of every Setting document an e2e flow creates; a Setting has no name. */
 export const E2E_SETTING_KEY_PREFIX = 'wiretap-e2e.';
 
@@ -341,31 +352,39 @@ async function inspectRecorded({ entries, prefix, rules, packType }) {
 /**
  * Delete the recorded documents, in the page, through `document.delete()`, and the recorded packs through
  * `pack.deleteCompendium()`, unlocking a locked pack first because `deleteCompendium` throws for a locked one
- * (`client/documents/collections/compendium-collection.mjs`). Runs in the browser; every entry was inspected first.
- * @param {{ entries: RegistryEntry[], order: string[], prefix: string, rules: IdentityRules, packType: string }} input
- * - The recorded entries, the type deletion order, the e2e name prefix, the identity rules and the document name of a
- * recorded pack.
- * @returns {Promise<void>} Resolves once the documents and packs are gone.
+ * (`client/documents/collections/compendium-collection.mjs`). Then remove from the core setting `configSetting` the key
+ * of each recorded pack that was deleted or was already gone, and no other key; the setting is written only when one
+ * of those keys is present. Runs in the browser; every entry was inspected first.
+ * @param {{ entries: RegistryEntry[], order: string[], prefix: string, rules: IdentityRules, packType: string,
+ * configSetting: string }} input - The recorded entries, the type deletion order, the e2e name prefix, the identity
+ * rules, the document name of a recorded pack and the core setting that holds the pack configurations.
+ * @returns {Promise<void>} Resolves once the documents and packs are gone and their pack keys removed.
  * @throws {Error} When a document or pack no longer passes the identity test just before its deletion.
  */
-async function deleteRecorded({ entries, order, prefix, rules, packType }) {
+async function deleteRecorded({ entries, order, prefix, rules, packType, configSetting }) {
    /** @type {RegistryEntry[]} The entries sorted so that each type is deleted in its place in the order. */
    const sorted = [...entries].sort((a, b) => order.indexOf(a.documentName) - order.indexOf(b.documentName));
+   /** @type {string[]} The ids of the recorded packs deleted here or already gone. */
+   const gonePackIds = [];
    for (const entry of sorted) {
       if (entry.documentName === packType) {
          /** @type {any} The recorded pack, or undefined when it no longer exists. */
          const pack = game.packs.get(entry.id);
-         if (!pack) {
-            continue;
+         if (pack) {
+            // The same test as the inspection, repeated for this pack immediately before it is deleted.
+            if (
+               pack.metadata.packageType !== 'world' ||
+               typeof pack.title !== 'string' ||
+               !pack.title.startsWith(prefix)
+            ) {
+               throw new Error(`${entry.id} is no longer a world pack titled with the e2e prefix.`);
+            }
+            if (pack.locked) {
+               await pack.configure({ locked: false });
+            }
+            await pack.deleteCompendium();
          }
-         // The same test as the inspection, repeated for this pack immediately before it is deleted.
-         if (pack.metadata.packageType !== 'world' || typeof pack.title !== 'string' || !pack.title.startsWith(prefix)) {
-            throw new Error(`${entry.id} is no longer a world pack titled with the e2e prefix.`);
-         }
-         if (pack.locked) {
-            await pack.configure({ locked: false });
-         }
-         await pack.deleteCompendium();
+         gonePackIds.push(entry.id);
          continue;
       }
       /** @type {any} The resolved document, or null when it no longer exists. */
@@ -390,6 +409,15 @@ async function deleteRecorded({ entries, order, prefix, rules, packType }) {
          throw new Error(`${entry.uuid} is not named with the e2e prefix or is no longer a deletable world document.`);
       }
       await document.delete();
+   }
+   /** @type {Record<string, object>} The pack configurations, keyed by pack id. */
+   const configuration = game.settings.get('core', configSetting);
+   if (gonePackIds.some((id) => Object.hasOwn(configuration, id))) {
+      await game.settings.set(
+         'core',
+         configSetting,
+         Object.fromEntries(Object.entries(configuration).filter(([id]) => !gonePackIds.includes(id))),
+      );
    }
 }
 
@@ -425,6 +453,7 @@ export async function teardownRecorded(page, { file = DEFAULT_RECORD_FILE, world
       prefix: E2E_PREFIX,
       rules: IDENTITY_RULES,
       packType: PACK_DOCUMENT_NAME,
+      configSetting: PACK_CONFIG_SETTING,
    });
    writeRecord(file, {
       ...record,
@@ -437,14 +466,16 @@ export async function teardownRecorded(page, { file = DEFAULT_RECORD_FILE, world
  * Find and delete, in the page, the world documents named with the e2e prefix and the packs titled with it. Runs in
  * the browser. A candidate is deleted only when it is a world document of an allowed type or a world pack; anything
  * else named with the prefix is reported as a violation and left alone. A locked pack is unlocked first because
- * `deleteCompendium` throws for a locked one (`client/documents/collections/compendium-collection.mjs`).
- * @param {{ prefix: string, order: string[], rules: IdentityRules, packType: string }} input - The e2e name prefix,
- * the allowed types in deletion order, the identity rules of the types that do not carry it in `name` and the
- * document name of a pack.
+ * `deleteCompendium` throws for a locked one (`client/documents/collections/compendium-collection.mjs`). The key of
+ * each deleted pack, and no other key, is then removed from the core setting `configSetting`; the setting is written
+ * only when one of those keys is present.
+ * @param {{ prefix: string, order: string[], rules: IdentityRules, packType: string, configSetting: string }} input -
+ * The e2e name prefix, the allowed types in deletion order, the identity rules of the types that do not carry it in
+ * `name`, the document name of a pack and the core setting that holds the pack configurations.
  * @returns {Promise<{ swept: string[], violations: string[] }>} The documents and packs deleted and the ones left
  * alone.
  */
-async function sweepPrefixed({ prefix, order, rules, packType }) {
+async function sweepPrefixed({ prefix, order, rules, packType, configSetting }) {
    /** @type {string[]} The documents deleted. */
    const swept = [];
    /** @type {string[]} The documents named with the prefix that were not deleted. */
@@ -509,6 +540,17 @@ async function sweepPrefixed({ prefix, order, rules, packType }) {
          await pack.deleteCompendium();
          swept.push(line);
       }
+      /** @type {string[]} The ids of the packs deleted. */
+      const deletedIds = doomedPacks.map(({ pack }) => pack.collection);
+      /** @type {Record<string, object>} The pack configurations, keyed by pack id. */
+      const configuration = game.settings.get('core', configSetting);
+      if (deletedIds.some((id) => Object.hasOwn(configuration, id))) {
+         await game.settings.set(
+            'core',
+            configSetting,
+            Object.fromEntries(Object.entries(configuration).filter(([id]) => !deletedIds.includes(id))),
+         );
+      }
    }
    return {
       swept,
@@ -535,6 +577,7 @@ export async function sweepUnrecorded(page, { world = TEST_WORLD } = {}) {
       order: [...ALLOWED_DOCUMENT_NAMES],
       rules: IDENTITY_RULES,
       packType: PACK_DOCUMENT_NAME,
+      configSetting: PACK_CONFIG_SETTING,
    });
    if (outcome.violations.length > 0) {
       throw new Error(`e2e sweep refuses to delete: ${listed(outcome.violations)}.`);
@@ -544,19 +587,29 @@ export async function sweepUnrecorded(page, { world = TEST_WORLD } = {}) {
 
 /**
  * List, in the page, what the census counts. Runs in the browser.
- * @param {{ prefix: string, order: string[], rules: IdentityRules, packType: string }} input - The e2e name prefix,
- * the world document types to scan, the identity rules of the types that do not carry it in `name` and the document
- * name of a pack.
+ * @param {{ prefix: string, order: string[], rules: IdentityRules, packType: string, configSetting: string,
+ * packIdPrefix: string }} input - The e2e name prefix, the world document types to scan, the identity rules of the
+ * types that do not carry it in `name`, the document name of a pack, the core setting that holds the pack
+ * configurations and the id prefix of an e2e pack.
  * @returns {string[]} One line per leftover.
  */
-function countLeftovers({ prefix, order, rules, packType }) {
+function countLeftovers({ prefix, order, rules, packType, configSetting, packIdPrefix }) {
    /** @type {string[]} The leftovers found. */
    const found = [];
    for (const documentName of order) {
       if (documentName === packType) {
          for (const pack of game.packs) {
-            if (pack.metadata.packageType === 'world' && typeof pack.title === 'string' && pack.title.startsWith(prefix)) {
+            if (
+               pack.metadata.packageType === 'world' &&
+               typeof pack.title === 'string' &&
+               pack.title.startsWith(prefix)
+            ) {
                found.push(`${packType} ${pack.title}`);
+            }
+         }
+         for (const id of Object.keys(game.settings.get('core', configSetting))) {
+            if (id.startsWith(packIdPrefix) && !game.packs.has(id)) {
+               found.push(`${configSetting} ${id}`);
             }
          }
          continue;
@@ -587,12 +640,13 @@ function countLeftovers({ prefix, order, rules, packType }) {
 
 /**
  * Count what a finished run must not leave in the test world: world documents named with the e2e prefix, world packs
- * titled with it, every combat, and every token whose actor no longer resolves. A non-empty result means a flow created something it did not record,
- * a teardown failed, or another run left combats behind.
+ * titled with it, `compendiumConfiguration` keys of e2e pack ids whose pack no longer exists, every combat, and every
+ * token whose actor no longer resolves. A non-empty result means a flow created something it did not record, a
+ * teardown failed, or another run left combats behind.
  * @param {EvaluatePage} page - The logged-in GM page.
  * @param {RegistryOptions} [options] - The world.
- * @returns {Promise<string[]>} One line per leftover: `<DocumentName> <name>`, `Compendium <title>`, `Combat <id>`,
- * `Token <scene>.<id>`.
+ * @returns {Promise<string[]>} One line per leftover: `<DocumentName> <name>`, `Compendium <title>`,
+ * `compendiumConfiguration <pack id>`, `Combat <id>`, `Token <scene>.<id>`.
  */
 export async function censusPrefixed(page, { world = TEST_WORLD } = {}) {
    await assertTestWorld(page, world);
@@ -601,6 +655,8 @@ export async function censusPrefixed(page, { world = TEST_WORLD } = {}) {
       order: [...ALLOWED_DOCUMENT_NAMES],
       rules: IDENTITY_RULES,
       packType: PACK_DOCUMENT_NAME,
+      configSetting: PACK_CONFIG_SETTING,
+      packIdPrefix: E2E_PACK_ID_PREFIX,
    });
 }
 

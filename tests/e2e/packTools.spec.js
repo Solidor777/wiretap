@@ -309,29 +309,11 @@ test.describe('wiretap pack tools', () => {
    test('create_pack creates the world pack, and refusals before Foundry raise no GM-screen error', async ({
       page,
    }) => {
-      await openGate(page, CREATE_GATE);
+      await expectGateClosed(page, CREATE_GATE);
       await installErrorSpy(page);
       try {
-         /** @type {{ id: string, label: string, type: string, text: string }} The created pack's ack. */
-         const created = await createPack(page);
-         expect(created.type).toBe(PACK_TYPE);
-         expect(created.id).toMatch(/^world\.wiretap-e2e-pack-\d+$/);
-         expect(created.label.startsWith(`${E2E_PREFIX}Pack `)).toBe(true);
-         expect(Object.keys(JSON.parse(created.text)).sort()).toEqual([
-            'id',
-            'label',
-            'type',
-         ]);
-         expect(bytesOf(created.text)).toBeLessThanOrEqual(ACK_MAX_BYTES);
-         expect(await page.evaluate((id) => game.packs.get(id)?.metadata.packageType, created.id)).toBe('world');
-
-         /** @type {object[]} Dry runs the handler refuses before any call reaches Foundry. */
-         const refusals = [
-            {
-               label: created.label,
-               type: PACK_TYPE,
-               dryRun: true,
-            },
+         /** @type {object[]} Malformed dry runs, sent while the gate is closed so none could create a pack. */
+         const malformed = [
             {
                label: `${E2E_PREFIX}Pack reserved`,
                type: PACK_TYPE,
@@ -350,9 +332,30 @@ test.describe('wiretap pack tools', () => {
                dryRun: true,
             },
          ];
-         for (const args of refusals) {
+         for (const args of malformed) {
             expectRefused(await callText('create_pack', args), 'ARGS_INVALID');
          }
+
+         await openGate(page, CREATE_GATE);
+         /** @type {{ id: string, label: string, type: string, text: string }} The created pack's ack. */
+         const created = await createPack(page);
+         expect(created.type).toBe(PACK_TYPE);
+         expect(created.id).toMatch(/^world\.wiretap-e2e-pack-\d+$/);
+         expect(created.label.startsWith(`${E2E_PREFIX}Pack `)).toBe(true);
+         expect(Object.keys(JSON.parse(created.text)).sort()).toEqual([
+            'id',
+            'label',
+            'type',
+         ]);
+         expect(bytesOf(created.text)).toBeLessThanOrEqual(ACK_MAX_BYTES);
+         expect(await page.evaluate((id) => game.packs.get(id)?.metadata.packageType, created.id)).toBe('world');
+
+         // The same-label collision needs the created pack, so this dry run follows the create.
+         expectRefused(await callText('create_pack', {
+            label: created.label,
+            type: PACK_TYPE,
+            dryRun: true,
+         }), 'ARGS_INVALID');
          expect(await errorSpyCalls(page)).toBe(0);
       } finally {
          await removeErrorSpy(page);
@@ -395,7 +398,7 @@ test.describe('wiretap pack tools', () => {
       expectGateDenied(await callText('delete_pack', { id: created.id }), DELETE_GATE);
       expect(await hasPack(page, created.id)).toBe(true);
 
-      await openGate(page, DELETE_GATE);
+      // The system-pack and missing-pack dry runs are sent while the gate is closed, so neither could delete a pack.
       /** @type {string | undefined} The id of a system pack, which is only ever named in a dry run. */
       const systemPackId = await page.evaluate(
          () => game.packs.find((pack) => pack.metadata.packageType === 'system')?.collection,
@@ -410,6 +413,7 @@ test.describe('wiretap pack tools', () => {
          dryRun: true,
       }), 'PACK_NOT_FOUND');
 
+      await openGate(page, DELETE_GATE);
       await installErrorSpy(page);
       try {
          await page.evaluate((id) => game.packs.get(id).configure({ locked: true }), created.id);
