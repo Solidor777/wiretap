@@ -3,7 +3,18 @@ import { initFoundryBridge } from '~/bridge/foundryBridge.js';
 import { BRIDGE_INVOKE, GATE_DENIED, OP_CALL_TOOL, OP_FAILED } from '$shared/protocol.js';
 import { registerShippedScripts } from '~/bridge/scripts/index.js';
 import { createScriptRegistry } from '~/bridge/scripts/registry.js';
+import { createCallTool } from '~/bridge/scripts/callTool.js';
 import { installWriteWorld } from './mockWriteWorld.js';
+
+// The real callTool runs; each handler it builds is wrapped in a spy so a test can see the arguments the bridge passes.
+vi.mock('~/bridge/scripts/callTool.js', async (importOriginal) => {
+   /** @type {typeof import('~/bridge/scripts/callTool.js')} The real module. */
+   const actual = await importOriginal();
+   return {
+      ...actual,
+      createCallTool: vi.fn((options) => vi.fn(actual.createCallTool(options))),
+   };
+});
 
 /**
  * Build a fake Socket.IO socket whose handlers can be fired.
@@ -73,6 +84,58 @@ afterEach(() => {
    ]) {
       delete globalThis[name];
    }
+});
+
+describe('op handler invocation', () => {
+   it('calls an op handler with the params and { requestId, pieces }', async () => {
+      const socket = makeFakeSocket();
+      initFoundryBridge(
+         { onSocket: (listener) => listener(socket) },
+         { scripts: createScriptRegistry({ log: () => {} }) },
+      );
+      /** @type {import('vitest').Mock} The spied callTool handler the bridge registered. */
+      const handler = vi.mocked(createCallTool).mock.results.at(-1).value;
+      const params = {
+         name: 'missing_script',
+         arguments: {},
+      };
+      const first = socket.fire(
+         BRIDGE_INVOKE,
+         {
+            op: OP_CALL_TOOL,
+            params,
+            requestId: 'r1',
+         },
+         vi.fn(),
+      );
+      // The handler runs before the listener's first await, so it can register a piece receiver in time.
+      expect(handler).toHaveBeenCalledTimes(1);
+      await first;
+      await socket.fire(
+         BRIDGE_INVOKE,
+         {
+            op: OP_CALL_TOOL,
+            params,
+            requestId: 'r2',
+         },
+         vi.fn(),
+      );
+      const [
+         firstCall,
+         secondCall,
+      ] = handler.mock.calls;
+      expect(firstCall[0]).toBe(params);
+      expect(firstCall[1].requestId).toBe('r1');
+      expect(Object.keys(firstCall[1]).sort()).toEqual([
+         'pieces',
+         'requestId',
+      ]);
+      expect(typeof firstCall[1].pieces.send).toBe('function');
+      expect(typeof firstCall[1].pieces.end).toBe('function');
+      expect(typeof firstCall[1].pieces.receive).toBe('function');
+      expect(secondCall[1].requestId).toBe('r2');
+      expect(secondCall[1].pieces).toBe(firstCall[1].pieces);
+   });
 });
 
 describe('the write scripts through the client bridge', () => {
