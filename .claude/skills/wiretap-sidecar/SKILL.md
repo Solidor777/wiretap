@@ -70,7 +70,7 @@ the endpoint registry and the error contract are in `server/endpoints.ts` (see `
 
 ## Script definition (`shared/scripts.js`)
 
-Plain JS with JSDoc, imported by both sides (today only `server/toolRegistry.ts` imports it). The module header documents every
+Plain JS with JSDoc, imported by both sides: `server/toolRegistry.ts`, `server/mcp.ts` (`RESERVED_SCRIPT_NAMES`), `src/bridge/foundryBridge.js` (`SCRIPT_API_VERSION`) and `src/bridge/scripts/registry.js`. The module header documents every
 field of a script definition `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate?,
 moduleId? }`. Exports: `SCRIPT_API_VERSION` (1), `SCRIPT_SOURCES` (`shipped`, `plugin`, `agent`), `SCRIPT_REQUIRES` (`none`, `api`,
 `dom`), `RESERVED_SCRIPT_NAMES` (`read_handle`), `definitionBytes(name, description, inputSchema)`,
@@ -93,24 +93,26 @@ Tests: `tests/unit/scripts.test.js`.
 
 ## Risk gates (`shared/gates.js`)
 
-Plain JS, no dependencies, shared by both sides (today only `server/` imports it; `src/` does not yet). `GATES` is the one deep-frozen registry: entries `{ type: 'boolean' | 'moduleList', default, unlocks }` for `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`, `allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites`, `allowDelete`, `allowReplace`, `allowAgentScripts` (boolean, default false) and `allowedPluginModules` (module-id list, default empty). There is no undo gate. A `GateState` is an object with exactly those keys.
+Plain JS, no dependencies, imported by `server/endpoints.ts`, `server/foundryBridge.ts`, `src/bridge/gates.js`, `src/settings/gates.js` and `src/bridge/scripts/writeGuard.js`. `GATES` is the one deep-frozen registry: entries `{ type: 'boolean' | 'moduleList', default, unlocks }` (`unlocks`: what the gate allows; `allowMacroExecution` covers `execute_macro` and writing macro or region script code, enforced in `wiretap-write-guard`) for `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`, `allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites`, `allowDelete`, `allowReplace`, `allowAgentScripts` (boolean, default false) and `allowedPluginModules` (module-id list, default empty). There is no undo gate. A `GateState` is an object with exactly those keys.
 
 - `closedGateState()` returns a fresh all-closed snapshot. `sanitizeGateState(input)` returns a fresh complete snapshot: only registry names, only own properties, booleans only for boolean gates, the module list only when an array of at most `GATE_MODULES_MAX` (64) entries (a longer array is treated as empty without being walked) keeping module ids (`/^[a-z0-9][a-z0-9_-]*$/`, 1 to `GATE_MODULE_ID_MAX_CHARS` (64) characters, duplicates removed); anything else is dropped and the gate stays closed; a non-object, or an input whose reads throw, gives the closed state.
 - `gateDenial(gateState, name, moduleId?)` returns null when open, else `{ code: 'GATE_DENIED', message }` (message at most 256 bytes, names the gate, says only a GM can enable it in the Wiretap module settings). It always sanitizes the state first, so raw or oversized module lists are never open. Deny when the name is not an own key of `GATES` (unknown-gate message names no caller text) or the sanitized value is not exactly `true`; for `allowedPluginModules` a missing `moduleId` denies and a `moduleId` must be a member of the sanitized list (the id is ignored for boolean gates). `isGateOpen(state, name, moduleId?)` is `gateDenial(...) === null`; `isModuleAllowed(state, id)` is the plugin-module form. `GATE_DENIED` is not a reserved protocol code (the client may send it).
-- `isWiretapSettingKey(key)`: non-strings never match; the key is NFKC-normalized, whitespace and control/format characters removed, lowercased; it matches the bare `wiretap` or anything starting `wiretap.`. `resolveSettingKey(documentOrKey)` reads each property once inside try/catch and returns the string key (a string input, `document.key`, or `${namespace}.${key}` when `namespace` is a string) or null. `denyWiretapSettingWrite(documentOrKey)` never throws: it returns null when the resolved key is outside the namespace and a `GATE_DENIED` denial otherwise, including when no key resolves (a by-id payload without `key`, a throwing getter or Proxy). Contract: every Setting write path calls it before any gate check and writes the string `resolveSettingKey` returned, never a re-read of the input; by-id updates are resolved to a key first; namespaced settings are passed as `{ namespace, key }`.
+- `isModuleId(value)` is the module-id test `sanitizeGateState` applies.
+- `normalizeSettingKey(key)` (string in) returns the key NFKC-normalized, whitespace and control/format characters removed, lowercased. `isWiretapSettingKey(key)`: non-strings never match; the normalized key matches the bare `wiretap` or anything starting `wiretap.`. `resolveSettingKey(documentOrKey)` reads each property once inside try/catch and returns the string key (a string input, `document.key`, or `${namespace}.${key}` when `namespace` is a string) or null. `denyWiretapSettingWrite(documentOrKey)` never throws: it returns null when the resolved key is outside the namespace and a `GATE_DENIED` denial otherwise, including when no key resolves (a by-id payload without `key`, a throwing getter or Proxy). Contract: every Setting write path calls it before any gate check and writes the string `resolveSettingKey` returned, never a re-read of the input; by-id updates are resolved to a key first; namespaced settings are passed as `{ namespace, key }`.
 
 Tests: `tests/unit/gates.test.js` (every branch enumerated; no coverage provider is installed).
 
 ## Shared budgets and document paths
 
-Plain JS with no dependencies and JSDoc types, shared by both sides. Today only `server/` imports them: `handles.ts` (`getBudget`, `resolvePaths`), `resultBudget.ts`, `mcp.ts`, `mcpSessions.ts` and `toolRegistry.ts` (`getBudget`; `MCP_SESSIONS_MAX` is the session cap, 32); nothing in `src/` does.
+Plain JS with no dependencies and JSDoc types, shared by both sides. `server/`: `handles.ts` (`getBudget`, `resolvePaths`), `resultBudget.ts`, `mcp.ts`, `mcpSessions.ts` (`MCP_SESSIONS_MAX`, 32), `toolRegistry.ts`, `handleInput.ts`, `foundryBridge.ts`. `src/`: `src/bridge/foundryBridge.js` and the scripts under `src/bridge/scripts/` (`getBudget`; the path functions in `shape.js`, `search.js`, `writes.js`).
 
 - `shared/budgets.js` — `BUDGETS` (frozen table of named entries `{ name, value, unit, severity }`), `BUDGET_SEVERITY`
   (`hard` | `warn`) and `getBudget(name)` (throws on an unknown name; inherited properties are not budgets). The numbers
-  are the context budgets (tool name, script version length, definition, description, ack, compact view, search page, error, text hard cap and
-  per-call maximum, sheet layout, image side, count and data size, stored-result entry size and count, live recalibration, paths per call, path-error bytes, `PATH_BYTES_MAX` 512,
-  `PATH_SEGMENTS_MAX` 16). `warn` entries are `DESCRIPTION_TARGET_CHARS`, `PROJECTION_BYTES_PER_10_FIELDS`,
-  `LIVE_RECALIBRATION_MAX_RUNS`. 1 KB is 1000 bytes (8000, 16000, 2000, 1000, 4000).
+  are the context budgets (names, definitions, instructions, MCP sessions and body, acks, compact views, search,
+  errors, result caps, sheet layout, images, stored results, paths with `PATH_BYTES_MAX` 512 and `PATH_SEGMENTS_MAX`
+  16, schema arrays, registry pushes, script concurrency, write calls) and the result budgets `SHEET_RESULT_MAX_BYTES`
+  128 (`open_sheet`, `close_sheet`), `ROLL_RESULT_MAX_BYTES` 512 and `DRAW_RESULT_MAX_BYTES` 1000 (`draw_table`).
+  `warn` entries are `DESCRIPTION_TARGET_CHARS`, `PROJECTION_BYTES_PER_10_FIELDS`, `LIVE_RECALIBRATION_MAX_RUNS`. 1 KB is 1000 bytes (8000, 16000, 2000, 1000, 4000).
 - `shared/docPath.js` — the path grammar over a canonical document export. `parsePath(path)` refuses non-strings,
   paths over `PATH_BYTES_MAX` bytes or `PATH_SEGMENTS_MAX` segments (`PATH_LIMIT`, checked before splitting), empty
   segments, more than one `*`, `prototype` and every member of `Object.prototype` (`UNSAFE_SEGMENTS` lists the three

@@ -193,8 +193,10 @@ method `405`.
   module configuration setting also needs `allowModuleConfigWrites`, a base64 data URI needs `allowFileUpload`, an
   `ownership` field or path needs `allowOwnershipWrites`, macro code needs `allowMacroExecution` (a Macro `command`, a
   Macro `type` changed to `script`, an Adventure's stored `macros`, or a region behavior of type `executeScript` in a
-  region, a scene or an Adventure; re-saving an existing script Macro or script behavior without new code needs no
-  gate, and a `dryRun` needs it too), a pack or a document inside one needs
+  region, a scene or an Adventure; re-stating the `script` type of a Macro that is already a script, or the
+  `executeScript` type of a behavior already of that type, needs no gate, but any write that carries a Macro's
+  `command` or an `executeScript` behavior's `system.source` needs it even when the value is unchanged, and a
+  `dryRun` needs it too), a pack or a document inside one needs
   `allowCompendiumWrites`, deleting documents needs `allowDelete` (so does any update or replace that removes embedded documents, such as a
   `replace_document` whose data leaves them out or an update with `op` `replace` or `delete` on an embedded field) and
   replacing a document needs `allowReplace` (a

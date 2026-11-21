@@ -54,8 +54,8 @@ with `userId` on every tab that connected user has open (who needs OBSERVER; the
 the data instead. `mcp__wiretap__roll` takes a `formula` (no `@` references), `mcp__wiretap__draw_table` a RollTable
 `uuid` (drawn results are marked); `toChat` (default false) posts to chat. `mcp__wiretap__execute_macro` runs a Macro
 `uuid` for `actorUuid` / `tokenUuid` (on the viewed scene), needs `allowMacroExecution` and returns its value within
-`timeoutMs` (1 s to 5 min; default 8 s). A null chat `value`: it created no message itself; a `/macro` command or
-another module may have. `tooLarge: true` (with `bytes`): it ran, its value dropped: that alone does not show it worked.
+`timeoutMs` (1 s to 5 min; default 8 s). A null chat `value`: no message of its own, or its command failed; a `/macro`
+or a module may have. `tooLarge: true` (with `bytes`): it ran, its value dropped: that alone does not show it worked.
 
 ## Errors you may meet
 - `ARGS_INVALID` (names the argument), `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `PATH_*`, `CURSOR_INVALID`, `SCRIPT_BUSY`

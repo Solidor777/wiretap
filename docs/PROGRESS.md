@@ -502,8 +502,11 @@ follow):**
     `tooLarge: true` and its size in bytes; the user-facing skill says this alone does not show the macro worked.
   - `allowMacroExecution` also gates writing code that later runs: a Macro `command`, a Macro `type` changed to
     `script`, an Adventure's stored `macros`, and a region behavior of type `executeScript` (in a scene, a region or an
-    Adventure). The type rules are change-only: re-saving a script Macro or an existing script behavior without new
-    code is not refused. Author/user fields, `_stats.createdTime` and folder/sort stay ungated (`docs/TODO.md`).
+    Adventure). Only the type rules are change-only: re-stating the `script` type of a script Macro, or the
+    `executeScript` type of a behavior already of that type, is not refused. Any write that carries a Macro's
+    `command` or an `executeScript` behavior's `system.source` needs the gate even when the value is unchanged: the
+    guard reads the raw values and the cleaned changes, and Foundry's cleaning keeps unchanged values. Author/user
+    fields, `_stats.createdTime` and folder/sort stay ungated (`docs/TODO.md`).
   - The user-facing skill limit is 70 lines (was 60).
   - Approved: per-family definition files (`sheetDefinitions.js`, `diceDefinitions.js`, `macroDefinitions.js`) so no
     two lanes write one file; six new error codes (`SHEET_UNAVAILABLE`, `SHEET_DENIED`, `USER_OFFLINE`,

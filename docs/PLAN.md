@@ -598,8 +598,9 @@ the tool description); irreversible deletes (D12a, `dryRun`).
 - `draw_table(uuid, toChat?)`, `toChat` default false.
 - `execute_macro(uuid, actorUuid?, tokenUuid?, timeoutMs?)` (gate `allowMacroExecution`): `actorUuid` and
   `tokenUuid` name the Actor and the Token (on the scene the executing client views) the macro acts on. A macro that
-  ran is never reported as failed: a value too large for the wire comes back as a success with `tooLarge: true`, and
-  the user-facing skill says such a result does not by itself show the macro did what was wanted.
+  finished is never reported as failed because of its value: a value too large for the wire comes back as a success
+  with `tooLarge: true`, and the user-facing skill says such a result does not by itself show the macro did what was
+  wanted. A macro that threw is `MACRO_FAILED` ("it may have partly run").
 - `timeoutMs` (integer, 1,000 to 300,000, default 8,000) is a shared optional argument: any script whose input schema
   declares it runs under that call's limit on the executing client, and the sidecar waits `timeoutMs` + 2 s for that
   call's reply. Scripts without it keep the 8 s limit and the 10 s wait. Only `execute_macro` declares it.
