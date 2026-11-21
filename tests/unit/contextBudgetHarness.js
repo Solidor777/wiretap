@@ -56,8 +56,8 @@ import { reservePort } from '../portPool.js';
 const MODULE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /**
- * @type {string} The directory a module-level skill set would ship in. No such directory exists yet, so the skill
- * scan finds nothing; it starts checking as soon as one appears.
+ * @type {string} The directory the module-level skill set ships in (`skills/wiretap/SKILL.md`). The skill scan reads
+ * every `.md` file under it; a missing directory makes the scan find nothing.
  */
 export const DEFAULT_SKILLS_ROOT = path.join(MODULE_ROOT, 'skills');
 
@@ -673,6 +673,164 @@ export const FIXTURES = {
          },
       },
    ],
+   open_sheet: [
+      {
+         label: 'opened on a user\'s client with a 100-byte app id',
+         budget: 'SHEET_RESULT_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               ok: true,
+               appId: 'M'.repeat(100),
+            }));
+            return client.callTool({
+               name: 'open_sheet',
+               arguments: {
+                  uuid: 'Actor.MOCKACTOR0000001',
+                  userId: 'MOCKUSER00000001',
+               },
+            });
+         },
+      },
+      {
+         label: 'user not connected',
+         budget: 'ERROR_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck({
+               ok: false,
+               error: {
+                  code: 'USER_OFFLINE',
+                  message: 'The user MOCK_USER_A is not connected, so no client can show the sheet. '.padEnd(200, '.'),
+               },
+            });
+            return client.callTool({
+               name: 'open_sheet',
+               arguments: {
+                  uuid: 'Actor.MOCKACTOR0000001',
+                  userId: 'MOCKUSER00000001',
+               },
+            });
+         },
+      },
+   ],
+   close_sheet: [
+      {
+         label: 'closed on a user\'s client',
+         budget: 'SHEET_RESULT_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               ok: true,
+               closed: true,
+            }));
+            return client.callTool({
+               name: 'close_sheet',
+               arguments: {
+                  uuid: 'Actor.MOCKACTOR0000001',
+                  userId: 'MOCKUSER00000001',
+               },
+            });
+         },
+      },
+   ],
+   roll: [
+      {
+         label: 'roll cut to its budget',
+         budget: 'ROLL_RESULT_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               total: 512,
+               formula: '140d6+40d10+20d20kh10',
+               dice: [
+                  [
+                     6,
+                     Array.from({ length: 140 }, (_, index) => (index % 6) + 1),
+                  ],
+                  [
+                     10,
+                     Array.from({ length: 40 }, (_, index) => (index % 9) + 1),
+                  ],
+                  [
+                     20,
+                     Array.from({ length: 10 }, (_, index) => index + 10),
+                     Array.from({ length: 10 }, (_, index) => index + 1),
+                  ],
+               ],
+               cut: true,
+            }));
+            return client.callTool({
+               name: 'roll',
+               arguments: { formula: '140d6+40d10+20d20kh10' },
+            });
+         },
+      },
+   ],
+   draw_table: [
+      {
+         label: 'draw of several long results',
+         budget: 'DRAW_RESULT_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               total: 7,
+               results: Array.from({ length: 4 }, (_, index) => ({
+                  name: `MOCK_RESULT_${index}`,
+                  text: `MOCK result text ${index}: ${'t'.repeat(120)}`,
+                  uuid: `RollTable.MOCKTABLE0000001.TableResult.MOCKRESULT00000${index}`,
+               })),
+               count: 4,
+            }));
+            return client.callTool({
+               name: 'draw_table',
+               arguments: { uuid: 'RollTable.MOCKTABLE0000001' },
+            });
+         },
+      },
+      {
+         label: 'nothing drawable',
+         budget: 'ERROR_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck({
+               ok: false,
+               error: {
+                  code: 'TABLE_EMPTY',
+                  message: 'The table has no result left to draw in the range of its formula.',
+               },
+            });
+            return client.callTool({
+               name: 'draw_table',
+               arguments: { uuid: 'RollTable.MOCKTABLE0000001' },
+            });
+         },
+      },
+   ],
+   execute_macro: [
+      {
+         label: 'small value',
+         budget: 'RESULT_HARD_CAP_DEFAULT_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               type: 'script',
+               value: 5,
+            }));
+            return client.callTool({
+               name: 'execute_macro',
+               arguments: { uuid: 'Macro.MOCKMACRO0000001' },
+            });
+         },
+      },
+      {
+         label: 'a 12 KB value becomes a handle',
+         budget: 'ACK_MAX_BYTES',
+         run: ({ client, setGmAck }) => {
+            setGmAck(okAck({
+               type: 'script',
+               value: 'v'.repeat(12000),
+            }));
+            return client.callTool({
+               name: 'execute_macro',
+               arguments: { uuid: 'Macro.MOCKMACRO0000001' },
+            });
+         },
+      },
+   ],
    read_handle: [
       {
          label: 'window at the largest per-call cap',
@@ -806,6 +964,8 @@ export async function startHarness({ tools = [], instructions, registry } = {}) 
          isGM: true,
          kind: 'human',
          dom: true,
+         // The macro gate is open so the `execute_macro` fixtures reach the fake GM instead of the sidecar's denial.
+         gateState: { allowMacroExecution: true },
       });
       await gm.emitWithAck(BRIDGE_REGISTRY, registryPayload([
          ...shippedScripts(),

@@ -1,5 +1,6 @@
 import { createDocumentsHandler } from '~/bridge/scripts/createDocuments.js';
 import { batchHandler } from '~/bridge/scripts/batch.js';
+import { closeSheetHandler } from '~/bridge/scripts/closeSheet.js';
 import {
    batchDefinition,
    createDocumentsDefinition,
@@ -13,11 +14,18 @@ import {
 } from '~/bridge/scripts/definitions.js';
 import { deleteDocumentsHandler } from '~/bridge/scripts/deleteDocuments.js';
 import { describeSchemaHandler } from '~/bridge/scripts/describeSchema.js';
+import { drawTableDefinition, rollDefinition } from '~/bridge/scripts/diceDefinitions.js';
+import { drawTableHandler } from '~/bridge/scripts/drawTable.js';
+import { executeMacroHandler } from '~/bridge/scripts/executeMacro.js';
 import { getDocumentHandler } from '~/bridge/scripts/getDocument.js';
 import { listDocumentTypesHandler } from '~/bridge/scripts/listDocumentTypes.js';
+import { executeMacroDefinition } from '~/bridge/scripts/macroDefinitions.js';
+import { openSheetHandler } from '~/bridge/scripts/openSheet.js';
 import { replaceDocumentHandler } from '~/bridge/scripts/replaceDocument.js';
+import { rollHandler } from '~/bridge/scripts/roll.js';
 import { searchDocumentsHandler } from '~/bridge/scripts/searchDocuments.js';
 import { scriptRegistry } from '~/bridge/scripts/registry.js';
+import { closeSheetDefinition, openSheetDefinition } from '~/bridge/scripts/sheetDefinitions.js';
 import { updateDocumentsHandler } from '~/bridge/scripts/updateDocuments.js';
 
 /**
@@ -60,6 +68,26 @@ export const SHIPPED_SCRIPTS = Object.freeze([
    {
       definition: batchDefinition,
       handler: batchHandler,
+   },
+   {
+      definition: openSheetDefinition,
+      handler: openSheetHandler,
+   },
+   {
+      definition: closeSheetDefinition,
+      handler: closeSheetHandler,
+   },
+   {
+      definition: rollDefinition,
+      handler: rollHandler,
+   },
+   {
+      definition: drawTableDefinition,
+      handler: drawTableHandler,
+   },
+   {
+      definition: executeMacroDefinition,
+      handler: executeMacroHandler,
    },
 ]);
 

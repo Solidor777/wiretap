@@ -15,6 +15,9 @@ import {
    searchDocumentsDefinition,
    updateDocumentsDefinition,
 } from '../../src/bridge/scripts/definitions.js';
+import { drawTableDefinition, rollDefinition } from '../../src/bridge/scripts/diceDefinitions.js';
+import { executeMacroDefinition } from '../../src/bridge/scripts/macroDefinitions.js';
+import { closeSheetDefinition, openSheetDefinition } from '../../src/bridge/scripts/sheetDefinitions.js';
 
 /**
  * Build a valid shipped script definition; fields in `overrides` replace the defaults.
@@ -91,6 +94,11 @@ export function shippedScripts() {
       deleteDocumentsDefinition,
       replaceDocumentDefinition,
       batchDefinition,
+      openSheetDefinition,
+      closeSheetDefinition,
+      rollDefinition,
+      drawTableDefinition,
+      executeMacroDefinition,
    ].map((definition) => structuredClone(definition));
 }
 

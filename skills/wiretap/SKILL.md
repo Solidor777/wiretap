@@ -49,12 +49,22 @@ per document), `updates` (patches) and `deletes`, run in that order; a key an en
 write a stored full read, give `"handle:<handle>"` as a `data` text of `create_documents` or `replace_document`; the
 gates still judge it (up to 100,000 bytes a text, 200,000 in all; `HANDLE_NOT_DOCUMENT` if it is not one document).
 
+**Sheets.** `mcp__wiretap__open_sheet` with `uuid` opens a sheet on the client running the call, or with `userId` on
+that connected user's client (who needs OBSERVER); `mcp__wiretap__close_sheet` with the same arguments closes it there.
+With no human connected a sheet is seen by no one: read the data instead.
+
+**Dice, tables and macros.** `mcp__wiretap__roll` takes a `formula` (no `@` references), `mcp__wiretap__draw_table` a
+RollTable `uuid` (drawn results are marked); `toChat` (default false) posts to chat. `mcp__wiretap__execute_macro` runs
+a Macro `uuid` for `actorUuid` / `tokenUuid` (on the viewed scene), needs `allowMacroExecution`, returns its value.
+
 ## Errors you may meet
 
-- `ARGS_INVALID` (names the argument), `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `PATH_*`, `CURSOR_INVALID`, `SCRIPT_BUSY` (retry),
-  `VALIDATION_FAILED` (up to 10 failures and the count; nothing written).
-- `GATE_DENIED`: a GM setting is closed (`allowDelete`: delete_documents, batch deletes, anything that removes embedded
-  documents; `allowReplace`: replace_document; others), or the write is never allowed (a `wiretap.*` setting, a User password, the `flags.wiretap`
-  scope, erasing `flags`). Tell the user which gate; you cannot open it. `DELETE_REFUSED`: the signed-in user or last GM.
-- `WRITE_NOT_APPLIED`, `SCRIPT_TIMEOUT` (8 s), `ENDPOINT_TIMEOUT`: the write may still have applied; check before retrying.
-  `RESULT_TOO_LARGE`: read with `paths`.
+- `ARGS_INVALID` (names the argument), `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `PATH_*`, `CURSOR_INVALID`, `SCRIPT_BUSY`
+  (retry), `VALIDATION_FAILED` (up to 10 failures and the count; nothing written), `TABLE_EMPTY` (nothing left to draw),
+  `MACRO_FAILED` (it threw), `USER_OFFLINE`, `SHEET_DENIED` (no OBSERVER), `SHEET_UNAVAILABLE`, `SHEET_QUERY_FAILED`.
+- `GATE_DENIED`: a GM setting is closed (`allowDelete`: delete_documents, batch deletes, removing embedded documents;
+  `allowReplace`: replace_document; `allowMacroExecution`: execute_macro, writing macro code (a Macro command, a type
+  set to script, an Adventure's macros); others), or the write is never allowed (a `wiretap.*` setting, a User password,
+  the `flags.wiretap` scope, erasing `flags`). Tell the user which gate; you cannot open it.
+- `WRITE_NOT_APPLIED`, `SCRIPT_TIMEOUT` (8 s; a macro may run on), `ENDPOINT_TIMEOUT`: it may still have applied; check
+  before retrying. `RESULT_TOO_LARGE`: read with `paths`. `DELETE_REFUSED`: the signed-in user or last GM.

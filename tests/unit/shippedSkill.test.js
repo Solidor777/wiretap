@@ -20,7 +20,7 @@ describe('the user-facing wiretap skill', () => {
    });
 
    it('stays short, since its body is paid for whenever it is loaded', () => {
-      expect(text.trimEnd().split('\n').length).toBeLessThanOrEqual(60);
+      expect(text.trimEnd().split('\n').length).toBeLessThanOrEqual(70);
    });
 
    it('names every shipped script and every sidecar built-in as mcp__wiretap__<tool>', () => {

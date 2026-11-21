@@ -133,6 +133,11 @@ describe('shipped scripts', () => {
          'delete_documents',
          'replace_document',
          'batch',
+         'open_sheet',
+         'close_sheet',
+         'roll',
+         'draw_table',
+         'execute_macro',
       ]);
    });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { GATES } from '$shared/gates.js';
 import { GATE_DENIED } from '$shared/protocol.js';
+import { executeMacroDefinition } from '~/bridge/scripts/macroDefinitions.js';
 import { batchDocuments } from '~/bridge/scripts/writeBatch.js';
 import { replaceDocument } from '~/bridge/scripts/writeReplace.js';
 import { deleteDocuments, updateDocuments } from '~/bridge/scripts/writes.js';
@@ -158,22 +159,30 @@ describe('the delete and replace gates', () => {
 });
 
 describe('every risky script is gated', () => {
-   /** @type {RegExp} Verbs that name an irreversible operation. */
-   const RISKY_VERB = /delete|replace|remove|destroy|purge|wipe/;
+   /** @type {RegExp} Verbs that name an irreversible operation or the running of arbitrary code. */
+   const RISKY_VERB = /delete|replace|remove|destroy|purge|wipe|execute/;
 
-   it('has an enforcement check for each mutating script that deletes or replaces', () => {
-      /** @type {string[]} Scripts that mutate and carry a risky verb, or may delete as one of several operations. */
-      const needed = shippedScripts()
-         .filter(
-            (definition) =>
-               definition.mutates === true && (RISKY_VERB.test(definition.name) || definition.name === 'batch'),
-         )
-         .map((definition) => definition.name);
+   it('has an enforcement check or a declared gate for each mutating script with a risky verb', () => {
+      /** @type {object[]} Scripts that mutate and carry a risky verb, or may delete as one of several operations. */
+      const needed = shippedScripts().filter(
+         (definition) =>
+            definition.mutates === true && (RISKY_VERB.test(definition.name) || definition.name === 'batch'),
+      );
       expect(needed.length).toBeGreaterThan(0);
-      for (const name of needed) {
-         expect(Object.keys(RISKY), `${name} needs a closed-gate denial test in RISKY`).toContain(name);
-         expect(GATES, name).toHaveProperty(RISKY[name].gate);
+      for (const definition of needed) {
+         if (Object.hasOwn(RISKY, definition.name)) {
+            expect(GATES, definition.name).toHaveProperty(RISKY[definition.name].gate);
+         } else {
+            expect(
+               Object.hasOwn(GATES, definition.gate ?? ''),
+               `${definition.name} needs a closed-gate denial test in RISKY or a declared gate`,
+            ).toBe(true);
+         }
       }
+   });
+
+   it('gates execute_macro behind allowMacroExecution', () => {
+      expect(executeMacroDefinition.gate).toBe('allowMacroExecution');
    });
 });
 

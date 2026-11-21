@@ -58,22 +58,29 @@ describe('the core read tools over the bridge', () => {
       const { client } = await harness.connectClient();
       await expect.poll(() => harness.toolNames(client), { timeout: 1000 }).toEqual([
          'batch',
+         'close_sheet',
          'create_documents',
          'delete_documents',
          'describe_schema',
+         'draw_table',
+         'execute_macro',
          'get_document',
          'list_document_types',
+         'open_sheet',
          'read_handle',
          'replace_document',
+         'roll',
          'search_documents',
          'update_documents',
       ]);
       /** @type {{ tools: Array<{ name: string }> }} The tools the session lists. */
       const { tools } = await client.listTools();
       for (const name of [
+         'close_sheet',
          'describe_schema',
          'get_document',
          'list_document_types',
+         'open_sheet',
          'search_documents',
       ]) {
          expect(tools.find((tool) => tool.name === name).annotations).toMatchObject({ readOnlyHint: true });
@@ -82,7 +89,10 @@ describe('the core read tools over the bridge', () => {
          'batch',
          'create_documents',
          'delete_documents',
+         'draw_table',
+         'execute_macro',
          'replace_document',
+         'roll',
          'update_documents',
       ]) {
          expect(tools.find((tool) => tool.name === name).annotations).toMatchObject({ readOnlyHint: false });
