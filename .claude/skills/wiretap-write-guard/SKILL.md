@@ -1,6 +1,6 @@
 ---
 name: wiretap-write-guard
-description: Wiretap write guard - guardWrite and its gates (allowDelete, allowReplace, allowPackDeletion beside them, user, setting, ownership, file upload, macro and region script code, compendium), the one reader of Foundry update operators (shared/writeKeys.js), the schema-based embedded-field analysis and cleaned-changes backstop (writeFields.js), the write path grammar (shared/docPath.js groupWrites) and the generated operator grid. Use when reading or editing the guard, operators, gates or their tests.
+description: Wiretap write guard - guardWrite and its gates (allowDelete, allowReplace, user, setting, ownership, file upload, macro and region script code, compendium; allowPackDeletion is not read by guardWrite, only by delete_pack's handler), the one reader of Foundry update operators (shared/writeKeys.js), the schema-based embedded-field analysis and cleaned-changes backstop (writeFields.js), the write path grammar (shared/docPath.js groupWrites) and the generated operator grid. Use when reading or editing the guard, operators, gates or their tests.
 paths:
   - "src/bridge/scripts/writeGuard.js"
   - "src/bridge/scripts/writeFields.js"

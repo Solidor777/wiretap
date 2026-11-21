@@ -273,10 +273,14 @@ method `405`.
   `allowCompendiumWrites` and a real `delete_pack` needs `allowPackDeletion`; each checks its gate first, so a closed
   gate reveals nothing about the world's packs, and a dry run needs no gate. Wiretap makes each of these refusals
   before Foundry is called, so it shows no error on the GM screen. Both results are at most 256 bytes (a long label is
-  cut). **The human is asked before every `delete_pack` call** in Claude Code, at every permission level: the sidecar
-  lists `delete_pack` with `_meta["anthropic/requiresUserInteraction"]: true` whatever a client registers. That prompt
-  is enforced by Claude Code, so another MCP client or a local process is not prompted; the `allowPackDeletion` gate
-  stays Wiretap's own control (the residual risk).
+  cut). **Asking the human before `delete_pack`.** Measured here (integration and e2e tests): the sidecar lists
+  `delete_pack` with `_meta["anthropic/requiresUserInteraction"]: true` whatever the GM client's definition says.
+  Documented by Claude Code, not tested in this project: Claude Code shows the permission prompt of such a tool on
+  every call, in every permission mode (`acceptEdits`, `auto` and `bypassPermissions` included), and an allow rule that
+  matches the tool does not skip it ([Claude Code MCP docs](https://code.claude.com/docs/en/mcp), "Require approval for
+  a specific tool"; the third-party guide <https://wikidocs.net/458156> gives v2.1.199 as the first version). That
+  prompt is shown by Claude Code, so another MCP client or a local process is not prompted; the `allowPackDeletion`
+  gate stays Wiretap's own control (the residual risk).
 - **Expiry and cap.** A session expires after 30 minutes without a request that carries its id (an open event stream
   alone does not count). At most 32 sessions are held; an `initialize` beyond that is refused with `503` and a
   `Retry-After` header and no held session is ended, so one client cannot push another's session out. The idle sweep (one

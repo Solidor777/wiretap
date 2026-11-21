@@ -160,14 +160,22 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
 - Title: A deleted pack leaves its key in `compendiumConfiguration`. Summary: after `delete_pack` removes a world pack
   on the live world (14.364), the core world setting `compendiumConfiguration` still holds an entry for the deleted
   pack id, `{"folder":null,"locked":false}`. Inferred, not measured: a pack created later with the same name reads
-  that entry. Status: MEASURED in the M18 pack e2e run (`tests/e2e/packTools.spec.js`); left as Foundry's own
-  setting, which Wiretap does not write.
+  that entry. Status: MEASURED in the M18 pack e2e run (`tests/e2e/packTools.spec.js`). The product's `delete_pack`
+  still leaves the key (Foundry's own delete does the same; `deleteCompendium` does not touch the setting), while the
+  e2e running list cleans its own: its teardown and sweep remove the key of each e2e pack they delete, and the census
+  reports a stale `world.wiretap-e2e-*` key (`tests/e2e/registryCore.js`).
 
 - Title: The `delete_pack` prompt is not verified in Claude Code itself. Summary: the sidecar lists `delete_pack` with
-  `_meta["anthropic/requiresUserInteraction"]: true`, and `tests/integration/userInteractionMeta.test.js` proves the
-  MCP SDK client receives it. Whether Claude Code shows a prompt on it, and whether it still prompts when
-  `mcp__wiretap__*` is allow-listed, is not tested. The `allowPackDeletion` gate is the Wiretap-side control either
-  way. Status: UNVERIFIED.
+  `_meta["anthropic/requiresUserInteraction"]: true` whatever the GM client's definition says;
+  `tests/integration/userInteractionMeta.test.js` proves the MCP SDK client receives it and
+  `tests/e2e/packTools.spec.js` sees it in the live listing. What the docs state (READ,
+  https://code.claude.com/docs/en/mcp, "Require approval for a specific tool"): Claude Code shows such a tool's
+  permission prompt on every call, in every permission mode including `bypassPermissions`, and an allow rule that
+  matches it does not skip the prompt; the third-party guide https://wikidocs.net/458156 gives v2.1.199 as the first
+  version (that page refused an automated fetch, so the version is not checked here). What stays unverified here: that
+  this project's own Claude Code shows the prompt on a `delete_pack` call, and whether Claude Desktop honours the
+  entry at all (an open issue reports that it may drop per-tool `_meta`). Another MCP client or a local process is not
+  prompted; the `allowPackDeletion` gate is the Wiretap-side control either way. Status: UNVERIFIED.
 
 - Title: The `create_pack` collision check scans every pack id. Summary: the check that ignores case compares
   `world.<name>` with every key of `game.packs`, not only world packs, so a package whose id is `world` in another

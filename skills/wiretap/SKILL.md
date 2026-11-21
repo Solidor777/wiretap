@@ -35,9 +35,9 @@ atomic: Foundry checks all first, stops at the first failure and keeps what it d
 operations applied". `actAs` (a user id) on any write only checks that user's permission first (`ACT_AS_DENIED`).
 - **Compendium packs.** `mcp__wiretap__create_pack` (`label`, `type` a document type like `Actor`, optional `name`)
 makes an empty world pack; needs `allowCompendiumWrites`. `mcp__wiretap__delete_pack` (`id` is `world.<name>`) removes
-an unlocked world pack and every document in it for good; needs `allowPackDeletion`; Claude Code asks the human on every
-call. `dryRun` on both works with every gate closed (`delete_pack`'s lists the document count). Locked: `PACK_LOCKED`
-(the GM unlocks it in Foundry); absent: `PACK_NOT_FOUND`; system and module packs are refused.
+an unlocked world pack and every document in it for good; needs `allowPackDeletion`; marked so Claude Code (v2.1.199+,
+documented, untested here) prompts the human on every call. `dryRun` on both works with every gate closed (delete's
+lists the count). Locked: `PACK_LOCKED` (the GM unlocks it); absent: `PACK_NOT_FOUND`; system, module packs refused.
 - **Backups.** Before a bulk update (about 10+ documents), any `replace_document`, delete or `delete_pack`, or a
 document-changing `execute_macro`, make or offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded one
 saves its parent) or one `folderUuid`, `documentName` or `pack` (`pack` before `delete_pack`), and a `note`. Tell the

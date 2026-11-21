@@ -587,8 +587,16 @@ recycle-bin removal):**
   create with refusals that raise no GM-screen error, a `delete_pack` dry run with the document count, and the denied,
   refused and real delete.
 - `compendiumConfiguration` (MEASURED in that run): a deleted pack's key stays in the core world setting as
-  `{"folder":null,"locked":false}`; Foundry does not prune it (`POST_WORK_FINDINGS.md` has the entry).
-- Unit suite after M18 (MEASURED, `npm test` at `e15d83b`): 129 files, 2876 passed, 2 skipped.
+  `{"folder":null,"locked":false}`; Foundry does not prune it, and the product's `delete_pack` leaves it too
+  (`POST_WORK_FINDINGS.md` has the entry).
+- The e2e running list cleans its own pack keys (`1361027`, `tests/e2e/registryCore.js`): the teardown removes the
+  `compendiumConfiguration` key of each recorded e2e pack it deletes or finds already gone, the sweep the key of each
+  pack it deletes, and neither touches any other key; the census reports a stale `world.wiretap-e2e-*` key whose pack
+  is gone. Two stale keys left by this milestone's own earlier e2e runs were removed once from the live world (42 to
+  40 keys, every other key unchanged). The malformed `create_pack` dry runs and the system-pack and missing-pack
+  `delete_pack` dry runs are sent with their gate closed.
+- Unit suite after M18 (MEASURED, `npm test` at `e15d83b`): 129 files, 2876 passed, 2 skipped; at `1361027`: 129
+  files, 2880 passed, 2 skipped, and `tests/e2e/packTools.spec.js` 6 passed.
 - `skills/wiretap/SKILL.md` is 74 lines; its cap in `tests/unit/shippedSkill.test.js` is 75 (the owner ruled such
   limits are the agent's to settle).
 - `create_pack` refuses a name equal to an existing pack id's name ignoring case and names that pack id, because the

@@ -91,7 +91,9 @@ Every refusal is made before Foundry is called, so it shows no error notificatio
 Returns a copy of the row when its JSON is at most `ACK_MAX_BYTES`. Otherwise only `label` is cut (a pack title has no
 length limit in Foundry; `id`, `type` and `documents` are never cut): from `min(utf8Bytes(label) - 1, labelBudget - 2)`
 downward it tries `truncateUtf8(label, limit)` until the row JSON fits, counting the label's JSON escapes; an empty
-label when nothing fits. Error messages stay within 256 B (`ScriptError`).
+label when nothing fits. Error messages stay within 256 B because their texts are fixed and the only caller text they
+echo goes through `cleanForLog` at 64 B (`ECHO_MAX_BYTES` in `createPack.js`, `ID_ECHO_MAX_BYTES` in `deletePack.js`);
+`tests/unit/createPack.test.js` and `tests/unit/deletePack.test.js` assert every refusal message at most 256 B.
 
 ## Tests
 
