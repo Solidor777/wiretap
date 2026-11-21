@@ -24,6 +24,7 @@ import { GATE_DENIED } from './protocol.js';
  * @property {boolean} allowModuleConfigWrites - Writes to the module configuration setting.
  * @property {boolean} allowDelete - Deleting documents (delete_documents and the deletes of a batch).
  * @property {boolean} allowReplace - Replacing whole documents (replace_document).
+ * @property {boolean} allowPackDeletion - Deleting a world compendium pack and every document in it (delete_pack).
  * @property {boolean} allowBackupAnyFolder - Backup files in a folder other than the default or the Backup folder
  * setting.
  * @property {boolean} allowAgentScripts - Saving and running agent-saved scripts (arbitrary code).
@@ -94,6 +95,11 @@ export const GATES = Object.freeze({
       'boolean',
       false,
       'Replacing documents or embedded collections; fields left out reset to defaults.',
+   ),
+   allowPackDeletion: entry(
+      'boolean',
+      false,
+      'Deleting a world compendium pack and every document in it for good (delete_pack).',
    ),
    allowBackupAnyFolder: entry(
       'boolean',
