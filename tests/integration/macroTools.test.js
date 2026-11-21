@@ -93,7 +93,7 @@ describe('execute_macro over the bridge', () => {
       expect(gm.invokes[0].params.arguments).toEqual(ARGUMENTS);
    });
 
-   it('refuses an undeclared argument before anything is sent', async () => {
+   it('refuses the undeclared actor argument before anything is sent, and forwards the call without it', async () => {
       const { gm, client } = await connect();
       await gm.pushGates({
          ...closedGateState(),
@@ -109,6 +109,14 @@ describe('execute_macro over the bridge', () => {
          })
          .catch((error) => error);
       expect(refused.isError).toBe(true);
+      expect(textOf(refused)).toMatch(/"code": "unrecognized_keys",\s*"keys": \[\s*"actor"\s*\]/);
       expect(gm.invokes).toHaveLength(0);
+      const forwarded = await client.callTool({
+         name: 'execute_macro',
+         arguments: { uuid: ARGUMENTS.uuid },
+      });
+      expect(forwarded.isError).not.toBe(true);
+      expect(gm.invokes).toHaveLength(1);
+      expect(gm.invokes[0].params.arguments).toEqual({ uuid: ARGUMENTS.uuid });
    });
 });

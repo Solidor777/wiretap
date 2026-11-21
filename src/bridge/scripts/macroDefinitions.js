@@ -9,7 +9,9 @@ import { getBudget } from '../../../shared/budgets.js';
  * The `execute_macro` definition. A macro is arbitrary code, so the script declares the `allowMacroExecution` gate,
  * which the sidecar judges on the endpoint snapshot and the `callTool` dispatcher judges again on this client before
  * validation and before the handler. The result is the macro's value, so it takes the hard cap and the sidecar turns
- * anything larger into a handle.
+ * anything larger into a handle. `timeoutMs` is the shared time-limit argument the `callTool` dispatcher and the
+ * sidecar both read: from 1 s to 5 minutes, so a macro can wait on a player's dialog but a typo cannot hang a call
+ * for days; absent, the limit is 8 s.
  * @type {import('$shared/scripts.js').ScriptDefinition}
  */
 export const executeMacroDefinition = {
@@ -24,6 +26,11 @@ export const executeMacroDefinition = {
          uuid: { type: 'string' },
          actorUuid: { type: 'string' },
          tokenUuid: { type: 'string' },
+         timeoutMs: {
+            type: 'integer',
+            minimum: 1000,
+            maximum: 300_000,
+         },
       },
       required: ['uuid'],
       additionalProperties: false,

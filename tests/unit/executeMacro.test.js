@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { getBudget } from '$shared/budgets.js';
 import { GATE_DENIED } from '$shared/protocol.js';
-import { createCallTool } from '~/bridge/scripts/callTool.js';
+import { createCallTool, RESULT_WIRE_MAX_BYTES } from '~/bridge/scripts/callTool.js';
 import { createScriptRegistry } from '~/bridge/scripts/registry.js';
 import { executeMacroDefinition } from '~/bridge/scripts/macroDefinitions.js';
 import { executeMacroHandler } from '~/bridge/scripts/executeMacro.js';
@@ -161,10 +161,95 @@ describe('execute_macro definition', () => {
             uuid: { type: 'string' },
             actorUuid: { type: 'string' },
             tokenUuid: { type: 'string' },
+            timeoutMs: {
+               type: 'integer',
+               minimum: 1000,
+               maximum: 300_000,
+            },
          },
          required: ['uuid'],
          additionalProperties: false,
       });
+   });
+
+   it.each([
+      [
+         999,
+         'timeoutMs: must be at least 1000',
+      ],
+      [
+         300_001,
+         'timeoutMs: must be at most 300000',
+      ],
+      [
+         1500.5,
+         'timeoutMs: expected an integer',
+      ],
+   ])('refuses timeoutMs %s through callTool before the macro runs', async (timeoutMs, message) => {
+      const registry = createScriptRegistry({ log: () => {} });
+      registry.register(executeMacroDefinition, executeMacroHandler);
+      const callTool = createCallTool({ registry });
+      gates.allowMacroExecution = true;
+      const error = await outcome(() => callTool({
+         name: 'execute_macro',
+         arguments: {
+            uuid,
+            timeoutMs,
+         },
+      }));
+      expect(error?.code).toBe('ARGS_INVALID');
+      expect(error.message).toBe(message);
+      expect(macro.execute).not.toHaveBeenCalled();
+   });
+});
+
+describe('execute_macro time limit', () => {
+   afterEach(() => {
+      vi.useRealTimers();
+   });
+
+   /**
+    * Start a call to a macro that never finishes and return its pending outcome.
+    * @param {Record<string, unknown>} args - The call's arguments.
+    * @returns {Promise<Error | null>} The call's rejection, or null when it resolved.
+    */
+   function hangingCall(args) {
+      const registry = createScriptRegistry({ log: () => {} });
+      registry.register(executeMacroDefinition, executeMacroHandler);
+      const callTool = createCallTool({ registry });
+      gates.allowMacroExecution = true;
+      macro.execute.mockImplementation(() => new Promise(() => {}));
+      return outcome(() => callTool({
+         name: 'execute_macro',
+         arguments: args,
+      }));
+   }
+
+   it('runs under the call\'s timeoutMs', async () => {
+      vi.useFakeTimers();
+      /** @type {Promise<Error | null>} The pending call. */
+      const pending = hangingCall({
+         uuid,
+         timeoutMs: 20_000,
+      });
+      /** @type {Error | null | undefined} The call's outcome once it settles. */
+      let settled;
+      pending.then((error) => {
+         settled = error;
+      });
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled?.code).toBe('SCRIPT_TIMEOUT');
+      expect(settled.message).toContain('20 s');
+   });
+
+   it('runs under 8 s when timeoutMs is absent', async () => {
+      vi.useFakeTimers();
+      /** @type {Promise<Error | null>} The pending call. */
+      const pending = hangingCall({ uuid });
+      await vi.advanceTimersByTimeAsync(8000);
+      expect((await pending)?.code).toBe('SCRIPT_TIMEOUT');
    });
 });
 
@@ -262,22 +347,77 @@ describe('execute_macro results', () => {
       });
    });
 
-   it('reports MACRO_FAILED with bounded text when the macro rejects', async () => {
+   it('reports MACRO_FAILED with bounded text saying it may have partly run when the macro rejects', async () => {
       macro.execute.mockRejectedValue(new Error(`boom\n${'x'.repeat(10_000)}`));
       const error = await outcome(() => executeMacroHandler({ uuid }, ctx));
       expect(error?.code).toBe('MACRO_FAILED');
-      expect(error.message).toContain('boom');
+      expect(error.message).toMatch(/^The macro threw; it may have partly run: .*boom/);
       expect(error.message).not.toContain('\n');
       expect(new TextEncoder().encode(error.message).length).toBeLessThanOrEqual(256);
    });
 
-   it('reports MACRO_FAILED when the command does not compile', async () => {
+   it('reports MACRO_FAILED with bounded text saying nothing ran when the command does not compile', async () => {
       macro.execute.mockImplementation(() => {
-         throw new SyntaxError('Unexpected token');
+         throw new SyntaxError(`Unexpected token\n${'x'.repeat(10_000)}`);
       });
       const error = await outcome(() => executeMacroHandler({ uuid }, ctx));
       expect(error?.code).toBe('MACRO_FAILED');
-      expect(error.message).toContain('Unexpected token');
+      expect(error.message).toMatch(/^The macro did not compile; nothing ran: .*Unexpected token/);
+      expect(error.message).not.toContain('\n');
+      expect(new TextEncoder().encode(error.message).length).toBeLessThanOrEqual(256);
+   });
+
+   it('reports a value too large for the wire as a success with tooLarge and the value\'s size', async () => {
+      /** @type {string} A value whose JSON, with its quotes, is one byte over the wire bound. */
+      const huge = 'x'.repeat(RESULT_WIRE_MAX_BYTES - 1);
+      macro.execute.mockResolvedValue(huge);
+      await expect(executeMacroHandler({ uuid }, ctx)).resolves.toEqual({
+         type: 'script',
+         value: null,
+         tooLarge: true,
+         bytes: RESULT_WIRE_MAX_BYTES + 1,
+      });
+   });
+
+   it('reports tooLarge when the value fits the bound but the whole result does not', async () => {
+      /** @type {string} A value whose JSON is exactly the wire bound. */
+      const edge = 'x'.repeat(RESULT_WIRE_MAX_BYTES - 2);
+      macro.execute.mockResolvedValue(edge);
+      await expect(executeMacroHandler({ uuid }, ctx)).resolves.toEqual({
+         type: 'script',
+         value: null,
+         tooLarge: true,
+         bytes: RESULT_WIRE_MAX_BYTES,
+      });
+   });
+
+   it('returns the largest value that fits the wire bound', async () => {
+      /** @type {number} The bytes of the result around the value: `{"type":"script","value":}`. */
+      const envelope = JSON.stringify({
+         type: 'script',
+         value: null,
+      }).length - 'null'.length;
+      /** @type {string} A value whose result is exactly the wire bound. */
+      const fits = 'x'.repeat(RESULT_WIRE_MAX_BYTES - envelope - 2);
+      macro.execute.mockResolvedValue(fits);
+      await expect(executeMacroHandler({ uuid }, ctx)).resolves.toEqual({
+         type: 'script',
+         value: fits,
+      });
+   });
+
+   it('acks a too-large value through callTool as a success, not RESULT_TOO_LARGE', async () => {
+      const registry = createScriptRegistry({ log: () => {} });
+      registry.register(executeMacroDefinition, executeMacroHandler);
+      const callTool = createCallTool({ registry });
+      gates.allowMacroExecution = true;
+      macro.execute.mockResolvedValue({ text: 'é'.repeat(RESULT_WIRE_MAX_BYTES) });
+      await expect(callTool(CALL)).resolves.toEqual({
+         type: 'script',
+         value: null,
+         tooLarge: true,
+         bytes: 2 * RESULT_WIRE_MAX_BYTES + '{"text":""}'.length,
+      });
    });
 
    it('returns the uuid of the message a chat macro creates', async () => {
@@ -294,7 +434,7 @@ describe('execute_macro arguments', () => {
    it('refuses a document that is not a Macro with ARGS_INVALID', async () => {
       const error = await outcome(() => executeMacroHandler({ uuid: ACTOR_UUID }, ctx));
       expect(error?.code).toBe('ARGS_INVALID');
-      expect(error.message).toBe(`uuid '${ACTOR_UUID}' is a Actor, not a Macro.`);
+      expect(error.message).toBe(`uuid '${ACTOR_UUID}' is a document of type Actor, not a Macro.`);
       expect(macro.execute).not.toHaveBeenCalled();
    });
 
@@ -377,12 +517,12 @@ describe('execute_macro arguments', () => {
       [
          'actorUuid',
          ITEM_UUID,
-         'not an Actor',
+         `actorUuid '${ITEM_UUID}' is a document of type Item, not an Actor.`,
       ],
       [
          'tokenUuid',
          ACTOR_UUID,
-         'not a Token',
+         `tokenUuid '${ACTOR_UUID}' is a document of type Actor, not a Token.`,
       ],
    ])('refuses %s naming a %s with ARGS_INVALID and does not run the macro', async (name, value, text) => {
       const error = await outcome(() => executeMacroHandler(
@@ -393,7 +533,7 @@ describe('execute_macro arguments', () => {
          ctx,
       ));
       expect(error?.code).toBe('ARGS_INVALID');
-      expect(error.message).toContain(text);
+      expect(error.message).toBe(text);
       expect(macro.execute).not.toHaveBeenCalled();
    });
 

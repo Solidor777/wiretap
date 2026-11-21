@@ -8,8 +8,9 @@ import { buildContext } from '~/bridge/scripts/ctx.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 
 /**
- * How long a script handler may run before the call fails, in milliseconds. Below the sidecar's 10 s ack window, so
- * the agent receives this client's error instead of an `ENDPOINT_TIMEOUT`.
+ * How long a script handler may run before the call fails, in milliseconds, unless the script declares the shared
+ * `timeoutMs` argument and the call sets it. Below the sidecar's 10 s ack window, so the agent receives this client's
+ * error instead of an `ENDPOINT_TIMEOUT`; for a call that sets `timeoutMs`, the sidecar waits `timeoutMs` + 2 s.
  * @type {number}
  */
 export const SCRIPT_TIMEOUT_MS = 8000;
@@ -37,14 +38,17 @@ export const SCRIPT_BUSY = 'SCRIPT_BUSY';
 /**
  * @typedef {object} CallToolOptions
  * @property {import('~/bridge/scripts/registry.js').ScriptRegistry} registry - The registry to look scripts up in.
- * @property {number} [timeoutMs] - The handler time limit; defaults to `SCRIPT_TIMEOUT_MS`.
+ * @property {number} [timeoutMs] - The handler time limit of a call that sets no `timeoutMs` argument; defaults to
+ * `SCRIPT_TIMEOUT_MS`.
  */
 
 /**
  * Create the `callTool` op handler. A call finds the named script, enforces the script's declared gate from THIS
  * client's settings, validates the arguments against the script's own declared schema, builds the context and runs
  * the handler under a time limit. The order is fixed: a denied call learns nothing about its arguments. At most
- * `SCRIPT_CONCURRENCY_MAX` handlers run at once; a call beyond it is refused with `SCRIPT_BUSY`.
+ * `SCRIPT_CONCURRENCY_MAX` handlers run at once; a call beyond it is refused with `SCRIPT_BUSY`. A script whose input
+ * schema declares the shared `timeoutMs` argument runs under the call's `timeoutMs` (its schema holds the bounds);
+ * every other script runs under the default limit.
  * @param {CallToolOptions} options - The registry and time limit.
  * @returns {(params: unknown) => Promise<unknown>} The op handler: resolves with the plain-data result and rejects
  * with a `ScriptError` (its code is acked) or the handler's own error.
@@ -63,6 +67,11 @@ export function createCallTool({ registry, timeoutMs = SCRIPT_TIMEOUT_MS }) {
       const definition = registered.definition;
       /** @type {import('~/bridge/scripts/registry.js').ScriptHandler} The code that runs the call. */
       const handler = registered.handler;
+      /**
+       * @type {number} This call's time limit. The validated arguments hold only declared properties, so `timeoutMs`
+       * is present only for a script that declares it and a call that sets it.
+       */
+      const limit = args.timeoutMs ?? timeoutMs;
       /** @type {AbortController} Aborts the signal the handler sees. */
       const controller = new AbortController();
       /** @type {ReturnType<typeof setTimeout> | undefined} The time limit timer. */
@@ -74,11 +83,11 @@ export function createCallTool({ registry, timeoutMs = SCRIPT_TIMEOUT_MS }) {
             reject(
                new ScriptError(
                   'SCRIPT_TIMEOUT',
-                  `The script did not finish in ${Math.round(timeoutMs / 1000)} s; the operation may still have ` +
+                  `The script did not finish in ${Math.round(limit / 1000)} s; the operation may still have ` +
                      'applied.',
                ),
             );
-         }, timeoutMs);
+         }, limit);
       });
       /** @type {unknown} The handler's result. */
       let result;

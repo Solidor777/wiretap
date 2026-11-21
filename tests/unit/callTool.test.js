@@ -388,8 +388,99 @@ describe('callTool: timeout', () => {
       expect(vi.getTimerCount()).toBe(0);
    });
 
-   it('keeps the client timeout below the sidecar ack window of 10 s', () => {
+   it('keeps the default client timeout below the sidecar ack window of 10 s', () => {
       expect(SCRIPT_TIMEOUT_MS).toBeLessThan(10_000);
+   });
+
+   /**
+    * A script definition that declares the shared `timeoutMs` argument.
+    * @param {string} name - The name the script registers under.
+    * @returns {object} The definition.
+    */
+   function timedScript(name) {
+      return script(name, {
+         inputSchema: {
+            type: 'object',
+            properties: {
+               timeoutMs: {
+                  type: 'integer',
+                  minimum: 1000,
+                  maximum: 300_000,
+               },
+            },
+         },
+      });
+   }
+
+   /**
+    * Start a call and record when it settles.
+    * @param {object} params - The op params.
+    * @returns {{ settled: () => Error | null | undefined }} Reads the call's rejection (null when it resolved, undefined
+    * while it is pending).
+    */
+   function track(params) {
+      /** @type {Error | null | undefined} The call's outcome once it settles. */
+      let outcome;
+      callTool(params).then(
+         () => {
+            outcome = null;
+         },
+         (error) => {
+            outcome = error;
+         },
+      );
+      return { settled: () => outcome };
+   }
+
+   it('runs a script that declares timeoutMs under the call\'s timeoutMs', async () => {
+      vi.useFakeTimers();
+      registry.register(timedScript('slow'), () => new Promise(() => {}));
+      const call = track({
+         name: 'slow',
+         arguments: { timeoutMs: 120_000 },
+      });
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(call.settled()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(call.settled()?.code).toBe('SCRIPT_TIMEOUT');
+      expect(call.settled().message).toBe('The script did not finish in 120 s; the operation may still have applied.');
+      expect(vi.getTimerCount()).toBe(0);
+   });
+
+   it('runs a script that declares timeoutMs under 8 s when the call omits it', async () => {
+      vi.useFakeTimers();
+      registry.register(timedScript('slow'), () => new Promise(() => {}));
+      const call = track({
+         name: 'slow',
+         arguments: {},
+      });
+      await vi.advanceTimersByTimeAsync(SCRIPT_TIMEOUT_MS - 1);
+      expect(call.settled()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(call.settled()?.code).toBe('SCRIPT_TIMEOUT');
+   });
+
+   it('keeps 8 s for a script that does not declare timeoutMs, whatever the call sends', async () => {
+      vi.useFakeTimers();
+      registry.register(script('slow'), () => new Promise(() => {}));
+      const call = track({
+         name: 'slow',
+         arguments: {
+            text: 'x',
+            timeoutMs: 120_000,
+         },
+      });
+      await vi.advanceTimersByTimeAsync(SCRIPT_TIMEOUT_MS);
+      expect(call.settled()?.code).toBe('SCRIPT_TIMEOUT');
+   });
+
+   it('passes the call\'s timeoutMs to a script that declares it', async () => {
+      const handler = vi.fn(async (args) => args);
+      registry.register(timedScript('timed'), handler);
+      await expect(callTool({
+         name: 'timed',
+         arguments: { timeoutMs: 1000 },
+      })).resolves.toEqual({ timeoutMs: 1000 });
    });
 
    it('takes the timeout from the options', async () => {

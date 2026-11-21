@@ -8,7 +8,6 @@ Wiretap acts on the live Foundry world through MCP tools that run in a connected
 call fails with `NO_ENDPOINT` and the message says what to start. An undeclared argument (a misspelled `dryrun`) is refused.
 
 ## Recipes
-
 **Read a document.** `mcp__wiretap__get_document` with `uuid`, or `documentName` and `id` (add `parentUuid` for an
 embedded one, `pack` for a compendium one). The default is a compact view (name, type, key fields, embedded
 `[id, name, type]` rows, `modified`). For more: `paths` (up to 20, like `system.attributes` or `items.*.name`, keyed by
@@ -49,19 +48,20 @@ per document), `updates` (patches) and `deletes`, run in that order; a key an en
 write a stored full read, give `"handle:<handle>"` as a `data` text of `create_documents` or `replace_document`; the
 gates still judge it (up to 100,000 bytes a text, 200,000 in all; `HANDLE_NOT_DOCUMENT` if it is not one document).
 
-**Sheets.** `mcp__wiretap__open_sheet` with `uuid` opens a sheet on the client running the call, or with `userId` on
-that connected user's client (who needs OBSERVER); `mcp__wiretap__close_sheet` with the same arguments closes it there.
-With no human connected a sheet is seen by no one: read the data instead.
-
-**Dice, tables and macros.** `mcp__wiretap__roll` takes a `formula` (no `@` references), `mcp__wiretap__draw_table` a
-RollTable `uuid` (drawn results are marked); `toChat` (default false) posts to chat. `mcp__wiretap__execute_macro` runs
-a Macro `uuid` for `actorUuid` / `tokenUuid` (on the viewed scene), needs `allowMacroExecution`, returns its value.
+**Sheets, dice and macros.** `mcp__wiretap__open_sheet` with `uuid` opens a sheet on the client running the call, or
+with `userId` on every tab that connected user has open (who needs OBSERVER; the first answer is reported);
+`mcp__wiretap__close_sheet` with the same arguments closes it there. With no human connected no one sees a sheet: read
+the data instead. `mcp__wiretap__roll` takes a `formula` (no `@` references), `mcp__wiretap__draw_table` a RollTable
+`uuid` (drawn results are marked); `toChat` (default false) posts to chat. `mcp__wiretap__execute_macro` runs a Macro
+`uuid` for `actorUuid` / `tokenUuid` (on the viewed scene), needs `allowMacroExecution` and returns its value;
+`timeoutMs` (1,000 to 300,000; default 8,000) is its time limit. A chat macro whose `value` is null sent no message.
+`tooLarge: true` (with `bytes`) means it ran but its value was dropped: that alone does not show it did what you wanted.
 
 ## Errors you may meet
-
 - `ARGS_INVALID` (names the argument), `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `PATH_*`, `CURSOR_INVALID`, `SCRIPT_BUSY`
   (retry), `VALIDATION_FAILED` (up to 10 failures and the count; nothing written), `TABLE_EMPTY` (nothing left to draw),
-  `MACRO_FAILED` (it threw), `USER_OFFLINE`, `SHEET_DENIED` (no OBSERVER), `SHEET_UNAVAILABLE`, `SHEET_QUERY_FAILED`.
+  `MACRO_FAILED` (did not compile, so nothing ran; or threw, so it may have partly run), `USER_OFFLINE`, `SHEET_DENIED`
+  (no OBSERVER), `SHEET_UNAVAILABLE`, `SHEET_QUERY_FAILED`.
 - `GATE_DENIED`: a GM setting is closed (`allowDelete`: delete_documents, batch deletes, removing embedded documents;
   `allowReplace`: replace_document; `allowMacroExecution`: execute_macro, writing macro code (a Macro command, a type
   set to script, an Adventure's macros); others), or the write is never allowed (a `wiretap.*` setting, a User password,
