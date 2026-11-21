@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OP_CALL_TOOL } from '../../shared/protocol.js';
 import { script } from '../unit/scriptFixtures.js';
@@ -52,8 +53,44 @@ describe('the user-interaction meta entry of a listed tool', () => {
    });
 
    it('lists the meta entry on a tool of another name that the client flags, and no other _meta key', async () => {
-      const { listed } = await listWith([script('mark_x', { requiresUserInteraction: true })]);
+      const { listed } = await listWith([
+         script('mark_x', {
+            requiresUserInteraction: true,
+            _meta: { 'x/evil': 1 },
+            annotations: {
+               readOnlyHint: false,
+               destructiveHint: false,
+            },
+         }),
+      ]);
       expect(Object.keys(listed('mark_x')._meta)).toEqual(['anthropic/requiresUserInteraction']);
+      expect(listed('mark_x').annotations).toEqual({ readOnlyHint: true });
+   });
+
+   it('adds and removes the meta entry as a re-registered tool gains and loses the flag', async () => {
+      harness = createHarness();
+      await harness.start();
+      const gm = await harness.connectGm();
+      const { client } = await harness.connectClient();
+      /** @type {number} The tool list notifications received. */
+      let notifications = 0;
+      client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+         notifications += 1;
+      });
+      /**
+       * Read the `_meta` of the listed tool.
+       * @returns {Promise<Record<string, unknown> | undefined>} The listed `_meta`.
+       */
+      const listedMeta = async () => (await client.listTools()).tools.find((tool) => tool.name === 'toggle_x')._meta;
+      await gm.register([script('toggle_x')]);
+      await expect.poll(() => notifications, { timeout: 1000 }).toBe(1);
+      expect(await listedMeta()).toBeUndefined();
+      await gm.register([script('toggle_x', { requiresUserInteraction: true })]);
+      await expect.poll(() => notifications, { timeout: 1000 }).toBe(2);
+      expect(await listedMeta()).toEqual({ 'anthropic/requiresUserInteraction': true });
+      await gm.register([script('toggle_x')]);
+      await expect.poll(() => notifications, { timeout: 1000 }).toBe(3);
+      expect(await listedMeta()).toBeUndefined();
    });
 
    it('forwards a call of the flagged tool to the client unchanged', async () => {
