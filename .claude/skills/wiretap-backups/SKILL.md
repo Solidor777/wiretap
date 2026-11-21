@@ -68,39 +68,44 @@ parts fit, the file store and the client halves.
   registers a `createBackupSink` with `bridge.expectPieces(socketId, requestId, sink)` (not on a dry run) and returns
   the params. The client `exportBackup` plans and measures, then streams `bridge:backupPiece` pieces; the sink creates
   the file on the first data piece and appends each in order. After the reply the sidecar checks the client's
-  `{ documents, bytes, unreadable, parents, world }` against what the sink received (end marker seen, `documents`
-  equal to the newline count, `bytes` equal to the file size), writes the header in place and returns
-  `{ file, folder, documents, bytes }`. Any failure after the file exists recycles the partial file
-  (`discardPartial`). If the recycle bin refuses it, the backup keeps its own error code, not `TRASH_FAILED`: a
-  `BridgeError` gains ` The partial file <name> could not be moved to the recycle bin.` (`namePartialFile`, fitted to
-  512 B), any other error is thrown unchanged, and the sidecar log names the file either way.
+  `{ documents, bytes, unreadable, parents, world }` against what the sink received (end marker seen after a final
+  newline, `documents` equal to the newline count, `bytes` equal to the file size), writes the header in place and
+  returns `{ file, folder, documents, bytes }`. Any failure after the file exists recycles the partial file
+  (`discardPartial`, which recycles it also when closing it fails). If the recycle bin refuses it, the backup keeps
+  its own error code, not `TRASH_FAILED`: a `BridgeError` gains ` The partial file <name> could not be moved to the
+  recycle bin.` (`namePartialFile` of `server/backups.ts`, fitted to 512 B), any other error is thrown unchanged, and
+  the sidecar log names the file either way.
 - **Restore.** `restore_backup` takes the lock; `prepare` resolves and gate-checks the folder, checks it, opens the
   file (`openFile` checks name, header and size) and sends `{ header, uuids?, dryRun?, timeoutMs }`; `onSent` starts
   the pump, which reads 512,000-byte pieces and sends each with `bridge.sendPiece` (`bridge:restorePiece`), then the
   end marker, each ack awaited until the reply deadline. The client applies lines as they arrive and acks each piece
   after its lines; the sidecar accepts only the exact `RestoreResult` shape and returns it with `file` first, fitted
-  to 4000 B.
+  to 4000 B. A refused result is `BACKUP_INCOMPLETE` saying the documents may already be applied. The lock is held
+  until the pump has ended and the file is closed, which can be after the call answered.
 - **List and delete** run in the sidecar only. They read the folder and gate from `bridge.snapshot({ endpoint? })`;
   with no GM endpoint every gate is closed and the settings are the defaults, so they work on the default folder.
   `delete_backup` is refused while a backup or restore runs; `list_backups` never is.
 
 ## File store (`server/backups.ts`)
 
-`createBackupStore({ root?, trash?, now?, randomSuffix?, platform? })`; defaults: the module root
-(`defaultConfigRoot()`), the `trash` package, `new Date()`, six random bytes in base64url, `process.platform`.
-`defaultFolder` is `<root>/.wiretap/backups`.
+`createBackupStore({ root?, trash?, now?, randomSuffix?, platform?, log? })`; defaults: the module root
+(`defaultConfigRoot()`), the `trash` package, `new Date()`, six random bytes in base64url, `process.platform`,
+`console.log` (`startMcpServer` passes the sidecar log). `defaultFolder` is `<root>/.wiretap/backups`.
 
-- `resolveFolder(folder, settingFolder)`: a non-absolute folder or setting is `BACKUP_FOLDER_INVALID`. No folder: the
-  setting (kind `setting`) or the default (kind `default`). A given folder resolves to kind `default` or `setting`
-  when it names one of them (case-insensitive on Windows), else `named`.
+- `resolveFolder(folder, settingFolder)`: a non-absolute folder is `BACKUP_FOLDER_INVALID`. No folder: the setting
+  (kind `setting`; a non-absolute setting is `BACKUP_FOLDER_INVALID`) or the default (kind `default`). A given folder
+  resolves to kind `default` or `setting` when it names one of them (case-insensitive on Windows), else `named`; a
+  non-absolute setting is then ignored, so a call naming its own absolute folder works while the setting is invalid.
 - `checkFolder(folder, create)`: refuses a symbolic link (on Windows a directory junction counts) on the folder and,
   for the default folder, on `.wiretap`. Only the default folder may be missing (returns false) and only it is created
   (`ensureWiretapDir`, then `mkdirSync` mode 0o700). A missing setting or named folder, or a non-directory, is
   `BACKUP_FOLDER_INVALID`.
-- `createFile(folder)`: names the file `backupFileName(now, suffix)`, refuses a link at the path, opens it with `wx`
-  (exclusive; an existing file is never overwritten) at 0o600 and writes the blank header line. The writer's `append`
-  writes at the end, `finish(fields)` writes the header (with `created` and `bytes` from `fstat`) over the blank line
-  and closes, `close()` closes if open. Every file-system failure is logged and becomes `BACKUP_WRITE_FAILED` with a
+- `createFile(folder)` (async): names the file `backupFileName(now, suffix)`, refuses a link at the path, opens it
+  with `wx` (exclusive; an existing file is never overwritten) at 0o600 and writes the blank header line; when that
+  write fails after the file was created, the file is closed and recycled with `trashPath`, and if the recycle bin
+  refuses it the error gains the `namePartialFile` sentence. The writer's `append` writes at the end,
+  `finish(fields)` writes the header (with `created` and `bytes` from `fstat`) over the blank line and closes,
+  `close()` closes if open. Every file-system failure is logged through `log` and becomes `BACKUP_WRITE_FAILED` with a
   fixed message.
 - `openFile(folder, file)`: an off-pattern or missing name is `BACKUP_NOT_FOUND`; a link, a non-file, a header
   `parseHeaderLine` refuses or a size other than the header's `bytes` is `BACKUP_INVALID`. The reader's
@@ -197,7 +202,8 @@ parts fit, the file store and the client halves.
   `delete_backup` 128 B; each definition at most 800 B (`backup_documents` is exactly 800 B). To fit, an argument
   has a `describe` only where its name and type do not say what it is: `uuids`, `folderUuid`, `documentName`, `pack`
   and `timeoutMs` of `backup_documents`, `limit` of `list_backups` and `timeoutMs` of `restore_backup` have none.
-- One backup or restore at a time per MCP server (`BACKUP_BUSY`); the lock clears when the invoke settles.
+- One backup or restore at a time per MCP server (`BACKUP_BUSY`); a backup's lock clears when the invoke settles, a
+  restore's once its pump has ended and the file is closed.
 
 ## Tests
 

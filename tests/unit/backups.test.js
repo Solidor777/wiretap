@@ -87,11 +87,11 @@ function namedFolder(fixture, name) {
  * Write one complete backup through the store.
  * @param {BackupStore} store - The store that writes it.
  * @param {ResolvedFolder} folder - The checked folder to write into.
- * @returns {string} The absolute path of the finished file.
+ * @returns {Promise<string>} The absolute path of the finished file.
  */
-function writeBackup(store, folder) {
+async function writeBackup(store, folder) {
    /** @type {import('../../server/backups.ts').BackupFileWriter} A new backup file being written. */
-   const writer = store.createFile(folder);
+   const writer = await store.createFile(folder);
    writer.append(Buffer.from(LINE));
    writer.finish(FIELDS);
    return writer.filePath;
@@ -168,9 +168,18 @@ describe('resolveFolder', () => {
          code: 'BACKUP_FOLDER_INVALID',
          message: 'The Backup folder setting must be an absolute path.',
       });
-      expect(thrown(() => fixture.store.resolveFolder(fixture.root, 'rel'))).toMatchObject({
-         code: 'BACKUP_FOLDER_INVALID',
-         message: 'The Backup folder setting must be an absolute path.',
+   });
+
+   it('resolves a named absolute folder while the Backup folder setting is relative', () => {
+      /** @type {Fixture} A store over a fresh scratch root. */
+      const fixture = setup();
+      expect(fixture.store.resolveFolder(fixture.root, 'rel')).toEqual({
+         kind: 'named',
+         path: fixture.root,
+      });
+      expect(fixture.store.resolveFolder(fixture.store.defaultFolder, 'rel')).toEqual({
+         kind: 'default',
+         path: fixture.store.defaultFolder,
       });
    });
 });
@@ -241,7 +250,7 @@ describe('checkFolder', () => {
 });
 
 describe('createFile', () => {
-   it('creates the file exclusively at 0o600 with a blank header, then writes the header in place', () => {
+   it('creates the file exclusively at 0o600 with a blank header, then writes the header in place', async () => {
       /** @type {Date} The fixed creation time. */
       const created = new Date(Date.UTC(2026, 10, 21, 1, 2, 3, 4));
       /** @type {Fixture} A store over a fresh scratch root. */
@@ -253,7 +262,7 @@ describe('createFile', () => {
       const folder = fixture.store.resolveFolder(undefined, '');
       fixture.store.checkFolder(folder, true);
       /** @type {import('../../server/backups.ts').BackupFileWriter} A new backup file being written. */
-      const writer = fixture.store.createFile(folder);
+      const writer = await fixture.store.createFile(folder);
       expect(writer.file).toBe(backupFileName(created, 'abcdEFGH'));
       expect(writer.file).toMatch(BACKUP_FILE_PATTERN);
       expect(writer.filePath).toBe(path.join(folder.path, writer.file));
@@ -281,36 +290,87 @@ describe('createFile', () => {
       }
    });
 
-   it('never overwrites an existing file', () => {
+   it('never overwrites an existing file, and logs the failure through the given logger', async () => {
+      /** @type {string[]} The store's log lines. */
+      const logs = [];
       /** @type {Fixture} A store over a fresh scratch root. */
       const fixture = setup({
          now: () => new Date(Date.UTC(2026, 0, 1)),
          randomSuffix: () => 'sameSAME',
+         log: (line) => logs.push(line),
       });
       /** @type {ResolvedFolder} The default folder. */
       const folder = fixture.store.resolveFolder(undefined, '');
       fixture.store.checkFolder(folder, true);
       /** @type {string} The backup whose name the second create repeats. */
-      const first = writeBackup(fixture.store, folder);
+      const first = await writeBackup(fixture.store, folder);
       /** @type {Buffer} Its bytes before the second create. */
       const before = fs.readFileSync(first);
-      vi.spyOn(console, 'error').mockImplementation(() => {});
-      expect(thrown(() => fixture.store.createFile(folder))).toMatchObject({
+      /** @type {import('vitest').MockInstance} The console sink the store must not use. */
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(fixture.store.createFile(folder)).rejects.toMatchObject({
          code: 'BACKUP_WRITE_FAILED',
          message: 'The backup file could not be written.',
       });
       expect(fs.readFileSync(first)).toEqual(before);
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(logs).toEqual([expect.stringMatching(/^Wiretap sidecar \| backup file write failed: /)]);
+      expect(fixture.trash.calls).toEqual([]);
+   });
+
+   it('moves the new file to the recycle bin when writing its blank header fails', async () => {
+      /** @type {Fixture} A store over a fresh scratch root. */
+      const fixture = setup({ log: () => {} });
+      /** @type {ResolvedFolder} The default folder. */
+      const folder = fixture.store.resolveFolder(undefined, '');
+      fixture.store.checkFolder(folder, true);
+      vi.spyOn(fs, 'writeSync').mockImplementationOnce(() => {
+         throw new Error('disk full');
+      });
+      await expect(fixture.store.createFile(folder)).rejects.toMatchObject({
+         code: 'BACKUP_WRITE_FAILED',
+         message: 'The backup file could not be written.',
+      });
+      expect(fs.readdirSync(folder.path)).toEqual([]);
+      expect(fixture.trash.calls).toHaveLength(1);
+      expect(path.basename(fixture.trash.calls[0][0])).toMatch(BACKUP_FILE_PATTERN);
+   });
+
+   it('names the new file when writing its header fails and the recycle bin refuses it', async () => {
+      /** @type {Fixture} A store over a fresh scratch root. */
+      const fixture = setup({
+         log: () => {},
+         trash: async () => {
+            throw new Error('no bin');
+         },
+      });
+      /** @type {ResolvedFolder} The default folder. */
+      const folder = fixture.store.resolveFolder(undefined, '');
+      fixture.store.checkFolder(folder, true);
+      vi.spyOn(fs, 'writeSync').mockImplementationOnce(() => {
+         throw new Error('disk full');
+      });
+      /** @type {any} The thrown error. */
+      const error = await fixture.store.createFile(folder).catch((caught) => caught);
+      /** @type {string[]} The partial file left in place. */
+      const left = fs.readdirSync(folder.path);
+      expect(left).toHaveLength(1);
+      expect(error).toMatchObject({
+         code: 'BACKUP_WRITE_FAILED',
+         message: 'The backup file could not be written. '
+            + `The partial file ${left[0]} could not be moved to the recycle bin.`,
+      });
    });
 });
 
 describe('openFile', () => {
-   it('opens a valid backup and reads it in pieces after the header', () => {
+   it('opens a valid backup and reads it in pieces after the header', async () => {
       /** @type {Fixture} A store over a fresh scratch root. */
       const fixture = setup();
       /** @type {ResolvedFolder} A named folder. */
       const folder = namedFolder(fixture, 'named');
       /** @type {string} The backup file. */
-      const filePath = writeBackup(fixture.store, folder);
+      const filePath = await writeBackup(fixture.store, folder);
       /** @type {import('../../server/backups.ts').BackupFileReader} The checked backup, open for reading. */
       const reader = fixture.store.openFile(folder, path.basename(filePath));
       expect(reader.file).toBe(path.basename(filePath));
@@ -328,13 +388,13 @@ describe('openFile', () => {
       expect(one.length).toBe(5);
    });
 
-   it('refuses an off-pattern or missing name with BACKUP_NOT_FOUND', () => {
+   it('refuses an off-pattern or missing name with BACKUP_NOT_FOUND', async () => {
       /** @type {Fixture} A store over a fresh scratch root. */
       const fixture = setup();
       /** @type {ResolvedFolder} A named folder. */
       const folder = namedFolder(fixture, 'named');
       /** @type {string} A valid backup file. */
-      const filePath = writeBackup(fixture.store, folder);
+      const filePath = await writeBackup(fixture.store, folder);
       fs.copyFileSync(filePath, path.join(folder.path, 'copy.jsonl'));
       for (const name of ['../x', 'copy.jsonl', backupFileName(new Date(0), 'absentAA')]) {
          expect(thrown(() => fixture.store.openFile(folder, name))).toMatchObject({
@@ -345,13 +405,13 @@ describe('openFile', () => {
    });
 
    it('refuses a truncated, appended, blank-header or non-backup file with BACKUP_INVALID, without echoing content',
-      () => {
+      async () => {
          /** @type {Fixture} A store over a fresh scratch root. */
          const fixture = setup();
          /** @type {ResolvedFolder} A named folder. */
          const folder = namedFolder(fixture, 'named');
          /** @type {string} A valid backup file. */
-         const valid = fs.readFileSync(writeBackup(fixture.store, folder), 'utf8');
+         const valid = fs.readFileSync(await writeBackup(fixture.store, folder), 'utf8');
          /** @type {Array<[string, string, string]>} Name suffix, content and expected message of each case. */
          const cases = [
             ['trunc', valid.slice(0, -2), 'The backup file is incomplete or was changed.'],
@@ -382,7 +442,7 @@ describe('openFile', () => {
 });
 
 describe('list', () => {
-   it('lists newest first, counts total and invalid, and skips partial files', () => {
+   it('lists newest first, counts total and invalid, and skips partial files', async () => {
       /** @type {number} The clock, advanced by each `now()` call. */
       let clock = Date.UTC(2026, 0, 1);
       /** @type {number} Counter for unique suffixes. */
@@ -401,8 +461,11 @@ describe('list', () => {
       });
       fixture.store.checkFolder(folder, true);
       /** @type {string[]} The valid files, oldest first. */
-      const files = [0, 1, 2].map(() => path.basename(writeBackup(fixture.store, folder)));
-      fixture.store.createFile(folder).close();
+      const files = [];
+      for (let index = 0; index < 3; index += 1) {
+         files.push(path.basename(await writeBackup(fixture.store, folder)));
+      }
+      (await fixture.store.createFile(folder)).close();
       fs.writeFileSync(path.join(folder.path, 'notes.txt'), 'x');
       /** @type {import('../../server/backups.ts').BackupListing} The two newest valid backups and the counts. */
       const listing = fixture.store.list(folder, 2);
@@ -451,7 +514,7 @@ describe('trashFile and trashPath', () => {
       /** @type {ResolvedFolder} A named folder. */
       const folder = namedFolder(fixture, 'named');
       /** @type {string} A valid backup file. */
-      const filePath = writeBackup(store, folder);
+      const filePath = await writeBackup(store, folder);
       await store.trashFile(folder, path.basename(filePath));
       expect(fixture.trash.calls).toEqual([[filePath]]);
       expect(trash).toHaveBeenCalledWith([filePath], { glob: false });
@@ -474,7 +537,7 @@ describe('trashFile and trashPath', () => {
       /** @type {ResolvedFolder} A named folder. */
       const folder = namedFolder(fixture, 'named');
       /** @type {string} A valid backup file. */
-      const filePath = writeBackup(fixture.store, folder);
+      const filePath = await writeBackup(fixture.store, folder);
       /** @type {string} The backup's file name, expected in each message. */
       const name = path.basename(filePath);
       /** @type {BackupStore} A store whose recycle bin rejects. */

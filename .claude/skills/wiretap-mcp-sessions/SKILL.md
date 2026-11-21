@@ -74,7 +74,7 @@ The constants are `MCP_REQUEST_TIMEOUT_MS`, `MCP_HEADERS_TIMEOUT_MS`, `MCP_TIMEO
 `McpServer` named `wiretap` whose own `sendToolListChanged` is a no-op (the sidecar debounces), with
 `notifyToolListChanged()` sending one `tools/list_changed` when connected. It registers `read_handle`, then the four
 backup tools (`createSession` passes `backupTools(endpoint)`, built from the one `createBackupTools({ bridge, store, log })`
-of `startMcpServer` over `createBackupStore(options.backups)`, so one busy lock serves every session; see
+of `startMcpServer` over `createBackupStore({ log, ...options.backups })`, so one busy lock serves every session; see
 `wiretap-backups`), then the extra tools, each behind the
 result enforcer with the session id as owner and `ownerLive` = "the manager still holds the session". `fixedNames`
 (names a registry tool may not reuse) come from `RESERVED_SCRIPT_NAMES` (`shared/scripts.js`) plus the extra tools. An over-limit result for an
