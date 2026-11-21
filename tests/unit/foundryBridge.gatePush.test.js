@@ -134,10 +134,46 @@ describe('gate snapshot push on setting change', () => {
          changeSetting(hook, 'wiretap.allowMacroExecution', true);
          const pushes = gateEmits(socket);
          expect(pushes).toHaveLength(1);
-         expect(pushes[0].payload).toEqual({ ...closedGateState(), allowMacroExecution: true });
+         expect(pushes[0].payload).toEqual({
+            gateState: {
+               ...closedGateState(),
+               allowMacroExecution: true,
+            },
+            settings: { backupFolder: '' },
+         });
          expect(typeof pushes[0].ack).toBe('function');
       },
    );
+
+   it.each([
+      'createSetting',
+      'updateSetting',
+      'deleteSetting',
+   ])(
+      'pushes { gateState, settings } when a GM changes wiretap.backupFolder (%s)',
+      (hook) => {
+         stored.allowUserWrites = true;
+         const socket = makeFakeSocket(true);
+         wire(socket);
+         changeSetting(hook, 'wiretap.backupFolder', 'C:\\backups');
+         const pushes = gateEmits(socket);
+         expect(pushes).toHaveLength(1);
+         expect(pushes[0].payload).toEqual({
+            gateState: {
+               ...closedGateState(),
+               allowUserWrites: true,
+            },
+            settings: { backupFolder: 'C:\\backups' },
+         });
+      },
+   );
+
+   it('does not push when a player changes wiretap.backupFolder', () => {
+      const socket = makeFakeSocket(true);
+      wire(socket);
+      changeSetting('updateSetting', 'wiretap.backupFolder', 'C:\\backups', 'player1');
+      expect(gateEmits(socket)).toHaveLength(0);
+   });
 
    it('pushes every registry gate key, including the module list', () => {
       const socket = makeFakeSocket(true);
@@ -146,22 +182,23 @@ describe('gate snapshot push on setting change', () => {
          changeSetting('updateSetting', `wiretap.${name}`, name === 'allowedPluginModules' ? 'mod-a' : true);
       }
       expect(gateEmits(socket)).toHaveLength(Object.keys(GATES).length);
-      expect(gateEmits(socket).at(-1).payload.allowedPluginModules).toEqual(['mod-a']);
+      expect(gateEmits(socket).at(-1).payload.gateState.allowedPluginModules).toEqual(['mod-a']);
    });
 
    it('pushes a sanitized snapshot when the stored value is hostile', () => {
       const socket = makeFakeSocket(true);
       wire(socket);
       changeSetting('updateSetting', 'wiretap.allowMacroExecution', 'true');
-      expect(gateEmits(socket)[0].payload.allowMacroExecution).toBe(false);
+      expect(gateEmits(socket)[0].payload.gateState.allowMacroExecution).toBe(false);
    });
 
-   it('ignores keys that are not Wiretap gates', () => {
+   it('ignores keys that are neither Wiretap gates nor bridge settings', () => {
       const socket = makeFakeSocket(true);
       wire(socket);
       const keys = [
          'wiretap.terminalTheme',
          'wiretap.endpointKind',
+         'core.backupFolder',
          'wiretap.constructor',
          'core.rollMode',
          'wiretap.',

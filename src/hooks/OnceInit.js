@@ -1,6 +1,7 @@
 import { bridgeState, reidentifyBridge } from '~/bridge/foundryBridge.js';
 import WiretapSidebarTab from '~/apps/WiretapSidebarTab.js';
 import { registerGateSettings } from '~/settings/gates.js';
+import { registerBridgeSettings } from '~/settings/bridgeSettings.js';
 import { registerSheetQueries } from '~/bridge/sheetQuery.js';
 import { TERMINAL_THEME_CHOICES, terminalTheme } from '~/components/terminalThemes.svelte.js';
 import {
@@ -95,6 +96,9 @@ export default function onceInit() {
 
    // The risk gates: one GM-only world setting per entry of the shared GATES registry, all closed by default.
    registerGateSettings();
+
+   // The bridge settings the sidecar acts on: the GM-only world setting naming the backup folder.
+   registerBridgeSettings();
 
    // The sheet user queries, on every client: a player's client must be able to receive them. Each handler refuses a
    // sender who is not a GM.

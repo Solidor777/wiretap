@@ -66,6 +66,15 @@ describe('onceInit settings registration', () => {
       }
    });
 
+   it('registers the bridge settings at init', () => {
+      onceInit();
+      const config = registered.get('backupFolder');
+      expect(config?.scope).toBe('world');
+      expect(config?.restricted).toBe(true);
+      expect(config?.type).toBe(String);
+      expect(config?.default).toBe('');
+   });
+
    it('re-identifies the bridge when endpointKind changes', () => {
       onceInit();
       registered.get('endpointKind').onChange('agent');

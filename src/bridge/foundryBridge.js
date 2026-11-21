@@ -13,7 +13,9 @@ import { getBudget } from '$shared/budgets.js';
 import { cleanForLog, describeCause } from '$shared/logText.js';
 import { SCRIPT_API_VERSION } from '$shared/scripts.js';
 import { truncateUtf8 } from '$shared/utf8.js';
+import { isBridgeSettingKey, readBridgeSettings } from '~/bridge/bridgeSettings.js';
 import { gateNameFromSettingKey, readGateState } from '~/bridge/gates.js';
+import { createPieceChannel } from '~/bridge/pieces.js';
 import { createCallTool } from '~/bridge/scripts/callTool.js';
 import { ERROR_MESSAGE_MAX_BYTES } from '~/bridge/scripts/core.js';
 import { ScriptError, scriptRegistry } from '~/bridge/scripts/registry.js';
@@ -145,10 +147,11 @@ function replyInvoke(ack, value) {
 }
 
 /**
- * Wire the Foundry bridge onto the connection's socket: send the identify (with the gate snapshot) on each connect
- * (acked by the sidecar), send the script registry after each ok identify ack and, once per task, whenever it changes,
- * push a fresh gate snapshot when a gate setting changes, track the identified state, answer BRIDGE_INVOKE requests by
- * dispatching through the op table, and ack BRIDGE_PING liveness probes with `{ ok: true }`.
+ * Wire the Foundry bridge onto the connection's socket: send the identify (with the gate snapshot and the bridge
+ * settings) on each connect (acked by the sidecar), send the script registry after each ok identify ack and, once per
+ * task, whenever it changes, push a fresh gate snapshot and bridge settings when a gate or bridge setting changes,
+ * track the identified state, answer BRIDGE_INVOKE requests by dispatching through the op table with the socket's
+ * piece channel, and ack BRIDGE_PING liveness probes with `{ ok: true }`.
  * Reuses the single socket owned by the TerminalConnection (no second connection is opened).
  * @param {import('~/bridge/TerminalConnection.svelte.js').TerminalConnection} connection - The shared connection.
  * @param {object} [options] - Wiring options.
@@ -158,22 +161,33 @@ function replyInvoke(ack, value) {
  */
 export function initFoundryBridge(connection, { scripts = scriptRegistry } = {}) {
    /**
-    * Op-name to handler table; new core ops add one entry.
-    * @type {Record<string, (params: unknown) => Promise<unknown>>}
+    * Op-name to handler table; new core ops add one entry. Each handler gets the request params and the invocation's
+    * requestId and piece channel.
+    * @type {Record<string, (params: unknown, invocation: import('~/bridge/pieces.js').OpInvocation) =>
+    * Promise<unknown>>}
     */
    const opHandlers = {
       [OP_CALL_TOOL]: createCallTool({ registry: scripts }),
    };
 
    connection.onSocket((socket) => {
+      /** @type {import('~/bridge/pieces.js').PieceChannel} This socket's piece channel, shared by its invocations. */
+      const pieces = createPieceChannel(socket);
+
       // Answer operation requests (registered once per socket; persists across reconnects). The whole listener runs in
-      // one try: a malformed request or a missing ack never becomes an unhandled rejection.
+      // one try: a malformed request or a missing ack never becomes an unhandled rejection. The handler is called
+      // before the listener's first await, so a handler that opens a piece receiver first receives a piece the sidecar
+      // emits right after the invoke.
       socket.on(BRIDGE_INVOKE, async (request, ack) => {
          try {
             /** @type {unknown} The requested op name; undefined for a request that is not an object. */
             const op = typeof request === 'object' && request !== null ? request.op : undefined;
             // Own-property lookup: inherited names such as `constructor` or `__proto__` must stay unknown ops.
-            /** @type {((params: unknown) => Promise<unknown>) | undefined} The registered handler, if any. */
+            /**
+             * The registered handler, if any.
+             * @type {((params: unknown, invocation: import('~/bridge/pieces.js').OpInvocation) => Promise<unknown>) |
+             * undefined}
+             */
             const handler = typeof op === 'string' && Object.hasOwn(opHandlers, op) ? opHandlers[op] : undefined;
             if (!handler) {
                replyInvoke(ack, {
@@ -191,7 +205,10 @@ export function initFoundryBridge(connection, { scripts = scriptRegistry } = {})
             try {
                replyInvoke(ack, {
                   ok: true,
-                  result: await handler(request.params),
+                  result: await handler(request.params, {
+                     requestId: request.requestId,
+                     pieces,
+                  }),
                });
             } catch (err) {
                replyInvoke(ack, {
@@ -297,6 +314,7 @@ export function initFoundryBridge(connection, { scripts = scriptRegistry } = {})
                kind: sentKind,
                dom: true,
                gateState: readGateState(),
+               settings: readBridgeSettings(),
             },
             (ack) => {
                // An ack from an earlier attempt or connection must not decide the state of a later one.
@@ -327,24 +345,32 @@ export function initFoundryBridge(connection, { scripts = scriptRegistry } = {})
       };
 
       /**
-       * Push the fresh gate snapshot to the sidecar after a gate setting changed. Only a connected GM client pushes;
-       * the sidecar accepts a snapshot only from an identified endpoint, and a refusal is logged. The identify carries
-       * the snapshot read at (re)connect, so a change while disconnected needs no push. The setting document is already
-       * in the world collection when the hook runs (the collection is updated before the hook is called), so
-       * `readGateState` sees the new value, and the default after a delete. A change made by a user who is not a GM is
-       * ignored: the author is the last hook argument for create, update and delete alike.
+       * Push the fresh gate snapshot and bridge settings to the sidecar after a gate or bridge setting changed. Only a
+       * connected GM client pushes; the sidecar accepts a push only from an identified endpoint, and a refusal is
+       * logged. The identify carries the values read at (re)connect, so a change while disconnected needs no push. The
+       * setting document is already in the world collection when the hook runs (the collection is updated before the
+       * hook is called), so the reads see the new value, and the default after a delete. A change made by a user who
+       * is not a GM is ignored: the author is the last hook argument for create, update and delete alike.
        * @param {{ key?: unknown } | null} document - The created, updated or deleted Setting document.
        * @param {...unknown} args - The remaining hook arguments; the last is the author's user id.
        * @returns {void}
        */
       const pushGateState = (document, ...args) => {
-         if (!game.user.isGM || !socket.connected || gateNameFromSettingKey(document?.key) === null) {
+         if (!game.user.isGM || !socket.connected) {
+            return;
+         }
+         if (gateNameFromSettingKey(document?.key) === null && !isBridgeSettingKey(document?.key)) {
             return;
          }
          if (game.users.get(args.at(-1))?.isGM !== true) {
             return;
          }
-         socket.emit(BRIDGE_GATE_STATE, readGateState(), (ack) => {
+         /** @type {import('$shared/protocol.js').BridgeStatePush} The push payload. */
+         const payload = {
+            gateState: readGateState(),
+            settings: readBridgeSettings(),
+         };
+         socket.emit(BRIDGE_GATE_STATE, payload, (ack) => {
             if (ack?.ok === true) {
                return;
             }

@@ -84,8 +84,21 @@ describe('bridge identify', () => {
          kind: 'human',
          dom: true,
          gateState: closedGateState(),
+         settings: { backupFolder: '' },
       });
       expect(typeof socket.identifies[0].ack).toBe('function');
+   });
+
+   it('sends the bridge settings in the identify', () => {
+      globalThis.game.settings.get = (module, key) => {
+         if (key === 'endpointKind') {
+            return kind;
+         }
+         return key === 'backupFolder' ? 'C:\\x' : undefined;
+      };
+      const socket = makeFakeSocket(true);
+      wire(socket);
+      expect(socket.identifies[0].payload.settings).toEqual({ backupFolder: 'C:\\x' });
    });
 
    it('identifies immediately when the socket is already connected', () => {
