@@ -26,11 +26,9 @@ import { createLogThrottle } from './logThrottle.ts';
 import { describeCause } from './logText.ts';
 import { sanitizeRegistry, type RegistryOutcome, type RegistryTool } from './toolRegistry.ts';
 
-// Milliseconds to wait for a Foundry client to ack a bridge invocation before failing.
-const INVOKE_TIMEOUT_MS: number = 10_000;
-
 // Milliseconds to wait for a Foundry client to ack a liveness ping before the endpoint counts as unresponsive: a 1 s
-// ping on loopback is far above normal event-loop latency yet keeps a timed-out caller's wait to at most 10 s + 1 s.
+// ping on loopback is far above normal event-loop latency yet keeps a timed-out caller's wait to at most the call's
+// reply wait (chosen by the router: 10 s, or the call's `timeoutMs` + 2 s) + 1 s.
 const PING_TIMEOUT_MS: number = 1_000;
 
 // Length in milliseconds of the window that bounds refused-identify log lines.
@@ -220,7 +218,7 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       ping: async (socketId) => {
          await emitWithAck(socketId, BRIDGE_PING, PING_TIMEOUT_MS, undefined, false);
       },
-      send: (socketId, payload) => emitWithAck(socketId, BRIDGE_INVOKE, INVOKE_TIMEOUT_MS, payload, true),
+      send: (socketId, payload, timeoutMs) => emitWithAck(socketId, BRIDGE_INVOKE, timeoutMs, payload, true),
    });
 
    /**

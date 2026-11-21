@@ -1624,3 +1624,107 @@ describe('router invokeTool', () => {
       expect(sent).toEqual([]);
    });
 });
+
+describe('router reply wait', () => {
+   /**
+    * Build the registry tool a client would register with the given argument schema.
+    * @param {string} name - Name the tool registers under.
+    * @param {object} inputSchema - The tool's JSON Schema for its arguments.
+    * @returns {object} The sanitized tool.
+    */
+   function tool(name, inputSchema) {
+      return sanitizeRegistry(registryPayload([script(name, { inputSchema })]), () => undefined).tools[0];
+   }
+
+   // An argument schema that declares the shared `timeoutMs` argument.
+   const timedSchema = {
+      type: 'object',
+      properties: {
+         timeoutMs: {
+            type: 'integer',
+            minimum: 1000,
+            maximum: 300000,
+         },
+      },
+   };
+
+   // An argument schema without `timeoutMs`.
+   const plainSchema = {
+      type: 'object',
+      properties: { text: { type: 'string' } },
+   };
+
+   /**
+    * Build a router over one agent endpoint whose transport records each reply wait and answers or times out.
+    * @param {object[]} tools - The tools the endpoint registers.
+    * @param {boolean} [silent] - Whether the transport rejects with a timeout instead of acking.
+    * @returns {{ router: ReturnType<typeof createRouter>, waits: number[] }} The router and the waits it sent with.
+    */
+   function setup(tools, silent = false) {
+      const registry = createEndpointRegistry();
+      add(registry, 'a', 'agent');
+      registry.setTools('a', tools);
+      /** @type {number[]} The reply wait of each send, in milliseconds. */
+      const waits = [];
+      const router = createRouter(registry, {
+         send: async (_socketId, _payload, timeoutMs) => {
+            waits.push(timeoutMs);
+            if (silent) {
+               throw new EndpointTimeoutError('operation has timed out');
+            }
+            return { ok: true };
+         },
+         ping: async () => undefined,
+         log: () => undefined,
+      });
+      return {
+         router,
+         waits,
+      };
+   }
+
+   it('waits timeoutMs + 2000 ms for a tool whose schema declares timeoutMs', async () => {
+      const listed = tool('slow', timedSchema);
+      const { router, waits } = setup([listed]);
+      await router.invokeTool('slow', { timeoutMs: 300000 }, { listed });
+      await router.invokeTool('slow', { timeoutMs: 1000 }, { listed });
+      expect(waits).toEqual([
+         302000,
+         3000,
+      ]);
+   });
+
+   it('waits 10000 ms for a declaring tool called without timeoutMs', async () => {
+      const listed = tool('slow', timedSchema);
+      const { router, waits } = setup([listed]);
+      await router.invokeTool('slow', {}, { listed });
+      expect(waits).toEqual([10000]);
+   });
+
+   it('waits 10000 ms when the tool does not declare timeoutMs, whatever the arguments carry', async () => {
+      const listed = tool('echo', plainSchema);
+      const { router, waits } = setup([listed]);
+      await router.invokeTool('echo', { timeoutMs: 60000 }, { listed });
+      expect(waits).toEqual([10000]);
+   });
+
+   it('waits 10000 ms for a plain operation', async () => {
+      const { router, waits } = setup([]);
+      await router.invoke(OP_CALL_TOOL, { arguments: { timeoutMs: 60000 } });
+      expect(waits).toEqual([10000]);
+   });
+
+   it('names the call\'s own wait in the ENDPOINT_TIMEOUT message', async () => {
+      const listed = tool('slow', timedSchema);
+      const { router } = setup([listed], true);
+      const timed = await router.invokeTool('slow', { timeoutMs: 30000 }, { listed }).catch((cause) => cause);
+      expect(timed).toMatchObject({
+         code: ENDPOINT_TIMEOUT,
+         message: 'Foundry did not respond in 32 s; the operation may still have applied. Check before retrying.',
+      });
+      const plain = await router.invokeTool('slow', {}, { listed }).catch((cause) => cause);
+      expect(plain.message).toBe(
+         'Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.',
+      );
+   });
+});

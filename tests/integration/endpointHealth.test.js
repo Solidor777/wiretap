@@ -3,8 +3,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import net from 'node:net';
 import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
-import { callCreateDocuments } from './mcpHttp.js';
-import { createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
+import { callCreateDocuments, mcpCall } from './mcpHttp.js';
+import { createDocumentsScript, registryPayload, script } from '../unit/scriptFixtures.js';
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
@@ -90,9 +90,10 @@ describe('endpoint health over Socket.IO', () => {
     * Connect and identify a fake Foundry client whose answers to invocations and pings are switchable.
     * @param {number} port - The Socket.IO port.
     * @param {string} kind - The endpoint kind to identify as.
+    * @param {object[]} [scripts] - The script definitions the fake registers (default: `create_documents`).
     * @returns {Promise<FakeClient>} The connected fake.
     */
-   async function connectFake(port, kind) {
+   async function connectFake(port, kind, scripts = [createDocumentsScript()]) {
       /** @type {import('socket.io-client').Socket} The fake client. */
       const client = ioClient(`http://127.0.0.1:${port}`);
       clients.push(client);
@@ -112,7 +113,7 @@ describe('endpoint health over Socket.IO', () => {
       });
       await new Promise((resolve) => client.on('connect', resolve));
       await client.emitWithAck(BRIDGE_IDENTIFY, identify({ kind, userId: kind }));
-      await client.emitWithAck(BRIDGE_REGISTRY, registryPayload([createDocumentsScript()]));
+      await client.emitWithAck(BRIDGE_REGISTRY, registryPayload(scripts));
       return fake;
    }
 
@@ -193,6 +194,73 @@ describe('endpoint health over Socket.IO', () => {
       expect(unavailable.isError).toBe(true);
       expect(unavailable.content[0].text.startsWith(`${ENDPOINT_UNAVAILABLE}: `)).toBe(true);
       expect(agent.invokes).toHaveLength(1);
+   });
+
+   /**
+    * Call the `slow` MCP tool inside the port's session.
+    * @param {object} args - The tool arguments.
+    * @returns {Promise<{ isError?: boolean, content: { text: string }[] }>} The tool result.
+    */
+   async function callSlow(args) {
+      /** @type {{ result: any }} The JSON-RPC response. */
+      const response = await mcpCall(mcpPort, {
+         jsonrpc: '2.0',
+         id: 1,
+         method: 'tools/call',
+         params: {
+            name: 'slow',
+            arguments: args,
+         },
+      });
+      return response.result;
+   }
+
+   // A script that declares the shared `timeoutMs` argument.
+   const slowScript = script('slow', {
+      inputSchema: {
+         type: 'object',
+         properties: {
+            timeoutMs: {
+               type: 'integer',
+               minimum: 1000,
+               maximum: 300000,
+            },
+         },
+      },
+   });
+
+   it('waits timeoutMs + 2 s for the reply of a tool that declares timeoutMs, and names that wait', async () => {
+      const port = await start();
+      const agent = await connectFake(port, 'agent', [slowScript]);
+      fakeTimers();
+      agent.answer.invokes = false;
+      const first = callSlow({ timeoutMs: 20000 });
+      await until(() => agent.invokes.length === 1, 'the agent to receive the invocation');
+      expect(agent.invokes[0].params.arguments).toEqual({ timeoutMs: 20000 });
+      await vi.advanceTimersByTimeAsync(21_999);
+      expect(agent.pings).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await until(() => agent.pings.length === 1, 'the agent to receive the ping');
+      const timedOut = await first;
+      expect(timedOut.isError).toBe(true);
+      expect(timedOut.content[0].text).toBe(
+         `${ENDPOINT_TIMEOUT}: Foundry did not respond in 22 s; the operation may still have applied. `
+            + 'Check before retrying.',
+      );
+   });
+
+   it('keeps the 10 s reply wait for a declaring tool called without timeoutMs', async () => {
+      const port = await start();
+      const agent = await connectFake(port, 'agent', [slowScript]);
+      fakeTimers();
+      agent.answer.invokes = false;
+      const first = callSlow({});
+      await until(() => agent.invokes.length === 1, 'the agent to receive the invocation');
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(agent.pings).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await until(() => agent.pings.length === 1, 'the agent to receive the ping');
+      expect((await first).content[0].text).toContain('did not respond in 10 s;');
    });
 
    it('leaves no timer running after dispose while an endpoint is being probed', async () => {

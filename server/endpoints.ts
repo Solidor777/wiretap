@@ -138,8 +138,12 @@ export interface RouterTimers {
 /** The injectable collaborators of a router. */
 export interface RouterDeps {
    // Emits the invoke payload to a socket and resolves with the raw ack. Rejects with an EndpointTimeoutError when no
-   // ack arrives in time; any other rejection (EndpointGoneError included) means the endpoint is gone.
-   send: (socketId: string, payload: { op: string; params: object; requestId: string }) => Promise<unknown>;
+   // ack arrives within `timeoutMs`; any other rejection (EndpointGoneError included) means the endpoint is gone.
+   send: (
+      socketId: string,
+      payload: { op: string; params: object; requestId: string },
+      timeoutMs: number,
+   ) => Promise<unknown>;
    // Sends a liveness probe to a socket and resolves when it acks; rejects when the ack does not arrive in time or the
    // socket cannot be written to.
    ping: (socketId: string) => Promise<void>;
@@ -168,9 +172,17 @@ export const DOM_ROUTE_ORDER: readonly EndpointKind[] = ['agent'];
 // receives at most 12 pings a minute.
 const PROBE_INTERVAL_MS: number = 5_000;
 
-// The ENDPOINT_TIMEOUT message. Hidden coupling: "10 s" is the ack window INVOKE_TIMEOUT_MS in foundryBridge.ts.
-const TIMEOUT_MESSAGE: string =
-   'Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.';
+// Milliseconds the sidecar waits for a GM client's reply to an invocation that carries no `timeoutMs`. The client's
+// own script limit is 8 s, so the reply of a script that hit it still arrives inside this wait.
+export const DEFAULT_REPLY_WAIT_MS: number = 10_000;
+
+// The shared argument a tool opts into by declaring it in its input schema: the client's script limit for that call,
+// in milliseconds. Its bounds come from the tool's listed schema, which the MCP layer validates before the call.
+const TIMEOUT_ARG: string = 'timeoutMs';
+
+// Milliseconds added to a call's `timeoutMs` for the sidecar's reply wait, so the client's own timeout reply (sent when
+// its limit ends) arrives before the sidecar gives up.
+const REPLY_WAIT_MARGIN_MS: number = 2_000;
 
 // Maximum UTF-8 byte length of the ENDPOINT_UNAVAILABLE message.
 const MAX_UNAVAILABLE_BYTES: number = 256;
@@ -220,6 +232,33 @@ const RESERVED_CODES: ReadonlySet<string> = new Set([
    NOT_GM,
    TOOL_GONE,
 ]);
+
+/**
+ * Build the ENDPOINT_TIMEOUT message, which names the reply wait the call actually had.
+ * @param {number} waitMs - The reply wait of the call, in milliseconds.
+ * @returns {string} The message.
+ */
+function timeoutMessage(waitMs: number): string {
+   return (
+      `Foundry did not respond in ${waitMs / 1000} s; ` + 'the operation may still have applied. Check before retrying.'
+   );
+}
+
+/**
+ * Choose the reply wait of a registry tool call: `timeoutMs` + 2,000 ms when the listed tool declares `timeoutMs` and
+ * the arguments carry it, else the default wait.
+ * @param {RegistryTool} listed - The listed tool the arguments were validated against.
+ * @param {Record<string, unknown>} args - The validated tool arguments.
+ * @returns {number} The reply wait in milliseconds.
+ */
+function toolReplyWaitMs(listed: RegistryTool, args: Record<string, unknown>): number {
+   // The call's own script limit, present only when the caller set it.
+   const timeoutMs: unknown = args[TIMEOUT_ARG];
+   if (Object.hasOwn(listed.shape, TIMEOUT_ARG) && typeof timeoutMs === 'number') {
+      return timeoutMs + REPLY_WAIT_MARGIN_MS;
+   }
+   return DEFAULT_REPLY_WAIT_MS;
+}
 
 /**
  * Compare two optional gate declarations.
@@ -772,6 +811,7 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
     * @param {string} op - The operation name.
     * @param {object} params - The operation parameters.
     * @param {InvokeOptions} options - `endpoint` restricts the kind; `requireGate` is the gate of a plain call.
+    * @param {number} waitMs - How long to wait for the endpoint's reply, in milliseconds.
     * @param {RegistryTool} [listed] - The listed tool of a registry tool call.
     * @returns {Promise<{ result: unknown, tool?: RegistryTool }>} The result, and the picked endpoint's declaration of
     *          the tool for a registry tool call.
@@ -780,6 +820,7 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       op: string,
       params: object,
       options: InvokeOptions,
+      waitMs: number,
       listed?: RegistryTool,
    ): Promise<{ result: unknown; tool?: RegistryTool }> {
       // Whether the call is a registry tool call for a script that needs the DOM.
@@ -844,17 +885,21 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       );
       let ack: unknown;
       try {
-         ack = await deps.send(endpoint.socketId, {
-            op,
-            params,
-            requestId,
-         });
+         ack = await deps.send(
+            endpoint.socketId,
+            {
+               op,
+               params,
+               requestId,
+            },
+            waitMs,
+         );
       } catch (cause) {
          if (cause instanceof EndpointTimeoutError) {
             deps.log(`Wiretap sidecar | invoke ${op} requestId=${requestId} timed out`);
             // The health check finishes before the error is thrown, so the next call already sees its outcome.
             await check(endpoint.socketId);
-            throw new BridgeError(ENDPOINT_TIMEOUT, TIMEOUT_MESSAGE);
+            throw new BridgeError(ENDPOINT_TIMEOUT, timeoutMessage(waitMs));
          }
          // Every non-timeout transport failure (a disconnect, a missing socket, a failed write) is a gone endpoint.
          deps.log(
@@ -910,7 +955,7 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
        *          failure).
        */
       async invoke(op: string, params: object, options: InvokeOptions = {}): Promise<unknown> {
-         return (await dispatch(op, params, options)).result;
+         return (await dispatch(op, params, options, DEFAULT_REPLY_WAIT_MS)).result;
       },
 
       /**
@@ -934,6 +979,7 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
                arguments: args,
             },
             { endpoint: options.endpoint },
+            toolReplyWaitMs(options.listed, args),
             options.listed,
          );
          return {
