@@ -6,6 +6,9 @@ import {
    SCRIPT_API_VERSION,
    SCRIPT_REQUIRES,
    SCRIPT_SOURCES,
+   USER_INTERACTION_META_KEY,
+   USER_INTERACTION_TOOLS,
+   definitionBytes,
    parseRegistryPayload,
    validateScriptDefinition,
 } from '../../shared/scripts.js';
@@ -693,5 +696,70 @@ describe('validateScriptDefinition: handleArgs', () => {
       const outcome = validateScriptDefinition(withHandleArgs(handleArgs), 'shipped');
       expect(outcome.ok, label).toBe(false);
       expect(outcome.reason).toMatch(/handleArgs/);
+   });
+});
+
+describe('validateScriptDefinition: requiresUserInteraction', () => {
+   it('keeps requiresUserInteraction: true in the normalized definition and omits it otherwise', () => {
+      const flagged = shipped(script('x', { requiresUserInteraction: true }));
+      expect(flagged.ok).toBe(true);
+      expect(flagged.definition.requiresUserInteraction).toBe(true);
+      const plain = shipped(script('x'));
+      expect(plain.ok).toBe(true);
+      expect(Object.hasOwn(plain.definition, 'requiresUserInteraction')).toBe(false);
+   });
+
+   it.each([
+      false,
+      'true',
+      1,
+      null,
+      {},
+   ])('refuses requiresUserInteraction %j', (value) => {
+      const outcome = shipped(script('x', { requiresUserInteraction: value }));
+      expect(outcome.ok).toBe(false);
+      expect(outcome.reason).toBe('requiresUserInteraction may only be true');
+   });
+
+   it('does not count the flag in the definition size', () => {
+      const limit = getBudget('DEFINITION_MAX_BYTES').value;
+      const fixed = Buffer.byteLength(JSON.stringify({
+         name: 'fat_tool',
+         description: 'Synthetic.',
+         inputSchema: padded(0),
+      }));
+      const schema = padded(limit - 1 - fixed);
+      expect(definitionBytes('fat_tool', 'Synthetic.', schema)).toBe(limit - 1);
+      const plain = script('fat_tool', {
+         description: 'Synthetic.',
+         inputSchema: schema,
+      });
+      const flagged = {
+         ...plain,
+         requiresUserInteraction: true,
+      };
+      expect(shipped(flagged).ok).toBe(true);
+      const { definition } = shipped(flagged);
+      expect(definitionBytes(definition.name, definition.description, definition.inputSchema)).toBe(
+         definitionBytes(plain.name, plain.description, plain.inputSchema),
+      );
+   });
+
+   it('exports the meta key and the forced tool names', () => {
+      expect(USER_INTERACTION_META_KEY).toBe('anthropic/requiresUserInteraction');
+      expect(USER_INTERACTION_TOOLS).toEqual(['delete_pack']);
+      expect(Object.isFrozen(USER_INTERACTION_TOOLS)).toBe(true);
+   });
+
+   it.each([
+      'plugin',
+      'agent',
+   ])('refuses a %s definition named delete_pack whatever flag it carries', (source) => {
+      for (const overrides of [
+         { requiresUserInteraction: true },
+         {},
+      ]) {
+         expect(validateScriptDefinition(script('delete_pack', overrides), source).ok).toBe(false);
+      }
    });
 });

@@ -41,6 +41,12 @@ describe('script registry: registration', () => {
       expect(registry.get('alpha').definition.name).toBe('alpha');
    });
 
+   it('keeps requiresUserInteraction in definitions() of a registered script', () => {
+      const { registry } = make();
+      registry.register(script('alpha', { requiresUserInteraction: true }), noop);
+      expect(registry.definitions()[0].requiresUserInteraction).toBe(true);
+   });
+
    it('keeps registration order in the definitions it lists', () => {
       const { registry } = make();
       registry.register(script('b_script'), noop);

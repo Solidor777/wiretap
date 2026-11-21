@@ -76,6 +76,28 @@ describe('sanitizeRegistry: accepted tools', () => {
       expect(withHandle.schemaSignature).not.toBe(plain.schemaSignature);
    });
 
+   it('marks a tool whose definition declares requiresUserInteraction', () => {
+      const { outcome } = run([entry({ requiresUserInteraction: true })]);
+      expect(outcome.tools[0].requiresUserInteraction).toBe(true);
+   });
+
+   it('marks delete_pack although its definition omits the flag', () => {
+      const { outcome } = run([entry({ name: 'delete_pack' })]);
+      expect(outcome.tools[0].requiresUserInteraction).toBe(true);
+   });
+
+   it('leaves every other tool unmarked', () => {
+      const { outcome } = run([entry()]);
+      expect(outcome.tools[0].requiresUserInteraction).toBe(false);
+   });
+
+   it('changes signature but not schemaSignature when the flag differs', () => {
+      const plain = run([entry()]).outcome.tools[0];
+      const flagged = run([entry({ requiresUserInteraction: true })]).outcome.tools[0];
+      expect(flagged.signature).not.toBe(plain.signature);
+      expect(flagged.schemaSignature).toBe(plain.schemaSignature);
+   });
+
    it('does not reserve create_documents: it is a script like any other', () => {
       expect(run([entry({ name: 'create_documents' })]).outcome.tools.map((tool) => tool.name)).toEqual([
          'create_documents',

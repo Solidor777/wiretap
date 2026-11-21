@@ -3,6 +3,7 @@ import { z, type ZodRawShape, type ZodType } from 'zod';
 import { getBudget } from '../shared/budgets.js';
 import {
    RESERVED_SCRIPT_NAMES,
+   USER_INTERACTION_TOOLS,
    definitionBytes,
    parseRegistryPayload,
    validateScriptDefinition,
@@ -51,6 +52,11 @@ export interface RegistryTool {
    gate?: RequiredGate;
    /** The text arguments that may be given as a handle reference; empty when the tool takes none. */
    handleArgs: string[];
+   /**
+    * Whether the tool is listed with the user-interaction meta entry: the definition set the flag or the name is in
+    * `USER_INTERACTION_TOOLS`.
+    */
+   requiresUserInteraction: boolean;
    /** A string that differs whenever any listed or routed property of the tool differs; used to detect changes. */
    signature: string;
    /** The argument schema as the SDK lists it; a call is refused when the picked endpoint declares another one. */
@@ -369,8 +375,19 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
       return validated;
    }
    // The normalized definition.
-   const { name, version, description, inputSchema, result, requires, mutates, gate, handleArgs, strictNested } =
-      validated.definition;
+   const {
+      name,
+      version,
+      description,
+      inputSchema,
+      result,
+      requires,
+      mutates,
+      gate,
+      handleArgs,
+      strictNested,
+      requiresUserInteraction,
+   } = validated.definition;
    if (requires === 'none') {
       return {
          ok: false,
@@ -408,6 +425,8 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
    }
    // The risk gate the script declared, when it declared one.
    const requiredGate: RequiredGate | undefined = gate === undefined ? undefined : { gate };
+   // Whether the human is prompted before every call; forced by name so no client can list such a tool without it.
+   const prompted: boolean = requiresUserInteraction === true || USER_INTERACTION_TOOLS.includes(name);
    seen.add(name);
    return {
       ok: true,
@@ -424,6 +443,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
          mutates,
          ...(requiredGate === undefined ? {} : { gate: requiredGate }),
          handleArgs: handleArgs ?? [],
+         requiresUserInteraction: prompted,
          signature: JSON.stringify([
             name,
             version,
@@ -435,6 +455,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
             requiredGate ?? null,
             handleArgs ?? [],
             strictNested === true,
+            prompted,
          ]),
          schemaSignature: JSON.stringify([
             listedSchema,

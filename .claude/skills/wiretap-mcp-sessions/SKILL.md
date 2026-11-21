@@ -10,6 +10,7 @@ paths:
   - "tests/unit/scriptFixtures.js"
   - "tests/unit/toolRegistry.test.js"
   - "tests/unit/toolRegistry.logs.test.js"
+  - "tests/integration/userInteractionMeta.test.js"
   - "tests/unit/foundryBridge.registry.test.js"
   - "tests/integration/mcpSessions.test.js"
   - "tests/integration/scriptRegistry.test.js"
@@ -130,8 +131,19 @@ member, unique; `version` a semver-like string of at most `SCRIPT_VERSION_MAX_CH
 `DESCRIPTION_MAX_CHARS` (240) characters on one line; `inputSchema` an object within `DEFINITION_MAX_BYTES` both as received and
 as the SDK lists it, every array schema declaring a `maxItems` of at most `SCHEMA_ARRAY_ITEMS_MAX` (1000); `result.budgetBytes` an integer 1 to 16000; `requires` `'api'` or `'dom'` (`'none'` is refused: it runs on
 the sidecar); `mutates` a boolean, required and never defaulted; optional `gate` (a name in `GATES` other than
-`allowedPluginModules`); `moduleId` is refused. A `RegistryTool` carries `name`, `version`, `description`, `shape`,
-`budgetBytes`, `requires`, `mutates`, `gate?`, `signature` and `schemaSignature`.
+`allowedPluginModules`); optional `requiresUserInteraction`, only `true` (any other value refused with
+`requiresUserInteraction may only be true`; not counted in the definition size); `moduleId` is refused. A `RegistryTool`
+carries `name`, `version`, `description`, `shape`, `strict`, `budgetBytes`, `requires`, `mutates`, `gate?`,
+`handleArgs`, `requiresUserInteraction`, `signature` and `schemaSignature`.
+
+User-interaction prompt: `RegistryTool.requiresUserInteraction` is true when the validated definition carries the flag
+or its name is in `USER_INTERACTION_TOOLS` (`shared/scripts.js`, `['delete_pack']`), so a client cannot list
+`delete_pack` without it. `syncRegistryTools` in `server/mcp.ts` then registers the tool with
+`_meta: { 'anthropic/requiresUserInteraction': true }` (`USER_INTERACTION_META_KEY`), built by the sidecar and never
+copied from the client; every other tool has no `_meta`. The SDK client's `listTools()` returns that object
+(`tests/integration/userInteractionMeta.test.js`). The flag is the last element of `signature` and not part of
+`schemaSignature`; a call is forwarded unchanged. The prompt is shown by the MCP client (Claude Code); another client or
+a local process is not prompted.
 
 `jsonSchemaToZodShape(schema)` converts a documented subset: a root object whose properties are string (`enum`,
 `minLength`, `maxLength`), number, integer (`minimum`, `maximum`), boolean, array (`items`, `minItems`, `maxItems`) or
@@ -139,8 +151,8 @@ object, depth 4, 64 nodes, 32 properties, string enums of at most 32 values. The
 `PROPERTY_NAME_PATTERN`) are exported by `shared/schemaValidate.js` and imported here, so both sides share them. `$ref`, combinators, `pattern`, `format`,
 `default`, `const`, unknown keywords and `Object.prototype`-named properties refuse the schema. A `description` is validated
 on every node but listed only on object properties. `RegistryTool.signature` identifies a definition for change detection (it covers
-the version, the budget, `requires`, `mutates` and the gate as well as the listed definition); each script is registered with
-`annotations: { readOnlyHint: !mutates }`.
+the version, the budget, `requires`, `mutates`, the gate, `handleArgs`, `strictNested` and `requiresUserInteraction` as
+well as the listed definition); each script is registered with `annotations: { readOnlyHint: !mutates }`.
 Log text goes through `server/logText.ts` (a re-export of `shared/logText.js`, which the client also uses): `cleanForLog(text, maxBytes)` replaces control characters and cuts to a byte bound,
 `describeCause(cause, maxBytes?)` does the same for a thrown value and never throws; `mcp.ts`, `mcpSessions.ts`, `foundryBridge.ts`,
 `resultBudget.ts` and `toolRegistry.ts` all use them.
@@ -169,6 +181,8 @@ and sends its registry after every acknowledged identify and on each registry ch
 - `tests/unit/foundryBridge.registry.test.js`: the `bridge:registry` socket handler and its per-socket rate limit. `tests/unit/logText.test.js`: the log helpers.
 - `tests/integration/scriptRegistry.test.js`: `create_documents` through the registry, argument validation before sending, payload shape
   refusals, annotations and `requires` routing over real sockets.
+- `tests/integration/userInteractionMeta.test.js`: the `_meta` entry as the SDK client lists it (flagged, forced by
+  name, absent otherwise) and an unchanged forwarded call.
 - `tests/integration/mcpSessions.test.js`: real HTTP with the SDK client (lifecycle, methods, late tools and
   `list_changed`, endpoint choice, gates, expiry, cap, 503).
 - `tests/integration/mcpHardening.test.js` (with `mcpHarness.js`): body, header, idle-socket and connection limits, no body

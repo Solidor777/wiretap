@@ -8,7 +8,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z, type ZodRawShape } from 'zod';
 import { getBudget } from '../shared/budgets.js';
 import { ENDPOINT_KINDS } from '../shared/protocol.js';
-import { RESERVED_SCRIPT_NAMES } from '../shared/scripts.js';
+import { RESERVED_SCRIPT_NAMES, USER_INTERACTION_META_KEY } from '../shared/scripts.js';
 import { createBackupTools, type BackupBridge } from './backupTools.ts';
 import { createBackupStore, type BackupStoreOptions } from './backups.ts';
 import { type EndpointKind, type InvokeOptions, type Router } from './endpoints.ts';
@@ -726,6 +726,11 @@ export function startMcpServer(
          if (session.registered.has(tool.name)) {
             continue;
          }
+         // The one tool-level meta entry the sidecar lists: built here, never taken from the client, and present only
+         // on a tool that prompts the human before every call.
+         const meta: { _meta?: Record<string, unknown> } = tool.requiresUserInteraction
+            ? { _meta: { [USER_INTERACTION_META_KEY]: true } }
+            : {};
          session.registered.set(tool.name, {
             signature: tool.signature,
             handle: session.server.registerTool(
@@ -736,6 +741,7 @@ export function startMcpServer(
                   // A script that does not mutate is read-only. `destructiveHint` is left to the protocol default
                   // (destructive) because nothing the client declares says a mutating script is not.
                   annotations: { readOnlyHint: !tool.mutates },
+                  ...meta,
                },
                makeRegistryToolHandler(bridge, tool, session.endpoint, {
                   store,
