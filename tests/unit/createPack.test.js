@@ -149,7 +149,7 @@ describe('createPackHandler', () => {
 
    it('is denied naming allowCompendiumWrites while the gate is closed, and calls Foundry zero times', async () => {
       /** @type {import('vitest').MockInstance} A spy on the pack lookup. */
-      const has = vi.spyOn(game.packs, 'has');
+      const keys = vi.spyOn(game.packs, 'keys');
       /** @type {ScriptError} The refusal. */
       const error = await refusal({
          label: 'MOCK Pack One',
@@ -157,28 +157,31 @@ describe('createPackHandler', () => {
       });
       expect(error.code).toBe(GATE_DENIED);
       expect(error.message).toContain('allowCompendiumWrites');
-      expect(has).not.toHaveBeenCalled();
+      expect(keys).not.toHaveBeenCalled();
       expect(createCompendium).not.toHaveBeenCalled();
    });
 
-   it('a dry run with the gate closed returns { dryRun: true, id, label, type } and calls Foundry zero times', async () => {
-      /** @type {Record<string, unknown>} The preview. */
-      const result = await createPackHandler(
-         {
+   it(
+      'a dry run with the gate closed returns { dryRun: true, id, label, type } and calls Foundry zero times',
+      async () => {
+         /** @type {Record<string, unknown>} The preview. */
+         const result = await createPackHandler(
+            {
+               label: 'MOCK Pack One',
+               type: 'JournalEntry',
+               dryRun: true,
+            },
+            {},
+         );
+         expect(result).toEqual({
+            dryRun: true,
+            id: 'world.mock-pack-one',
             label: 'MOCK Pack One',
             type: 'JournalEntry',
-            dryRun: true,
-         },
-         {},
-      );
-      expect(result).toEqual({
-         dryRun: true,
-         id: 'world.mock-pack-one',
-         label: 'MOCK Pack One',
-         type: 'JournalEntry',
-      });
-      expect(createCompendium).not.toHaveBeenCalled();
-   });
+         });
+         expect(createCompendium).not.toHaveBeenCalled();
+      },
+   );
 
    it.each([
       '',
@@ -305,6 +308,29 @@ describe('createPackHandler', () => {
       const dry = await refusal({
          label: 'MOCK Pack One',
          type: 'Actor',
+         dryRun: true,
+      });
+      expect(dry.code).toBe('ARGS_INVALID');
+      expect(dry.message).toContain('already exists');
+      expect(createCompendium).not.toHaveBeenCalled();
+   });
+
+   it('refuses a name that equals a world pack name when case is ignored, on a real run and on a dry run', async () => {
+      gates.allowCompendiumWrites = true;
+      game.packs.set('world.foo', {});
+      /** @type {ScriptError} The refusal of the real run. */
+      const real = await refusal({
+         label: 'MOCK Pack One',
+         type: 'Actor',
+         name: 'Foo',
+      });
+      expect(real.code).toBe('ARGS_INVALID');
+      expect(real.message).toContain('already exists');
+      /** @type {ScriptError} The refusal of the dry run. */
+      const dry = await refusal({
+         label: 'MOCK Pack One',
+         type: 'Actor',
+         name: 'Foo',
          dryRun: true,
       });
       expect(dry.code).toBe('ARGS_INVALID');
