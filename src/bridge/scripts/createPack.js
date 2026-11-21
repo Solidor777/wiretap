@@ -90,8 +90,14 @@ export async function createPackHandler(args, ctx) {
    /** @type {string} The id the pack has once created. */
    const id = `world.${name}`;
    // The server checks a collision only against world packs, so a system or module pack of the same bare name is free.
-   if (game.packs.has(id)) {
-      throw new ScriptError('ARGS_INVALID', `The pack ${id} already exists.`);
+   // It compares names with case, but stores each pack in the folder `packs/<name>`, and folder names ignore case on
+   // Windows; a name that differs from a world pack's only in case would point at that pack's folder.
+   /** @type {string} The id in lowercase, for the comparison that ignores case. */
+   const lowerId = id.toLowerCase();
+   /** @type {string | undefined} The id of the world pack whose name equals the name when case is ignored. */
+   const takenId = [...game.packs.keys()].find((key) => key.toLowerCase() === lowerId);
+   if (takenId !== undefined) {
+      throw new ScriptError('ARGS_INVALID', `The pack ${takenId} already exists.`);
    }
    if (dryRun) {
       return /** @type {{ dryRun: true, id: string, label: string, type: string }} */ (
