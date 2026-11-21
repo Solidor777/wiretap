@@ -16,6 +16,8 @@ import { sanitizeRegistry } from '../../server/toolRegistry.ts';
 import { registryPayload, script } from './scriptFixtures.js';
 import { truncateUtf8 } from '../../server/utf8.ts';
 import { closedGateState } from '../../shared/gates.js';
+import { defaultBridgeSettings } from '../../shared/bridgeSettings.js';
+import { BACKUP_SIDECAR_CODES, TRASH_FAILED } from '../../shared/backup.js';
 import {
    ENDPOINT_GONE,
    GATE_DENIED,
@@ -72,6 +74,7 @@ describe('createEndpointRegistry', () => {
             kind: 'agent',
             dom: true,
             gateState: closedGateState(),
+            settings: defaultBridgeSettings(),
             tools: [],
             health: 'healthy',
             registeredAt: 1234,
@@ -332,7 +335,14 @@ describe('validateIdentify', () => {
    it('accepts a valid GM payload', () => {
       expect(validateIdentify(identify())).toEqual({
          ok: true,
-         identity: { userId: 'u1', userName: 'GM', kind: 'human', dom: true, gateState: closedGateState() },
+         identity: {
+            userId: 'u1',
+            userName: 'GM',
+            kind: 'human',
+            dom: true,
+            gateState: closedGateState(),
+            settings: defaultBridgeSettings(),
+         },
       });
    });
 
@@ -481,6 +491,7 @@ describe('normalizeAckError', () => {
       PROTOCOL_MISMATCH,
       NOT_GM,
       TOOL_GONE,
+      ...BACKUP_SIDECAR_CODES,
    ])(
       'turns the reserved protocol code %s from a client into OP_FAILED',
       (code) => {
@@ -1726,5 +1737,245 @@ describe('router reply wait', () => {
       expect(plain.message).toBe(
          'Foundry did not respond in 10 s; the operation may still have applied. Check before retrying.',
       );
+   });
+});
+
+describe('createEndpointRegistry settings', () => {
+   it('stores sanitized settings from identify, and defaults when absent or invalid', () => {
+      const registry = createEndpointRegistry();
+      registry.register(
+         's1',
+         validateIdentify(identify({ settings: { backupFolder: 'C:/backups', extra: 1 } })).identity,
+      );
+      expect(registry.get('s1').settings).toEqual({ backupFolder: 'C:/backups' });
+      add(registry, 's2', 'human');
+      expect(registry.get('s2').settings).toEqual(defaultBridgeSettings());
+      for (const settings of ['C:/backups', 5, null, { backupFolder: 7 }, { backupFolder: 'a\u0000b' }]) {
+         const result = validateIdentify(identify({ settings }));
+         expect(result.ok).toBe(true);
+         expect(result.identity.settings).toEqual(defaultBridgeSettings());
+      }
+   });
+
+   it('setSettings replaces a registered endpoint\'s settings and ignores an unregistered socket', () => {
+      const registry = createEndpointRegistry();
+      add(registry, 's1', 'human');
+      /** @type {number} Change notifications received. */
+      let notified = 0;
+      registry.subscribe(() => {
+         notified++;
+      });
+      registry.setSettings('s1', { backupFolder: 'D:/elsewhere' });
+      expect(registry.get('s1').settings).toEqual({ backupFolder: 'D:/elsewhere' });
+      registry.setSettings('ghost', { backupFolder: 'D:/elsewhere' });
+      expect(registry.get('ghost')).toBeUndefined();
+      expect(registry.list()).toHaveLength(1);
+      expect(notified).toBe(0);
+   });
+});
+
+describe('router invoke hooks', () => {
+   /**
+    * Build a router over one human endpoint whose transport records every send and answers with `respond`.
+    * @param {(payload: object) => Promise<unknown>} [respond] - The transport's answer to a send.
+    * @param {string[]} [order] - A log the transport appends `'send'` to.
+    * @returns {{ router: ReturnType<typeof createRouter>, registry: object, sent: object[] }} The router and its parts.
+    */
+   function setup(respond = async () => ({ ok: true, result: 'done' }), order = []) {
+      const registry = createEndpointRegistry();
+      add(registry, 'h', 'human');
+      /** @type {object[]} The `{ socketId, payload, timeoutMs }` of each send. */
+      const sent = [];
+      const router = createRouter(registry, {
+         send: (socketId, payload, timeoutMs) => {
+            order.push('send');
+            sent.push({
+               socketId,
+               payload,
+               timeoutMs,
+            });
+            return respond(payload);
+         },
+         ping: async () => undefined,
+         log: () => undefined,
+         newRequestId: () => 'req-9',
+      });
+      return {
+         router,
+         registry,
+         sent,
+      };
+   }
+
+   it('prepare sees the picked endpoint and the requestId, and its object replaces params', async () => {
+      const { router, sent } = setup();
+      /** @type {object[]} The `[endpoint, requestId]` pairs prepare saw. */
+      const seen = [];
+      const prepared = { replaced: true };
+      await expect(
+         router.invoke(
+            'op',
+            { original: true },
+            {
+               prepare: (endpoint, requestId) => {
+                  seen.push([endpoint.socketId, requestId]);
+                  return prepared;
+               },
+            },
+         ),
+      ).resolves.toBe('done');
+      expect(seen).toEqual([['h', 'req-9']]);
+      expect(sent).toHaveLength(1);
+      expect(sent[0].payload.params).toBe(prepared);
+      expect(sent[0].payload.requestId).toBe('req-9');
+   });
+
+   it('keeps params when prepare returns undefined', async () => {
+      const { router, sent } = setup();
+      const params = { original: true };
+      await router.invoke('op', params, { prepare: () => undefined });
+      expect(sent[0].payload.params).toBe(params);
+   });
+
+   it('a prepare that throws sends nothing and rejects with its error', async () => {
+      const { router, sent } = setup();
+      const failure = new BridgeError('BACKUP_BUSY', 'busy');
+      await expect(
+         router.invoke(
+            'op',
+            {},
+            {
+               prepare: () => {
+                  throw failure;
+               },
+            },
+         ),
+      ).rejects.toBe(failure);
+      expect(sent).toEqual([]);
+   });
+
+   it('runs prepare after the requireGate check, so a closed gate never reaches prepare', async () => {
+      const { router, sent } = setup();
+      /** @type {number} Calls of prepare. */
+      let prepared = 0;
+      await expect(
+         router.invoke(
+            'op',
+            {},
+            {
+               requireGate: { gate: 'allowDelete' },
+               prepare: () => {
+                  prepared++;
+                  return {};
+               },
+            },
+         ),
+      ).rejects.toMatchObject({ code: GATE_DENIED });
+      expect(prepared).toBe(0);
+      expect(sent).toEqual([]);
+   });
+
+   it('calls onSent after send was called and before the ack resolves', async () => {
+      /** @type {string[]} The order of the transport, the hook and the ack. */
+      const order = [];
+      const { router } = setup(async () => {
+         await Promise.resolve();
+         order.push('ack');
+         return { ok: true };
+      }, order);
+      await router.invoke(
+         'op',
+         {},
+         {
+            onSent: () => {
+               order.push('onSent');
+            },
+         },
+      );
+      expect(order).toEqual([
+         'send',
+         'onSent',
+         'ack',
+      ]);
+   });
+
+   it('waits replyWaitMs for the reply and names it in the timeout message', async () => {
+      vi.useFakeTimers();
+      try {
+         const registry = createEndpointRegistry();
+         add(registry, 'h', 'human');
+         /** @type {number[]} The reply wait of each send, in milliseconds. */
+         const waits = [];
+         const silent = createRouter(registry, {
+            send: (_socketId, _payload, timeoutMs) => {
+               waits.push(timeoutMs);
+               return new Promise((_resolve, reject) => {
+                  setTimeout(() => reject(new EndpointTimeoutError('operation has timed out')), timeoutMs);
+               });
+            },
+            ping: async () => undefined,
+            log: () => undefined,
+         });
+         /** @type {unknown} The settled outcome of the call, once it settles. */
+         let outcome;
+         silent.invoke('op', {}, { replyWaitMs: 3000 }).catch((cause) => {
+            outcome = cause;
+         });
+         await vi.advanceTimersByTimeAsync(2999);
+         expect(outcome).toBeUndefined();
+         await vi.advanceTimersByTimeAsync(1);
+         expect(waits).toEqual([3000]);
+         expect(outcome).toMatchObject({
+            code: ENDPOINT_TIMEOUT,
+            message: 'Foundry did not respond in 3 s; the operation may still have applied. Check before retrying.',
+         });
+      } finally {
+         vi.useRealTimers();
+      }
+   });
+
+   it('snapshot copies the gate state and settings of the endpoint invoke would pick, or undefined', () => {
+      const { router, registry } = setup();
+      add(registry, 'a', 'agent');
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowDelete: true,
+      });
+      registry.setSettings('a', { backupFolder: 'C:/agent' });
+      const snapshot = router.snapshot();
+      expect(snapshot).toEqual({
+         socketId: 'a',
+         gateState: {
+            ...closedGateState(),
+            allowDelete: true,
+         },
+         settings: { backupFolder: 'C:/agent' },
+      });
+      snapshot.settings.backupFolder = 'changed';
+      snapshot.gateState.allowDelete = false;
+      expect(registry.get('a').settings.backupFolder).toBe('C:/agent');
+      expect(registry.get('a').gateState.allowDelete).toBe(true);
+      expect(router.snapshot({ endpoint: 'human' })).toEqual({
+         socketId: 'h',
+         gateState: closedGateState(),
+         settings: defaultBridgeSettings(),
+      });
+      registry.setHealth('a', 'unresponsive');
+      registry.remove('h');
+      expect(router.snapshot()).toBeUndefined();
+   });
+
+   it('reports a client that claims a sidecar backup code as OP_FAILED', async () => {
+      const { router } = setup(async () => ({
+         ok: false,
+         error: {
+            code: TRASH_FAILED,
+            message: 'claimed',
+         },
+      }));
+      await expect(router.invoke('op', {})).rejects.toMatchObject({
+         code: OP_FAILED,
+         message: 'claimed',
+      });
    });
 });

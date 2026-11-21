@@ -136,7 +136,7 @@ describe('stateful MCP sessions', () => {
          invokes,
          register: (scripts) => socket.emitWithAck(BRIDGE_REGISTRY, registryPayload(scripts)),
          registerRaw: (payload) => socket.emitWithAck(BRIDGE_REGISTRY, payload),
-         pushGates: (state) => socket.emitWithAck(BRIDGE_GATE_STATE, state),
+         pushGates: (state) => socket.emitWithAck(BRIDGE_GATE_STATE, { gateState: state }),
       };
    }
 

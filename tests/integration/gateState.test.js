@@ -95,14 +95,19 @@ describe('gate state over Socket.IO', () => {
       const port = await start();
       const client = await connectFake(port);
       await client.emitWithAck(BRIDGE_IDENTIFY, identify());
-      const ack = await client.emitWithAck(BRIDGE_GATE_STATE, { allowFileUpload: true, allowedPluginModules: ['m'] });
+      const ack = await client.emitWithAck(BRIDGE_GATE_STATE, {
+         gateState: {
+            allowFileUpload: true,
+            allowedPluginModules: ['m'],
+         },
+      });
       expect(ack).toEqual({ ok: true });
       expect(server.bridge.gateState()).toEqual({
          ...closedGateState(),
          allowFileUpload: true,
          allowedPluginModules: ['m'],
       });
-      await client.emitWithAck(BRIDGE_GATE_STATE, { allowFileUpload: false });
+      await client.emitWithAck(BRIDGE_GATE_STATE, { gateState: { allowFileUpload: false } });
       expect(server.bridge.gateState()).toEqual(closedGateState());
    });
 
@@ -133,7 +138,9 @@ describe('gate state over Socket.IO', () => {
       await client.emitWithAck(BRIDGE_IDENTIFY, identify());
       await client.emitWithAck(
          BRIDGE_GATE_STATE,
-         JSON.parse('{"__proto__":{"allowMacroExecution":true},"allowUserWrites":"yes","extra":{"a":1}}'),
+         {
+            gateState: JSON.parse('{"__proto__":{"allowMacroExecution":true},"allowUserWrites":"yes","extra":{"a":1}}'),
+         },
       );
       expect(server.bridge.gateState()).toEqual(closedGateState());
    });
@@ -143,8 +150,10 @@ describe('gate state over Socket.IO', () => {
       const client = await connectFake(port);
       await client.emitWithAck(BRIDGE_IDENTIFY, identify());
       await client.emitWithAck(BRIDGE_GATE_STATE, {
-         allowMacroExecution: true,
-         allowedPluginModules: Array.from({ length: 5000 }, (_, index) => `m${index}`),
+         gateState: {
+            allowMacroExecution: true,
+            allowedPluginModules: Array.from({ length: 5000 }, (_, index) => `m${index}`),
+         },
       });
       expect(server.bridge.gateState()).toEqual({ ...closedGateState(), allowMacroExecution: true });
    });
@@ -160,7 +169,7 @@ describe('gate state over Socket.IO', () => {
       );
       expect(server.bridge.gateState({ endpoint: 'human' })).toEqual({ ...closedGateState(), allowUserWrites: true });
       expect(server.bridge.gateState({ endpoint: 'agent' })).toEqual({ ...closedGateState(), allowFileUpload: true });
-      await agent.emitWithAck(BRIDGE_GATE_STATE, { allowAgentScripts: true });
+      await agent.emitWithAck(BRIDGE_GATE_STATE, { gateState: { allowAgentScripts: true } });
       expect(server.bridge.gateState({ endpoint: 'agent' })).toEqual({ ...closedGateState(), allowAgentScripts: true });
       expect(server.bridge.gateState({ endpoint: 'human' })).toEqual({ ...closedGateState(), allowUserWrites: true });
       expect(server.bridge.gateState()).toEqual({ ...closedGateState(), allowAgentScripts: true });
@@ -171,7 +180,7 @@ describe('gate state over Socket.IO', () => {
       const gm = await connectFake(port);
       const stranger = await connectFake(port);
       await gm.emitWithAck(BRIDGE_IDENTIFY, identify({ gateState: { allowFileUpload: true } }));
-      const ack = await stranger.emitWithAck(BRIDGE_GATE_STATE, { allowMacroExecution: true });
+      const ack = await stranger.emitWithAck(BRIDGE_GATE_STATE, { gateState: { allowMacroExecution: true } });
       expect(ack).toMatchObject({ ok: false, error: { code: NOT_GM } });
       expect(server.bridge.gateState()).toEqual({ ...closedGateState(), allowFileUpload: true });
    });
@@ -184,7 +193,7 @@ describe('gate state over Socket.IO', () => {
          identify({ isGM: false, gateState: { allowMacroExecution: true } }),
       );
       expect(refused).toMatchObject({ ok: false, error: { code: NOT_GM } });
-      const ack = await player.emitWithAck(BRIDGE_GATE_STATE, { allowMacroExecution: true });
+      const ack = await player.emitWithAck(BRIDGE_GATE_STATE, { gateState: { allowMacroExecution: true } });
       expect(ack).toMatchObject({ ok: false, error: { code: NOT_GM } });
       expect(server.bridge.gateState()).toEqual(closedGateState());
    });

@@ -15,6 +15,8 @@ import {
    TOOL_GONE,
 } from '../shared/protocol.js';
 import { closedGateState, gateDenial, sanitizeGateState, type GateState } from '../shared/gates.js';
+import { sanitizeBridgeSettings, type BridgeSettings } from '../shared/bridgeSettings.js';
+import { BACKUP_SIDECAR_CODES } from '../shared/backup.js';
 import type { RegistryTool } from './toolRegistry.ts';
 import { truncateUtf8 } from './utf8.ts';
 
@@ -38,6 +40,8 @@ export interface EndpointIdentity {
    dom: boolean;
    // The sanitized risk-gate snapshot; every gate closed when the identify carried none or an invalid one.
    gateState: GateState;
+   // The sanitized bridge settings; the defaults when the identify carried none or an invalid one.
+   settings: BridgeSettings;
 }
 
 /** A registered bridge endpoint. */
@@ -66,8 +70,24 @@ export interface RequiredGate {
 export interface InvokeOptions {
    endpoint?: EndpointKind;
    // When set, the picked endpoint's own gate snapshot must open this gate, else the call fails with GATE_DENIED
-   // before anything is sent. Pick, gate check and send are one atomic step on one endpoint.
+   // before anything is sent.
    requireGate?: RequiredGate;
+   // How long to wait for the endpoint's reply, in milliseconds (default: `DEFAULT_REPLY_WAIT_MS`).
+   replyWaitMs?: number;
+   // Runs synchronously after the pick and the `requireGate` check and before the send, with the picked endpoint and
+   // the invocation's requestId. An object it returns replaces `params`; a throw aborts the call with that error and
+   // sends nothing. The pick, the gate check, `prepare` and the send are one synchronous step on one endpoint, so what
+   // `prepare` sets up for that endpoint and requestId is in place before the endpoint can see the invocation.
+   prepare?: (endpoint: Endpoint, requestId: string) => object | undefined;
+   // Called synchronously right after the payload is handed to the transport, before the reply is awaited.
+   onSent?: () => void;
+}
+
+/** A copy of the routing state of one endpoint. */
+export interface EndpointSnapshot {
+   socketId: string;
+   gateState: GateState;
+   settings: BridgeSettings;
 }
 
 /** Options of a routed call to a registry tool. */
@@ -92,14 +112,16 @@ export interface EndpointRegistry {
    setHealth: (socketId: string, health: EndpointHealth) => void;
    // Replaces a registered socket's gate snapshot (already sanitized); ignored for an unregistered socket.
    setGateState: (socketId: string, gateState: GateState) => void;
+   // Replaces a registered socket's bridge settings (already sanitized); ignored for an unregistered socket.
+   setSettings: (socketId: string, settings: BridgeSettings) => void;
    // Finds the earliest-registered healthy endpoint of a kind; with `dom: true` only endpoints that identified as able
    // to run DOM scripts qualify.
    firstOfKind: (kind: EndpointKind, options?: { dom?: boolean }) => Endpoint | undefined;
    // Replaces a registered socket's tools (already sanitized); ignored for an unregistered socket.
    setTools: (socketId: string, tools: RegistryTool[]) => void;
    // Calls the listener after every change that can alter which endpoint a call reaches or which tools it lists:
-   // a register, a remove, a health change and a tool replacement. A gate state change does not notify. The listener
-   // runs synchronously inside the change and must not throw. Returns the function that unsubscribes it.
+   // a register, a remove, a health change and a tool replacement. A gate state or settings change does not notify.
+   // The listener runs synchronously inside the change and must not throw. Returns the function that unsubscribes it.
    subscribe: (listener: () => void) => () => void;
 }
 
@@ -120,6 +142,9 @@ export interface Router {
    // option would reach now, every gate closed when none is eligible. It is not a gate check, because a later `invoke`
    // may pick a different endpoint; enforcement uses the `requireGate` option of `invoke`.
    gateState: (options?: InvokeOptions) => GateState;
+   // Copies the socket id, gate snapshot and settings of the endpoint a plain `invoke` with the same `endpoint` option
+   // would pick now; undefined when none is healthy. Like `gateState` it is not a gate check.
+   snapshot: (options?: InvokeOptions) => EndpointSnapshot | undefined;
    // Copies the tool list of the endpoint a call with the same `endpoint` option would reach now; empty when none is
    // eligible. Like `gateState` it is a listing aid, not a guarantee that a later `invoke` reaches the same endpoint.
    tools: (options?: InvokeOptions) => RegistryTool[];
@@ -172,8 +197,9 @@ export const DOM_ROUTE_ORDER: readonly EndpointKind[] = ['agent'];
 // receives at most 12 pings a minute.
 const PROBE_INTERVAL_MS: number = 5_000;
 
-// Milliseconds the sidecar waits for a GM client's reply to an invocation that carries no `timeoutMs`. The client's
-// own script limit is 8 s, so the reply of a script that hit it still arrives inside this wait.
+// Milliseconds the sidecar waits for a GM client's reply to an invocation that carries no `timeoutMs` and no
+// `replyWaitMs`. The client's own script limit is 8 s, so the reply of a script that hit it still arrives inside this
+// wait.
 export const DEFAULT_REPLY_WAIT_MS: number = 10_000;
 
 // The shared argument a tool opts into by declaring it in its input schema: the client's script limit for that call,
@@ -218,10 +244,10 @@ const MAX_NO_ENDPOINT_BYTES: number = 256;
 const MAX_FAILURES: number = 10;
 
 // Accepted shape of a client-supplied error code; bounds the code's size and charset.
-const CLIENT_CODE_PATTERN: RegExp = /^[A-Z][A-Z0-9_]{0,63}$/;
+export const CLIENT_CODE_PATTERN: RegExp = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 // Protocol codes only the sidecar may produce; a client claiming one is reported as OP_FAILED so a client cannot
-// impersonate a routing or registration outcome.
+// impersonate a routing, registration or backup-file outcome.
 const RESERVED_CODES: ReadonlySet<string> = new Set([
    NO_ENDPOINT,
    ENDPOINT_TIMEOUT,
@@ -231,6 +257,7 @@ const RESERVED_CODES: ReadonlySet<string> = new Set([
    PROTOCOL_MISMATCH,
    NOT_GM,
    TOOL_GONE,
+   ...BACKUP_SIDECAR_CODES,
 ]);
 
 /**
@@ -424,6 +451,19 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       },
 
       /**
+       * Replace a registered endpoint's bridge settings.
+       * @param {string} socketId - The socket id; an unregistered socket is ignored.
+       * @param {BridgeSettings} settings - The new settings, already sanitized.
+       * @returns {void}
+       */
+      setSettings(socketId: string, settings: BridgeSettings): void {
+         const existing: Endpoint | undefined = endpoints.get(socketId);
+         if (existing) {
+            existing.settings = settings;
+         }
+      },
+
+      /**
        * Find the earliest-registered healthy endpoint of a kind.
        * @param {EndpointKind} kind - The endpoint kind.
        * @param {{ dom?: boolean }} [options] - `dom: true` skips endpoints that cannot run DOM scripts.
@@ -466,8 +506,8 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
 
 /**
  * Validate a `bridge:identify` payload: the current protocol version, well-formed fields within the size limits
- * (`userId` at most 64 bytes, `userName` at most 128 bytes), and a GM user. The optional `gateState` is sanitized,
- * never refused: an absent or invalid value yields the all-closed snapshot.
+ * (`userId` at most 64 bytes, `userName` at most 128 bytes), and a GM user. The optional `gateState` and `settings`
+ * are sanitized, never refused: an absent or invalid value yields the all-closed snapshot or the default settings.
  * @param {unknown} payload - The payload received from the socket.
  * @returns {IdentifyResult} The identity to register, or the refusal (PROTOCOL_MISMATCH for a wrong version, a
  *          malformed field or an over-long field, NOT_GM for a non-GM user).
@@ -529,6 +569,7 @@ export function validateIdentify(payload: unknown): IdentifyResult {
          kind: fields.kind as EndpointKind,
          dom: fields.dom,
          gateState: sanitizeGateState(fields.gateState),
+         settings: sanitizeBridgeSettings(fields.settings),
       },
    };
 }
@@ -776,9 +817,9 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       return running;
    }
 
-   // Single-pick design: `invoke` picks exactly one endpoint here and uses that same object for the gate check and the
-   // send, with no await in between, so no endpoint change can split the check from the send. `gateState` reuses the
-   // pick for display only.
+   // Single-pick design: `invoke` picks exactly one endpoint here and uses that same object for the gate check,
+   // `prepare` and the send, with no await in between, so no endpoint change can split them. `gateState` and
+   // `snapshot` reuse the pick for display and preparation only.
    /**
     * Choose the endpoint a call with these options would reach: the first healthy endpoint of the first eligible
     * kind. A call that needs the DOM considers the agent kind only (unless restricted) and only DOM-capable endpoints.
@@ -810,7 +851,8 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
     * supplies the gate, so a tool listed from one endpoint never borrows the declaration of another.
     * @param {string} op - The operation name.
     * @param {object} params - The operation parameters.
-    * @param {InvokeOptions} options - `endpoint` restricts the kind; `requireGate` is the gate of a plain call.
+    * @param {InvokeOptions} options - `endpoint` restricts the kind; `requireGate` is the gate of a plain call;
+    *        `prepare` and `onSent` run around the send.
     * @param {number} waitMs - How long to wait for the endpoint's reply, in milliseconds.
     * @param {RegistryTool} [listed] - The listed tool of a registry tool call.
     * @returns {Promise<{ result: unknown, tool?: RegistryTool }>} The result, and the picked endpoint's declaration of
@@ -880,20 +922,25 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
          }
       }
       const requestId: string = newRequestId();
+      // The parameters sent: the object `prepare` returned, else the caller's own.
+      const sentParams: object = options.prepare?.(endpoint, requestId) ?? params;
       deps.log(
          `Wiretap sidecar | invoke ${op} requestId=${requestId} -> ${endpoint.kind} endpoint ${endpoint.socketId}`,
       );
       let ack: unknown;
       try {
-         ack = await deps.send(
+         // The pending reply, awaited only after `onSent` ran.
+         const replied: Promise<unknown> = deps.send(
             endpoint.socketId,
             {
                op,
-               params,
+               params: sentParams,
                requestId,
             },
             waitMs,
          );
+         options.onSent?.();
+         ack = await replied;
       } catch (cause) {
          if (cause instanceof EndpointTimeoutError) {
             deps.log(`Wiretap sidecar | invoke ${op} requestId=${requestId} timed out`);
@@ -934,6 +981,25 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       },
 
       /**
+       * Copy the routing state of the endpoint a plain `invoke` with the same options would pick now. Not a gate
+       * check: a later `invoke` picks its endpoint again.
+       * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback.
+       * @returns {EndpointSnapshot | undefined} Copies of the endpoint's socket id, gate snapshot and settings;
+       *          undefined when no healthy endpoint is eligible.
+       */
+      snapshot(options: InvokeOptions = {}): EndpointSnapshot | undefined {
+         const { endpoint } = pick(options);
+         if (!endpoint) {
+            return undefined;
+         }
+         return {
+            socketId: endpoint.socketId,
+            gateState: sanitizeGateState(endpoint.gateState),
+            settings: { ...endpoint.settings },
+         };
+      },
+
+      /**
        * Copy the tool list of the endpoint a call with the same options would reach now. A listing aid only: a later
        * `invoke` picks its endpoint again.
        * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback.
@@ -949,13 +1015,14 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
        * @param {string} op - The operation name.
        * @param {object} params - The operation parameters.
        * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback; `requireGate`
-       *        makes the picked endpoint's own snapshot decide whether the call is sent at all.
+       *        makes the picked endpoint's own snapshot decide whether the call is sent at all; `replyWaitMs` sets the
+       *        reply wait; `prepare` may replace the params and `onSent` runs once they are handed to the transport.
        * @returns {Promise<unknown>} The operation result; rejects with a BridgeError (NO_ENDPOINT,
        *          ENDPOINT_UNAVAILABLE, GATE_DENIED, ENDPOINT_GONE, ENDPOINT_TIMEOUT, or the normalized client
-       *          failure).
+       *          failure), or with the error a `prepare` threw.
        */
       async invoke(op: string, params: object, options: InvokeOptions = {}): Promise<unknown> {
-         return (await dispatch(op, params, options, DEFAULT_REPLY_WAIT_MS)).result;
+         return (await dispatch(op, params, options, options.replyWaitMs ?? DEFAULT_REPLY_WAIT_MS)).result;
       },
 
       /**
