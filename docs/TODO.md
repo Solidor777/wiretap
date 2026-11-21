@@ -30,6 +30,11 @@
 - [ ] Raw-socket executor (docs/PLAN.md M11, dropped by D27): reads of stored source data only, for when no client
       endpoint is live. M0 showed raw creates skip the system's pre-create logic and the server accepts invalid data;
       revisit only if a raw path is ever wanted
+- [ ] Undo history (docs/PLAN.md M17, dropped by D29): revisit if agents damage world content in use. Designs weighed
+      on 2026-11-21: history held in the sidecar (not the executing client, which can reload or change between calls);
+      grouped by agent turn, with turn boundaries from Claude Code hooks or agent-called markers; a pre-write copy of
+      each document a turn touches. A lighter option: each update, replace or delete returns a handle to the
+      document's earlier version, restorable with the existing write tools
 - [ ] Script dispatcher mode for MCP clients that do not defer tool schemas: `list_scripts` / `describe_script` /
       `run_script` (docs/PLAN.md D19; per-script deferred tools are the primary mode, build this only if such a client is
       targeted)

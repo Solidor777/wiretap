@@ -27,7 +27,7 @@ e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.
 `WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs were run on their own (16 passed, see M6 below). A full e2e run
 after M6 has not been made.
 
-Next milestone in the order of PLAN.md section 5: M17.
+Next milestone in the order of PLAN.md section 5: M18 (M17 dropped by D29, revision 7).
 
 ## M0 status and deviations
 
@@ -142,6 +142,10 @@ remain except those that wait on M0 results.
 
 **Revision 6 (2026-10-11):** the user accepted D27 (drop M11, the raw-socket executor; logged in `TODO.md`) and D28
 (screenshot default as a pixel area of at most 480,000 px, aspect kept). No PENDING-USER decisions remain.
+
+**Revision 7 (2026-11-21):** the user dropped M17 (multi-step undo). D29 now records the drop; the `allowUndo` gate row,
+the `undo_last` tool mentions and the M17 section were removed from PLAN.md; the item is logged in `TODO.md`. The code
+already had no undo gate (`shared/gates.js`, `tests/unit/gates.test.js`).
 
 ## As-built notes (moved from PLAN.md)
 

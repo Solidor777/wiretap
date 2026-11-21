@@ -298,7 +298,7 @@ Budgets are the result cap in serialized bytes. "Replaces" counts the calls a ge
 | `save_script(...)` / `disable_script(name)` | §2.5, only if D21 builds it | none | 256 B | `allowAgentScripts` | — |
 
 The other generic core tools (M4/M5: `list_document_types`, `search_documents`, `describe_schema`,
-`create_documents`, `replace_document`, `batch`, `draw_table`, `execute_macro`, `undo_last`, `list_endpoints`) are
+`create_documents`, `replace_document`, `batch`, `draw_table`, `execute_macro`, `list_endpoints`) are
 entries of the same registry with the budgets of §2.6.
 
 ## 3. Decisions log
@@ -317,7 +317,7 @@ entries of the same registry with the budgets of §2.6.
 | D10 | Plugin surface: `Hooks.callAll('wiretap.registerSkills', api)` + `api.registerSkill`, integer `apiVersion`, tool names `<moduleId>__<skill>`, no dots | DECIDED |
 | D11 | MCP transport moves to stateful Streamable HTTP sessions with `notifications/tools/list_changed`; no sampling | DECIDED |
 | D12 | Deletion: the ban is on deleting **files**. Foundry documents may be created, updated and deleted through Foundry document calls | DECIDED |
-| D12a | Deletion is risky and gated: `delete_documents` needs `allowDelete` (default OFF); `User` deletion additionally needs `allowUserWrites`, `Setting` deletion `allowSettingWrites`; `dryRun` previews; Claude Code `ask` rules remain a second layer (README shows `"ask": ["mcp__wiretap__delete_documents"]`); compendium **pack** deletion is D30. `undo_last` needs `allowUndo` | DECIDED |
+| D12a | Deletion is risky and gated: `delete_documents` needs `allowDelete` (default OFF); `User` deletion additionally needs `allowUserWrites`, `Setting` deletion `allowSettingWrites`; `dryRun` previews; Claude Code `ask` rules remain a second layer (README shows `"ask": ["mcp__wiretap__delete_documents"]`); compendium **pack** deletion is D30 | DECIDED |
 | D13 | Replace semantics fire normal update hooks (not `importFromJSON`'s `noHook: true`) | DECIDED |
 | D14 | Canonical document representation = the `toCompendium` export format (as used by `exportToJSON`), with `keepId: true` for reads | DECIDED |
 | D15 | `describe_schema` = "schema by example" (blank export per type/subtype) first; DataModel field-walker for constraints second, scoped by path (§2.8 grammar). **E8-driven design (M4):** without `path` it returns the blank export (titan Actor 4.85 KB, Items ≤ 648 B) plus a one-level outline of the schema; full constraints only with `path`, because the walker output for an Actor is 19.9 KB (above the 16 KB maximum cap) and Adventure 26.5 KB. For the 7 classes whose blank construction fails (ActorDelta, Drawing, Folder, Setting, TableResult, Tile, Wall) the example is built with the minimal required fields (parent, `type`, `key`) or omitted with the walker output only (approach INFERRED; M4 tests it) | DECIDED |
@@ -334,7 +334,7 @@ entries of the same registry with the budgets of §2.6.
 | D26 | Path-scoped reads and writes (§2.8): `paths` parameter on `get_document`, same grammar in `update_documents`, `read_handle`, `describe_schema`; no new tools; `edit` merged into `update_documents` | DECIDED |
 | D27 | The raw-socket executor (M11) is not built; it is logged in `docs/TODO.md`. It could only serve source reads and valid system-field updates when no client is live, and the sidecar cannot tell valid from invalid values without the system's DataModels, which exist only in a client (§4.3); the agent runner (M9) provides a client at a measured 440 MB and 1.8 s | DROPPED |
 | D28 | Screenshot default expressed as pixel area (≤ 480,000 px, the 800×600 area, aspect kept) instead of an 800×600 box ( in §2.6) | DECIDED |
-| D29 | Multi-step undo: a bounded per-session ring of inverse operations (create, update, delete, replace, batch); `undo_last(n)` replays inverses; `User` and `Setting` writes are not undoable (M17) | DECIDED |
+| D29 | No undo history (M17 is not built; it is logged in `docs/TODO.md`). Write previews (`dryRun`), the default-closed `allowDelete` and `allowReplace` gates, Claude Code `ask` rules and Foundry's world backups cover the risk; the gap is ordinary updates, which are ungated. An undo would need a pre-write copy of every touched document, turn boundaries the MCP connection does not carry, drift checks, and still could not reverse macros, chat messages or system side effects | DROPPED |
 | D30 | Compendium pack tools `create_pack` and `delete_pack` for any unlocked world pack, behind `allowCompendiumWrites` (creation) and `allowPackDeletion` (deletion), with `dryRun`; `delete_pack` carries `_meta["anthropic/requiresUserInteraction"]: true` so Claude Code prompts on every call at every permission level; the Foundry server, not Wiretap code, removes pack files (M18) | DECIDED |
 | D31 | Node-side plugin handlers run in the sidecar only for plugin ids the GM enables behind `allowSidecarPlugins` (default OFF); they reach Foundry only through the same scripts, gates and validation as client plugins (M20) | DECIDED |
 | D32 | Handle persistence is opt-in (`persistHandles`, default OFF): a protected file under `.wiretap/`, overwrite-only, with the same size and idle bounds; the at-rest protection is specified at the M19 start (M19) | DECIDED |
@@ -441,7 +441,6 @@ World-scope settings, `restricted: true` (GM only), `config: true`, all default 
 | `allowMacroExecution` | `execute_macro`; any write that sets a Macro's `command`, changes a Macro's `type` to script, writes an Adventure's stored `macros`, or stores an `executeScript` RegionBehavior's code (directly or in an Adventure's `scenes`) | Arbitrary code; see the known limit below |
 | `allowDelete` | `delete_documents` | Irreversible; `dryRun` previews; Claude Code `ask` rules are a second layer |
 | `allowReplace` | `replace_document` | Overwrites the document; omitted fields reset to defaults |
-| `allowUndo` | `undo_last` | Replays inverse operations; each inverse also passes its original category gate |
 | `allowPackDeletion` | `delete_pack` | Removes pack files through the Foundry server; always prompts (D30) |
 | `allowUserWrites` | Create/update/delete of `User` documents (incl. role) | Password fields always refused |
 | `allowSettingWrites` | `Setting` documents and world/user settings via skills | `wiretap.*` always refused |
@@ -554,7 +553,8 @@ Test tiers:
 - **Live e2e:** Playwright against Foundry on `:30000`, only where real Foundry behaviour is the subject; documents
   recorded and torn down per §4.8.
 
-**Order:** M5 → M6 → M17 → M18 → M15a → M7 → M20 → M16 (if D21) → M8 → M9 → M15b → M10 → M19 → M12. M11 is dropped (D27).
+**Order:** M5 → M6 → M18 → M15a → M7 → M20 → M16 (if D21) → M8 → M9 → M15b → M10 → M19 → M12. M11 is dropped (D27);
+M17 is dropped (D29).
 
 ### M5 — Core write tools
 
@@ -610,32 +610,13 @@ the tool description); irreversible deletes (D12a, `dryRun`).
   `macros` (importing it creates them), and a write that stores an `executeScript` RegionBehavior's code, directly or
   in an Adventure's stored `scenes` (the code runs on region events).
 
-`undo_last` is built once, in M17. All as M14 scripts. `screenshot` is in M15b (it needs the agent runner). **Depends on:** M2, M5, M14. **Tests:** unit
+All as M14 scripts. `screenshot` is in M15b (it needs the agent runner). **Depends on:** M2, M5, M14. **Tests:** unit
 (query handler checks); integration; e2e with a GM tab and a `wtx-player` context: the sheet opens on the player
 client only with permission; an offline user gives a clear error (READ `user.mjs:306`); rolls with `toChat: true`
 are recorded and torn down (§4.8). **Acceptance:** open-sheet semantics documented: on a chosen live user's client;
 with no human connected, only data or measurements. **Context budget:** `open_sheet` / `close_sheet` ≤ 128 B; `roll`
 ≤ 512 B; `draw_table` ≤ 1 KB; `execute_macro` results pass the hard cap. **Risks:** ChatMessage spam from rolls.
 Tool option `toChat` default false.
-
-### M17 — Multi-step undo history
-
-**Goal:** D29. `undo_last(n?)` undoes up to `n` (default 1, max 50) of the session's recorded writes, newest first.
-**Depends on:** M5. **In:**
-
-- A bounded per-session ring (50 steps) recording an inverse for each write: create → delete of the created uuids;
-  update → the prior values of exactly the changed paths; delete → the canonical export (§4.4, `keepId: true`)
-  re-created with the same ids; replace → the prior canonical export; batch → one step holding its operations' inverses.
-- `User` and `Setting` writes, and operations whose inverse is no longer applicable (the target changed since), are not
-  undone; the result lists each step as `undone`, `skipped` with a reason, or `failed`.
-- `dryRun` lists the steps that would be undone. `undo_last` needs `allowUndo` (D12a); every inverse still passes the write
-  guard of the original category.
-- The ring lives in the executing client's memory; large step payloads go to the sidecar handle store.
-
-**Tests:** unit per op kind (inverse correctness, ordering, skip on drift, ring bound); integration with the fake
-client; e2e on a throwaway Actor: create → update → replace → delete, then undo all four. **Acceptance:** the Actor is
-back to its pre-create state apart from documented non-reversible side effects. **Context budget:** the result ≤ 256 B
-per step and ≤ 4 KB for 50. **Risks:** hooks and system side effects are not reverted; the tool description says so.
 
 ### M18 — Compendium pack tools
 
