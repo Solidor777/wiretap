@@ -149,3 +149,10 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   lines 1038-1042), which pulls every connected user to it. MEASURED in the M6 macro e2e on 14.364: the first run left a
   recorded scene active until teardown. Status: `tests/e2e/macroTools.spec.js` creates its scene with `active: false`
   and restores the prior view; any e2e that creates a Scene must do the same.
+
+- Title: Backup restore throughput and two restore targets are not covered live. Summary: only the piece transport
+  (`tests/integration/backupTools.test.js`) and an export dry run of the largest live pack (`backupTools.spec.js`) were
+  timed; how long a restore of 10,000 documents (the backup bound) takes, each document a replace or create through
+  the write path, is not measured. No live e2e restores into a compendium pack or re-creates Folders: the unit tests
+  over mocked `game` (`tests/unit/restoreBackup.test.js`) re-create a Folder and refuse a gone or locked pack, but
+  have no case that restores a document into an unlocked pack. Status: NOT MEASURED.

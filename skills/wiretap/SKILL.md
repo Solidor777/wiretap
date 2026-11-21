@@ -4,9 +4,7 @@ description: Use when working with the live Foundry VTT world through the Wireta
 ---
 # Wiretap: Foundry VTT tools
 Wiretap acts on the live Foundry world through MCP tools that work via a connected GM's browser. With none connected, a
-call fails with `NO_ENDPOINT`, naming what to start (`list_backups` and `delete_backup` still work on the default
-folder). An undeclared argument (a misspelled `dryrun`) is refused.
-## Recipes
+call fails with `NO_ENDPOINT`, naming what to start. An undeclared argument (a misspelled `dryrun`) is refused.
 - **Read a document.** `mcp__wiretap__get_document` with `uuid`, or `documentName` and `id` (add `parentUuid` for an
 embedded one, `pack` for a compendium one). The default is a compact view (name, type, key fields, embedded `[id, name,
 type]` rows, `modified`). For more: `paths` (up to 20, like `system.attributes` or `items.*.name`, keyed by `_id`;
@@ -35,14 +33,16 @@ deleted; omit `flags`: other modules' flags go). Leave `ownership` out; `_id`, `
 (patches) and `deletes`, run in that order; a key an entry does not list (`parent` for `parentUuid`) is refused. Not
 atomic: Foundry checks all first, stops at the first failure and keeps what it did; `WRITE_NOT_APPLIED` says "N of M
 operations applied". `actAs` (a user id) on any write only checks that user's permission first (`ACT_AS_DENIED`).
-- **Backups.** Before a bulk update (more than about 10 documents), any `replace_document`, any delete, or an
-`execute_macro` that changes documents, make or offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded
-one saves its parent) or one `folderUuid`, `documentName` or `pack`, and a `note`. Tell the user the `file` and where it
-went (`folder: "default"` is `.wiretap/backups` in the module folder; `"setting"` is the GM's Backup folder setting).
-`mcp__wiretap__list_backups` lists them. `mcp__wiretap__restore_backup` (`file`, `uuids`, `dryRun`) only when the user
-asks: not atomic, hooks run; it needs `allowReplace`, `allowOwnershipWrites` to re-create a deleted document and
-`allowDelete` when embedded documents were added since. `mcp__wiretap__delete_backup` moves a file to the recycle bin.
-Another `folder` needs `allowBackupAnyFolder`. A whole-world backup is made on Foundry's setup screen, world shut down.
+- **Backups.** Before a bulk update (about 10+ documents), any `replace_document` or delete, or a document-changing
+`execute_macro`, make or offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded one saves its parent)
+or one `folderUuid`, `documentName` or `pack`, and a `note`. Tell the user its `file` and `folder` (`default`: the
+module's `.wiretap/backups`; `setting`: the GM's Backup folder). `mcp__wiretap__list_backups` lists them and
+`mcp__wiretap__delete_backup` moves one to the recycle bin, both also with no GM (default folder only). Another `folder`
+needs `allowBackupAnyFolder`. `mcp__wiretap__restore_backup` (`file`, `uuids`, `dryRun`) only if the user asks: not
+atomic, hooks run. Needs `allowReplace`; `allowOwnershipWrites` if ownership differs or to re-create a deleted document;
+`allowDelete` if embedded ones were added since; for a pack, `allowCompendiumWrites` and an unlocked pack. `dryRun`
+checks the real gates, writes nothing. Embedded documents below the first level get default ownership. Whole world:
+Foundry's setup screen, world shut down.
 - **Read a large result.** A result over 8,000 bytes is returned as `{"handle", "bytes", "summary"}`. Call
 `mcp__wiretap__read_handle` with that `handle` and `paths` (up to 20, `*` is one wildcard over a list), or `offset` and
 `length` for non-JSON text, or a larger `maxBytes`. A handle expires after 30 minutes unused (`HANDLE_NOT_FOUND`). To

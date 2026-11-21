@@ -337,9 +337,9 @@ entries of the same registry with the budgets of §2.6.
 | D29 | No undo history (M17 is not built; it is logged in `docs/TODO.md`). Write previews (`dryRun`), the default-closed `allowDelete` and `allowReplace` gates, Claude Code `ask` rules and Foundry's world backups cover the risk; the gap is ordinary updates, which are ungated. An undo would need a pre-write copy of every touched document, turn boundaries the MCP connection does not carry, drift checks, and still could not reverse macros, chat messages or system side effects | DROPPED |
 | D30 | Compendium pack tools `create_pack` and `delete_pack` for any unlocked world pack, behind `allowCompendiumWrites` (creation) and `allowPackDeletion` (deletion), with `dryRun`; `delete_pack` carries `_meta["anthropic/requiresUserInteraction"]: true` so Claude Code prompts on every call at every permission level; the Foundry server, not Wiretap code, removes pack files (M18) | DECIDED |
 | D31 | Node-side plugin handlers run in the sidecar only for plugin ids the GM enables behind `allowSidecarPlugins` (default OFF); they reach Foundry only through the same scripts, gates and validation as client plugins (M20) | DECIDED |
-| D33 | Document backups instead of undo: `backup_documents`, `list_backups`, `restore_backup`, `delete_backup`; the GM client exports and applies, the sidecar writes JSON Lines files to `<module root>/.wiretap/backups/` (changeable by the `backupFolder` world setting) or any folder the call names behind `allowBackupAnyFolder`; new files only; the user-facing skill tells the agent to offer a backup before bulk or risky changes. Design: [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md) (M21) | DECIDED |
-| D34 | Wiretap code removes a file only by moving it to the recycle bin through the `trash` npm package; no permanent-delete API appears in product code or tests | DECIDED |
 | D32 | Handle persistence is opt-in (`persistHandles`, default OFF): a protected file under `.wiretap/`, overwrite-only, with the same size and idle bounds; the at-rest protection is specified at the M19 start (M19) | DECIDED |
+| D33 | Document backups instead of undo: `backup_documents`, `list_backups`, `restore_backup`, `delete_backup`; the GM client exports and applies, the sidecar writes JSON Lines files to `<module root>/.wiretap/backups/` (changeable by the `backupFolder` world setting) or any folder the call names behind `allowBackupAnyFolder`; new files only; the user-facing skill tells the agent to make or offer a backup before bulk or risky changes. Design: [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md) (M21) | DECIDED |
+| D34 | Wiretap code removes a file only by moving it to the recycle bin through the `trash` npm package; no permanent-delete API appears in product code or tests | DECIDED |
 
 ## 4. Architecture
 
@@ -531,8 +531,8 @@ Every milestone follows `.claude/claude.md`:
 - No stubs.
 - No permanent file deletion in product or test code (no `fs.rm*`/`unlink*`/`rmdir*`, no recursive removal helpers);
   a file is removed only by moving it to the recycle bin with the `trash` package (D34), mocked in unit and integration
-  tests: tests write under `test/tmp/` or mock `node:fs`. Foundry **documents** may be deleted through Foundry document calls
-  (D12); test documents are cleaned up with the §4.8 pattern.
+  tests: tests write under `test/tmp/` or mock `node:fs`. Foundry **documents** may be deleted through Foundry
+  document calls (D12); test documents are cleaned up with the §4.8 pattern.
 - e2e in-page waits ≤ 1000 ms.
 - No dynamic imports in shipping builds.
 - Implementation via `wiretap-coder` (sidecar, shared, tests) or `foundry-module-dev` (client `.js`/`.svelte`), then
@@ -557,8 +557,8 @@ Test tiers:
 - **Live e2e:** Playwright against Foundry on `:30000`, only where real Foundry behaviour is the subject; documents
   recorded and torn down per §4.8.
 
-**Order:** M5 → M6 → M21 → M18 → M15a → M7 → M20 → M16 (if D21) → M8 → M9 → M15b → M10 → M19 → M12. M11 is dropped (D27);
-M17 is dropped (D29).
+**Order:** M5 → M6 → M21 → M18 → M15a → M7 → M20 → M16 (if D21) → M8 → M9 → M15b → M10 → M19 → M12. M11 is dropped
+(D27); M17 is dropped (D29).
 
 ### M5 — Core write tools
 
@@ -635,8 +635,8 @@ gate denial, dry run); integration with the fake client (pieces both ways, a los
 refusal, the gate on another folder); e2e on throwaway `Wiretap E2E ` documents: back up, change and delete, restore,
 compare, and trash the backup file under `test/tmp/`. **Acceptance:** a restored document equals its backed-up export
 apart from documented system side effects; no document text appears in any MCP message of a backup or restore
-(asserted on the SDK client's received payloads). **Context budget:** backup ack ≤ 256 B; list ≤ 2 KB; restore ≤ 4 KB;
-delete ≤ 128 B. **Risks:** a restore is not atomic and runs hooks; the tool description says so.
+(asserted on the SDK client's received payloads). **Context budget:** backup ack ≤ 256 B; list ≤ 2 KB; restore
+≤ 4 KB; delete ≤ 128 B. **Risks:** a restore is not atomic and runs hooks; the tool description says so.
 
 ### M18 — Compendium pack tools
 
@@ -655,8 +655,8 @@ delete ≤ 128 B. **Risks:** a restore is not atomic and runs hooks; the tool de
 
 **Tests:** unit with mocked collections (gate off/on, system pack refusal, dryRun no-write); e2e on a throwaway world
 pack created and deleted through the tools, recorded on the §4.8 list. **Acceptance:** no permanent file-deletion API
-in Wiretap code (D34; the Foundry server removes pack files). **Context budget:** ack ≤ 256 B. **Risks:** deleting a pack with content the
-user wants; `dryRun` and the always-on prompt are the guard.
+in Wiretap code (D34; the Foundry server removes pack files). **Context budget:** ack ≤ 256 B. **Risks:** deleting a
+pack with content the user wants; `dryRun` and the always-on prompt are the guard.
 
 ### M15a — Script library: API and composite scripts
 

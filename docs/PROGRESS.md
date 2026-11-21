@@ -562,7 +562,8 @@ recycle-bin removal):**
 - Unit suite after M21 (MEASURED, `npm test`): 123 files, 2770 passed, 2 skipped.
 - Designer decisions made during the run (each the designer's call under the user's delegation, not the user's own
   choice):
-  - The 800-byte definition budget wins over "every argument has a short describe"; six arguments carry no describe.
+  - The 800-byte definition budget wins over "every argument has a short describe"; seven arguments carry no describe
+    (six names, `timeoutMs` in two tools).
   - A document whose export hits the walk bounds (50,000 nodes, 24 levels, or JSON text nested 4 deep in strings) is
     not backed up: it is counted as unreadable (`DOC_UNREADABLE`), never written cut. Also recorded in the design.
   - Re-creating a deleted document on restore keeps `create_documents` gate parity: it needs `allowOwnershipWrites`.
