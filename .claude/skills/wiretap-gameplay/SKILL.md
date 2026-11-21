@@ -94,12 +94,14 @@ Sizes from `npx tsx tests/measure/measureContext.mjs`. The error codes these scr
   (never waits on manual dice) that throws is `ARGS_INVALID` with the cause (200 B). `toChat: true` calls
   `roll.toMessage()`; otherwise nothing is posted. Result `{ total, formula (128 B), dice: [faces, active[],
   inactive[]?][] }`; when it is over 512 B, results are appended in order while they fit and `cut: true` is set (a
-  term or inactive list appears only once its first value fits). MEASURED in e2e: 999d1000 fits with `cut`; 1000d6 is
+  term's entry is measured when added, so a term that rolls no dice, like `0d6`, is dropped when it does not fit; an
+  inactive list appears only once its first value fits). MEASURED in e2e: 999d1000 fits with `cut`; 1000d6 is
   `ARGS_INVALID` (Foundry's evaluation refuses more than 999 results, and the throw becomes the refusal).
 - `draw_table`: the uuid must resolve to a `RollTable` (`ARGS_INVALID` names the class otherwise). It calls Foundry's
   `table.draw({ displayChat: toChat === true })`, which marks drawn results when the table has no replacement and is
   not in a compendium. No results (every result drawn, or none in the formula's range; Foundry only warns) is
-  `TABLE_EMPTY`. Rows are `{ name (64 B), text? (plain text of the description, tags to spaces, 200 B), uuid? }`; the
+  `TABLE_EMPTY`. Rows are `{ name (64 B), text? (plain text of the description: tags to spaces, then character references decoded through a
+  detached `<textarea>` so no markup runs, then whitespace collapsed; 200 B), uuid? }`; the
   result is `{ total (null without a roll), results, count }`, rows popped from the end with `cut: true` until it is at
   most 1000 B.
 

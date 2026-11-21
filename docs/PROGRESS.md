@@ -20,9 +20,9 @@ document, so none are stated here; the count at the time this file was written i
 | M14 Script runtime and the discovery layer | Done | 2026-10-13 | `8786fdd`, `a6a9d6c`, `43b7e57`, `f7fac20` | [`PLAN.md`](PLAN.md) section 4.5 as-built note; client runtime in `src/bridge/scripts/`; user-facing skill `skills/wiretap/SKILL.md` |
 | M5 Core write tools | Done | 2026-10-13 to 2026-11-20 | `248ee4a`, `948f4cc`, `f9e4fe0` (phase A); `9511623`, `1f4fd50` (phase B) | [`PLAN.md`](PLAN.md) M5 as-built notes (phase A and review fixes); `create_documents`, `update_documents`, `delete_documents` in `src/bridge/scripts/`; measured after the review fixes: `npm test` 74 files, 2016 passed, 1 skipped; headless e2e 40 passed, 1 skipped; 8 tools, 4,490 B of definitions (`tests/measure/measureContext.mjs`). Phase B and review fixes (2026-10-13, MEASURED): `replace_document`, `batch`, `actAs`, `idempotencyKey`, handle inputs, strict arguments, the `_id` and `flags.wiretap` guard rules, batch settle and repair; `npm test` 89 files, 2274 passed, 1 skipped; headless e2e 54 passed, 1 skipped; 10 tools, 6,202 B of definitions (`replace_document` 562 B, `batch` 795 B); 50-document `create_documents` ack 3,541 B; mutation runs: round 1 `mutation-m5b.txt` (17 killed), round 2 `mutation-m5c.txt` (39, 37 killed, 2 equivalent), round 3 `mutation-m5d.txt` (20 plus 1 re-run, all killed but one equivalent: the `flags` value wrap by prefix-stripped key), round 4 `mutation-m5e.txt` (15, all killed); e2e output in `debug/dumps/e2e-final-m5e.txt`; `allowDelete` and `allowReplace` gates added |
 | M4 Core read tools | Done | 2026-10-13 | `4d18a51`, `5e1c59f`, `b27144b`, `5fd4801` | [`PLAN.md`](PLAN.md) M4 as-built notes (phases A and B); [`experiments/2026-10-m4-keyfields.md`](experiments/2026-10-m4-keyfields.md); `list_document_types`, `get_document`, `search_documents`, `describe_schema` in `src/bridge/scripts/` |
-| M6 Sheets and gameplay | Done | 2026-11-20 | `fab9300` (plan); `823e070`, `3aeba20`, `c601f8b`, `e5da1ff`, `acec4dd`, `f3b7d38` (tasks 1 to 6); `bbbdcd1`, `4dbf3bf`, `15984e8`, `f08ec17`, `11940fe`, `44c9ac5`, `7fe13ce`, `c3f5129` (buddy-check fixes and plan edits); `8c58704`, `6bc5b2a`, `9e245a2` (e2e) | [`plans/2026-11-20-wiretap-m6-sheets-gameplay.md`](plans/2026-11-20-wiretap-m6-sheets-gameplay.md); as-built notes below; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro` in `src/bridge/scripts/`; 15 tools, 8,149 B of definitions |
+| M6 Sheets and gameplay | Done | 2026-11-20 | `fab9300` (plan); `823e070`, `3aeba20`, `c601f8b`, `e5da1ff`, `acec4dd`, `f3b7d38` (tasks 1 to 6); `bbbdcd1`, `4dbf3bf`, `15984e8`, `f08ec17`, `11940fe`, `44c9ac5`, `7fe13ce`, `c3f5129` (buddy-check fixes and plan edits); `8c58704`, `6bc5b2a`, `9e245a2` (e2e); `6a3f7cb`, `717da53` (docs); `418e6f9`, `7887884` (final-review minors) | [`plans/2026-11-20-wiretap-m6-sheets-gameplay.md`](plans/2026-11-20-wiretap-m6-sheets-gameplay.md); as-built notes below; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro` in `src/bridge/scripts/`; 15 tools, 8,149 B of definitions |
 
-Current suite (MEASURED 2026-11-20, `npm test`): 104 test files passed, 2544 tests passed, 1 skipped (2545). Headless
+Current suite (MEASURED 2026-11-20, `npm test`): 104 test files passed, 2547 tests passed, 1 skipped (2548). Headless
 e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless
 `WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs were run on their own (16 passed, see M6 below). A full e2e run
 after M6 has not been made.
@@ -523,6 +523,12 @@ follow):**
   open and the agent's client stopping before `timeoutMs`; the exact timeout text (`limit / 1000`, not rounded).
 - Task 6 had to edit three test files outside its file list, because each hard-codes the shipped tool list:
   `tests/unit/contextBudget.test.js`, `tests/unit/writeScripts.test.js`, `tests/integration/readTools.test.js`.
+- Final whole-branch review (`sdd-final-reviewer`): approved, Minor findings only. Fixed: documentation that overstated
+  the change-only rule, the sidecar skill's missing budgets, the chat-null and macro-result wording. The owner kept any
+  write carrying code gated and picked four minors, all fixed and re-checked: a `roll` result over 512 B when trailing
+  terms roll no dice (`0d6`); `draw_table` text now decodes character references; one-pass sheet id cut; test polish
+  (macro budget fixtures fail with the gate closed, a macro error over 512 B in e2e, the skill description names the
+  gameplay tools). After them (MEASURED): macro and sheet e2e 10 passed, zero census; `npm run check:release` clean.
 
 ## Decision provenance (moved from PLAN.md section 3)
 
