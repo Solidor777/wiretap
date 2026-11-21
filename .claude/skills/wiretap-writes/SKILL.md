@@ -41,10 +41,10 @@ scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B ra
 
 | File | Role |
 |---|---|
-| `src/bridge/scripts/writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments` and the planners `prepareCreate`, `prepareUpdates`, `prepareDeletes` that `batch` and `replace_document` reuse; the guard calls, validation (`failuresOf`), `refuseTakenIds`, `refuseUnsafeData` |
+| `src/bridge/scripts/writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments` and the planners `prepareCreate`, `prepareUpdates`, `prepareDeletes` that `batch` and `replace_document` reuse (`prepareCreate` / `runCreate` also serve the backup restore); the guard calls, validation (`failuresOf`), `refuseTakenIds`, `refuseUnsafeData` |
 | `src/bridge/scripts/createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | Handlers of the phase A scripts (`updateDocuments.js` groups patch entries by uuid) |
 | `src/bridge/scripts/writeArgs.js`, `writeAck.js` | Argument helpers (`parseDataObjects`, `parseJson`, `checkDataBytes`) and ack shaping |
-| `src/bridge/scripts/writeReplace.js`, `replaceDocument.js` | `replace_document` and its handler; `droppedEmbedded`, the carry of `flags.wiretap` |
+| `src/bridge/scripts/writeReplace.js`, `replaceDocument.js` | `replace_document` and its handler; `prepareReplace` / `runReplace` and restore mode, `stripWiretapFlags`, `droppedEmbedded`, the carry of `flags.wiretap` |
 | `src/bridge/scripts/writeBatch.js`, `writeBatchSettle.js`, `batch.js` | `batch`: planning, `modifyBatch`, settle and repair |
 | `src/bridge/scripts/writeActAs.js`, `writeIdempotency.js` | `actAs` check and the `create_documents` idempotency record |
 | `server/handleInput.ts` | Handle inputs, resolved by the sidecar before `bridge:invoke` |
@@ -126,6 +126,21 @@ and the sidecar's zod objects are `.strict()` with the JSON key overridden to `u
   replacement, carry the live `flags.wiretap` over, `checkActAs`. A raw `ownership` key (also inside embedded items)
   needs `allowOwnershipWrites` or must be removed first.
 - An update that resolves with nothing is `WRITE_NOT_APPLIED`. Ack `{ uuid, changed[] }`; `dryRun` stops before the update.
+- Split: `prepareReplace({ uuid, data, dryRun?, actAs?, restore? })` runs every check and guard in that order and
+  returns the plan `{ target, replacement, changed, dropped, dryRun }`; `runReplace(plan, readback?)` writes it
+  (`update(..., { diff: false, recursive: false })`, `WRITE_NOT_APPLIED` when a hook cancels). `replaceDocument` is
+  the two in a row; the backup restore (`wiretap-backups`) calls them itself.
+- Restore mode (`restore: true`, used only by the backup restore): a plain replace keeps the live `sort`, `folder` and
+  `ownership`, so restore mode writes the backed-up `sort`, `folder` and `ownership` of the document, and the
+  `ownership` of each first-level embedded document matched by `_id`, into the replacement when the data holds them
+  (`restoreKeptFields`). Its first guard judges the data without each `ownership` equal to the live one and without
+  an embedded document's `{ default: 0 }` ownership when it has no live counterpart (`withoutUnchangedOwnership`),
+  since writing either changes no permission; any other `ownership` still needs `allowOwnershipWrites`. An embedded
+  document with no `_id` in the data gets no backed-up ownership, and the restore's secret carry follows it by index
+  only.
+- The backup restore re-creates a deleted document through `prepareCreate({ documentName, data: [data], pack,
+  keepId: true })` and `runCreate(plan)`, so it meets the `create_documents` gates (`allowOwnershipWrites` for the
+  backed-up `ownership` included) and `refuseTakenIds`.
 
 ## batch (`writeBatch.js`, `writeBatchSettle.js`, handler `batch.js`)
 

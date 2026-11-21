@@ -21,13 +21,15 @@ document, so none are stated here; the count at the time this file was written i
 | M5 Core write tools | Done | 2026-10-13 to 2026-11-20 | `248ee4a`, `948f4cc`, `f9e4fe0` (phase A); `9511623`, `1f4fd50` (phase B) | [`PLAN.md`](PLAN.md) M5 as-built notes (phase A and review fixes); `create_documents`, `update_documents`, `delete_documents` in `src/bridge/scripts/`; measured after the review fixes: `npm test` 74 files, 2016 passed, 1 skipped; headless e2e 40 passed, 1 skipped; 8 tools, 4,490 B of definitions (`tests/measure/measureContext.mjs`). Phase B and review fixes (2026-10-13, MEASURED): `replace_document`, `batch`, `actAs`, `idempotencyKey`, handle inputs, strict arguments, the `_id` and `flags.wiretap` guard rules, batch settle and repair; `npm test` 89 files, 2274 passed, 1 skipped; headless e2e 54 passed, 1 skipped; 10 tools, 6,202 B of definitions (`replace_document` 562 B, `batch` 795 B); 50-document `create_documents` ack 3,541 B; mutation runs: round 1 `mutation-m5b.txt` (17 killed), round 2 `mutation-m5c.txt` (39, 37 killed, 2 equivalent), round 3 `mutation-m5d.txt` (20 plus 1 re-run, all killed but one equivalent: the `flags` value wrap by prefix-stripped key), round 4 `mutation-m5e.txt` (15, all killed); e2e output in `debug/dumps/e2e-final-m5e.txt`; `allowDelete` and `allowReplace` gates added |
 | M4 Core read tools | Done | 2026-10-13 | `4d18a51`, `5e1c59f`, `b27144b`, `5fd4801` | [`PLAN.md`](PLAN.md) M4 as-built notes (phases A and B); [`experiments/2026-10-m4-keyfields.md`](experiments/2026-10-m4-keyfields.md); `list_document_types`, `get_document`, `search_documents`, `describe_schema` in `src/bridge/scripts/` |
 | M6 Sheets and gameplay | Done | 2026-11-20 | `fab9300` (plan); `823e070`, `3aeba20`, `c601f8b`, `e5da1ff`, `acec4dd`, `f3b7d38` (tasks 1 to 6); `bbbdcd1`, `4dbf3bf`, `15984e8`, `f08ec17`, `11940fe`, `44c9ac5`, `7fe13ce`, `c3f5129` (buddy-check fixes and plan edits); `8c58704`, `6bc5b2a`, `9e245a2` (e2e); `6a3f7cb`, `717da53` (docs); `418e6f9`, `7887884` (final-review minors) | [`plans/2026-11-20-wiretap-m6-sheets-gameplay.md`](plans/2026-11-20-wiretap-m6-sheets-gameplay.md); as-built notes below; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro` in `src/bridge/scripts/`; 15 tools, 8,149 B of definitions |
+| M21 Document backups | Done | 2026-11-21 | `253257f`, `3914297` (design and plan); `393ac25`, `302d9f9`, `517fb81`, `723a3ad`, `76b9ad8`, `9a6f979`, `a8b78d1`, `9c30bb4`, `e4c2085`, `b61251f`, `cd2967a`, `d5b3960`, `da9bd16`, `fa9e809` (features and fixes); `80403c5`, `79f94ac`, `8f820be`, `f9bc54a` (tests); merges `1881516`, `8570e4f`, `18fc7b1`, `f5409a4`, `ec5a77e`, `8433951`, `176d540`, `eb570e0`, `b70cbc1`, `640f155`; `docs: close M21; progress, README and skills` | [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md), [`plans/2026-11-21-wiretap-m21-backups.md`](plans/2026-11-21-wiretap-m21-backups.md); as-built notes below; `backup_documents`, `list_backups`, `restore_backup`, `delete_backup` in `server/backupTools.ts`; 19 tools, 10,426 B of definitions |
 
-Current suite (MEASURED 2026-11-20, `npm test`): 104 test files passed, 2547 tests passed, 1 skipped (2548). Headless
+Current suite (MEASURED 2026-11-21, `npm test`): 123 test files passed, 2770 tests passed, 2 skipped (2772). Headless
 e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless
-`WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs were run on their own (16 passed, see M6 below). A full e2e run
-after M6 has not been made.
+`WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs and the M21 specs `backupTools.spec.js` and `gates.spec.js` were run
+on their own (see M6 and M21 below). A full e2e run after M6 has not been made.
 
-Next milestone in the order of PLAN.md section 5: M21 (M17 dropped by D29, revision 7; M21 added by D33, revision 8).
+Next milestone in the order of PLAN.md section 5: M18 (M17 dropped by D29, revision 7; M21 added by D33, revision 8,
+and done).
 
 ## M0 status and deviations
 
@@ -538,6 +540,36 @@ follow):**
   terms roll no dice (`0d6`); `draw_table` text now decodes character references; one-pass sheet id cut; test polish
   (macro budget fixtures fail with the gate closed, a macro error over 512 B in e2e, the skill description names the
   gameplay tools). After them (MEASURED): macro and sheet e2e 10 passed, zero census; `npm run check:release` clean.
+
+### As-built notes: M21
+
+**As built (2026-11-21; `backup_documents`, `list_backups`, `restore_backup`, `delete_backup`, the
+`allowBackupAnyFolder` gate, the Backup folder setting, protocol 5 with the piece transport and the settings carrier,
+recycle-bin removal):**
+
+- Dependency: `trash` `^10.1.1` (installed 10.1.1; its `engines` field asks for Node 20 or later), a runtime
+  dependency imported only by `server/backups.ts`. Node on this machine: v26.11.1 (MEASURED, `node -v`).
+- Definition sizes (MEASURED, `npx tsx tests/measure/measureContext.mjs`): `backup_documents` 800 B, `list_backups`
+  378 B, `restore_backup` 730 B, `delete_backup` 369 B, `read_handle` 766 B; 19 tools, 10,426 B in all (max 30 tools,
+  16,000 B).
+- Transport (MEASURED, `tests/integration/backupTools.test.js`): 2,048,000 bytes in four 512,000-byte pieces took
+  12.8 ms and 18.2 ms in two runs. Inferred: about 0.4 to 0.6 s per 64,000,000 bytes (the backup bound) for the
+  transport alone, extrapolated linearly from those two samples.
+- e2e on the live world (MEASURED, headless): `backupTools.spec.js` 7 passed in three runs (37.2 s, 36.0 s, 32.2 s);
+  `gates.spec.js` 4 passed. The largest live pack, `titan-vttrpg-compendium.effects` (199 index entries), measured as
+  a dry run 256 documents, 419,426 bytes, in 58 to 63 ms. Inferred: about 9 s of export per 64,000,000 bytes,
+  extrapolated linearly from that rate.
+- Unit suite after M21 (MEASURED, `npm test`): 123 files, 2770 passed, 2 skipped.
+- Designer decisions made during the run (each the designer's call under the user's delegation, not the user's own
+  choice):
+  - The 800-byte definition budget wins over "every argument has a short describe"; six arguments carry no describe.
+  - A document whose export hits the walk bounds (50,000 nodes, 24 levels, or JSON text nested 4 deep in strings) is
+    not backed up: it is counted as unreadable (`DOC_UNREADABLE`), never written cut. Also recorded in the design.
+  - Re-creating a deleted document on restore keeps `create_documents` gate parity: it needs `allowOwnershipWrites`.
+  - The sidecar accepts only the exact restore result shape the client sends; a backup over 10,000 documents fails
+    with `BACKUP_TOO_LARGE`; restore and delete run the same folder link check as backup and list.
+  - The `wiretap.backupFolder` world setting is kept in the e2e gate record, so a killed e2e run is recovered.
+  - The backups unit test that writes 1,001 files has a 30 s limit (`POST_WORK_FINDINGS.md` has the entry).
 
 ## Decision provenance (moved from PLAN.md section 3)
 

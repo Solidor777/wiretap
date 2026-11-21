@@ -51,7 +51,7 @@ or `timeoutMs` + 2 s for a registry tool whose listed schema declares `timeoutMs
 
 ## Pieces
 
-Covers `server/mcp.ts`, `server/endpoints.ts` (registry, router, health, error normalization), `server/foundryBridge.ts` and `src/bridge/foundryBridge.js`. Read references/bridge-pieces.md before changing any of those files.
+Covers `server/mcp.ts`, `server/endpoints.ts` (registry, router with `prepare` / `onSent` / `replyWaitMs` / `snapshot`, health, error normalization), `server/foundryBridge.ts` (with the piece events, `expectPieces` and `sendPiece`) and `src/bridge/foundryBridge.js`. Read references/bridge-pieces.md before changing any of those files. The backup tools, the file store and the client piece channel are in `wiretap-backups`.
 
 ## Client gate enforcement (`src/bridge/gates.js`, `src/settings/gates.js`)
 
@@ -61,12 +61,11 @@ Covers `server/mcp.ts`, `server/endpoints.ts` (registry, router, health, error n
   `GATE_DENIED`. The write scripts enforce their category gates per call in `src/bridge/scripts/writeGuard.js` (see `wiretap-scripts`).
 - Push: `initFoundryBridge` registers one listener on `createSetting`, `updateSetting` and `deleteSetting` (a first
   change creates the Setting document, a later one updates it, a reset to default deletes it; each document hook
-  runs on every client; the world collection is updated before the hook, so `game.settings.get` already returns the new value, or the default after a delete; the author is the last hook argument). For a `wiretap.<gate>` key written by a GM user (`game.users.get(userId)?.isGM`), and only on a connected GM client, it emits `BRIDGE_GATE_STATE` with a fresh
-  `readGateState()` and an ack callback; a non-ok ack is logged with `console.error`
+  runs on every client; the world collection is updated before the hook, so `game.settings.get` already returns the new value, or the default after a delete; the author is the last hook argument). For a `wiretap.<gate>` key or a bridge setting key (`wiretap.backupFolder`) written by a GM user (`game.users.get(userId)?.isGM`), and only on a connected GM client, it emits `BRIDGE_GATE_STATE` `{ gateState: readGateState(), settings: readBridgeSettings() }` and an ack callback; a non-ok ack is logged with `console.error`
   (`Wiretap | bridge gate state refused (<code>): <message>`). A second `initFoundryBridge` call replaces the listener
   (`Hooks.off` first), so a change is never pushed twice. A non-GM author is ignored; a user holding `SETTINGS_MODIFY` can still write a gate and is trusted at GM level (README). A change while disconnected needs no push: the next identify
   carries the snapshot.
-- No op can set a setting: the op table holds only `callTool`. The write scripts reach a `Setting` only through `guardWrite`, which applies `denyWiretapSettingWrite` to every Setting create, update (by id too, from the key of the existing document) and delete, and then needs `allowSettingWrites`.
+- No op sets a setting directly: the op table holds `callTool`, `backupExport` (reads only) and `backupRestore`, whose writes go through `prepareReplace` and `prepareCreate` and so through `guardWrite` (`wiretap-backups`). The write scripts reach a `Setting` only through `guardWrite`, which applies `denyWiretapSettingWrite` to every Setting create, update (by id too, from the key of the existing document) and delete, and then needs `allowSettingWrites`.
   `foundryBridge.noSettingWrites.test.js` documents it. Every write path goes through `guardWrite`, which wires `denyWiretapSettingWrite`.
 
 ## Adding a tool or op

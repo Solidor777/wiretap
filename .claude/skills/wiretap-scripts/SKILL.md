@@ -16,6 +16,7 @@ paths:
   - "tests/unit/getDocument.test.js"
   - "tests/unit/listDocumentTypes.test.js"
   - "tests/unit/searchDocuments.test.js"
+  - "tests/unit/canonicalBackup.test.js"
   - "tests/unit/schemaWalk.test.js"
   - "tests/unit/describeSchema.test.js"
   - "tests/unit/mockFields.js"
@@ -54,7 +55,7 @@ the names in `RESERVED_SCRIPT_NAMES`) is a script. Scripts call ops
 | `ctx.js` | `buildContext(definition, signal, log)` → frozen `{ core, shape, signal, log, dom? }`; `log` is the registry's log sink (`registry.log`) |
 | `core.js` | `scriptCore` (frozen): `createDocuments(params)`, `updateDocuments(params)`, `deleteDocuments(params)`, `documentTypes()`, `readDocument(reference, { derived? })`, `searchDocuments(params)`, `describeSchema(params)`; `ERROR_MESSAGE_MAX_BYTES` (256) |
 | `shape.js` | `shape` (frozen): `compact`, `project`, `paths`, `ack` |
-| `canonical.js` | `exportDocument(document, { derived? })` (the canonical export, the exclusions and the secret redaction), `unreadable(document)`, `resolveDocument(reference)`, `WIRETAP_SETTING_PREFIX`, `USER_EXCLUDED_FIELDS`, `SECRET_CORE_SETTINGS`, `SECRET_KEY`, `SECRET_SETTING_KEY`, `REDACT_MAX_DEPTH`, `REDACT_MAX_NODES` |
+| `canonical.js` | `exportDocument(document, { derived? })` (the canonical export, the exclusions and the secret redaction), `exportForBackup(document)` (below), `unreadable(document)`, `resolveDocument(reference)`, `WIRETAP_SETTING_PREFIX`, `USER_EXCLUDED_FIELDS`, `SECRET_CORE_SETTINGS`, `SECRET_KEY`, `SECRET_SETTING_KEY`, `REDACT_MAX_DEPTH`, `REDACT_MAX_NODES` |
 | `keyFields.js`, `keyFields.json` | `keyPathsFor(systemId, documentName, type)` over the reviewed per-subtype key-field lists (the `titan` system only) |
 | `search.js` | `searchDocuments(params, signal)`: candidates, canonical exclusions, filters, ordering, cursor, page bound, work caps; `FILTERS_MAX` |
 | `schemaWalk.js` | The field walker: `createWalkState`, `describeField`, `outlineFields`, `stepInto`; `SCHEMA_DEPTH_MAX` (3), `SCHEMA_NODES_MAX` (150), `OUTLINE_MAX` (80) |
@@ -137,8 +138,19 @@ Covers the four read scripts (list_document_types, get_document, search_document
 
 `skills/wiretap/SKILL.md` (module root, installed by copying; README). It may name only existing tools as
 `mcp__wiretap__<tool>` (it names every shipped script and every sidecar built-in; its Backups recipe tells the agent
-to offer `backup_documents` before a bulk update, a replace, a delete or a document-changing macro, and to restore only
-when the user asks) and must stay ≤ 70 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test).
+to make or offer `backup_documents` before a bulk update, a replace, a delete or a document-changing macro, and to
+restore only when the user asks; its opening says `list_backups` and `delete_backup` work without a GM) and must stay
+≤ 70 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test).
+
+## Backup export (`canonical.js`)
+
+`exportForBackup(document)` is the backup form of the canonical export: `exportDocument(document, {})` without `uuid`,
+plus `secretPaths`, the path of every key the exclusions removed and every string the redaction changed. It returns
+`{ ok: true, data, secretPaths }` or `{ ok: false, code, message }`: the `unreadable(document)` refusal
+(`DOC_EXCLUDED`), or `DOC_UNREADABLE` for an export that throws or a redaction walk cut at `REDACT_MAX_NODES`,
+`REDACT_MAX_DEPTH` or `REDACT_MAX_STRING_NESTING`. It never throws; the backup export counts every refusal as
+unreadable. Its caller and the restore that reads `secretPaths` are in `wiretap-backups`. Tests:
+`tests/unit/canonicalBackup.test.js`.
 
 ## Tests
 

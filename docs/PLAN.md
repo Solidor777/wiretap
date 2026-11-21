@@ -829,14 +829,15 @@ external mode exposes the sidecar, not Foundry; Foundry's exposure is the GM's o
 
 - World-scope `restricted` setting `persistHandles` (default OFF); the sidecar learns it from the gate snapshot.
 - A protected file under `.wiretap/` (0o600, symlink refusal, overwrite-only like `mcpConfigFile.ts`); entries keep the
-  64 MB total, per-entry and 30 minute idle bounds, and expired entries are overwritten, never deleted.
+  64 MB total, per-entry and 30 minute idle bounds, and expired entries are overwritten; a file is removed only through
+  the recycle bin (D34).
 - The at-rest protection (key handling) is specified in the first task of the milestone and approved before code.
 - A restarted sidecar rebinds handles to a session by a stable owner token the client presents; a foreign owner reads
   nothing.
 
-**Tests:** unit (round trip, bounds, symlink refusal, no deletion API), integration (restart keeps a handle readable by
-its owner only). **Acceptance:** behaviour is unchanged with the setting OFF. **Context budget:** unchanged (handles
-≤ 256 B). **Risks:** world data at rest; documented in the README.
+**Tests:** unit (round trip, bounds, symlink refusal, no permanent-delete API (D34)), integration (restart keeps a
+handle readable by its owner only). **Acceptance:** behaviour is unchanged with the setting OFF. **Context budget:**
+unchanged (handles ≤ 256 B). **Risks:** world data at rest; documented in the README.
 
 ### M20 — Sidecar plugins
 

@@ -138,6 +138,11 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   the test now carries a 30 s limit (per-test limits are exempt from the 1000 ms wait rule), since the cap cannot be
   reached without the files.
 
+- Title: The `BridgeIdentify` typedef does not list `settings`. Summary: `shared/protocol.js` documents the identify
+  payload with its optional `gateState` but not the `settings` object (`BridgeSettings`) that the client sends
+  (`src/bridge/foundryBridge.js`, `settings: readBridgeSettings()`) and the sidecar sanitizes (`server/endpoints.ts`
+  `validateIdentify`, `sanitizeBridgeSettings(fields.settings)`). Status: READ; a documentation gap in a shared file,
+  not a behaviour defect.
 
 - Title: A scene created while no scene is active becomes active. Summary: `Scene.create({ name })` in a world with no
   active scene makes the new scene active and viewed (`client/documents/scene.mjs` `_preCreateOperation`, READ at

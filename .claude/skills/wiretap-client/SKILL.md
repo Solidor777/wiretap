@@ -17,7 +17,8 @@ For Svelte/Foundry syntax defer to the `web-ui:svelte-5`, `foundry-vtt:foundry-v
 - `OnceInit.js` sets `CONFIG.ui.wiretap = WiretapSidebarTab` (guarded on `foundry.applications.sidebar`
   availability) and registers the client settings `serverUrl`, `terminalCommand`, `terminalTheme`,
   `terminalFontSize` under module id `wiretap`, the risk-gate world settings (`registerGateSettings()` from
-  `settings/gates.js`), the two sheet user queries `wiretap.openSheet` and `wiretap.closeSheet` in `CONFIG.queries`
+  `settings/gates.js`), the GM-only world setting `backupFolder` (`registerBridgeSettings()` from
+  `settings/bridgeSettings.js`), the two sheet user queries `wiretap.openSheet` and `wiretap.closeSheet` in `CONFIG.queries`
   (`registerSheetQueries()` from `bridge/sheetQuery.js`, on every client, players included, so a player's client can
   receive them), plus the hidden client-scope `endpointKind` (`human` default, `agent`;
   `config: false`, no lang keys) that supplies `kind` in the bridge identify. It sets
@@ -27,15 +28,21 @@ For Svelte/Foundry syntax defer to the `web-ui:svelte-5`, `foundry-vtt:foundry-v
   by a guarded dynamic import that is only valid in the e2e build.
 - `OnceReady.js` connects the shared `connection` (TerminalConnection), registers the shipped scripts
   (`registerShippedScripts()`, see `wiretap-scripts`) and calls `initFoundryBridge(connection)` (see `wiretap-mcp-bridge`);
-  all three are GM-only. `initFoundryBridge` emits the identify (protocol v5, with `gateState: readGateState()`; it also pushes `BRIDGE_GATE_STATE` on gate setting changes)
-  `{ protocolVersion, userId, userName, isGM, kind, dom: true }` with an ack callback on every (re)connect; a refused
+  all three are GM-only. `initFoundryBridge` emits the identify (protocol v5)
+  `{ protocolVersion, userId, userName, isGM, kind, dom: true, gateState: readGateState(), settings: readBridgeSettings() }`
+  with an ack callback on every (re)connect, and pushes `BRIDGE_GATE_STATE` `{ gateState, settings }` (both read
+  fresh) when a GM changes a gate or a bridge setting (`isBridgeSettingKey`) while connected; a refused
   ack is logged with `console.error` (`Wiretap | bridge identify refused (<code>): <message>`, plus a reload-Foundry
   hint for `PROTOCOL_MISMATCH`). Op failures ack `{ ok: false, error: { code: OP_FAILED, message } }`.
   Each identify gets a per-attempt token (also bumped on disconnect); an ack for any earlier token is ignored, so a
   stale ok or refusal never changes `identified`. `endpointKind` has an `onChange` calling `reidentifyBridge()`, which
   emits a fresh identify only when the socket is connected and the setting differs from the kind last sent. The op
-  table built by `initFoundryBridge(connection, { scripts? })` holds one op, `callTool`, served from the script registry
-  (default: the client's own); lookup uses `Object.hasOwn`, so inherited names (`constructor`, `__proto__`) and any
+  table built by `initFoundryBridge(connection, { scripts? })` holds three ops: `callTool`, served from the script
+  registry (default: the client's own), and the backup ops `backupExport` (`exportBackup`) and `backupRestore`
+  (`restoreBackup`) of `bridge/backup/` (see `wiretap-backups`). Each handler is called as
+  `handler(params, { requestId, pieces })`, `pieces` being the socket's one piece channel (`createPieceChannel(socket)`,
+  made once per socket), before the listener's first await, so a handler that opens a piece receiver first gets a
+  piece the sidecar sends right after the invoke. Lookup uses `Object.hasOwn`, so inherited names (`constructor`, `__proto__`) and any
   unregistered name ack `OP_FAILED` unknown op. The `BRIDGE_INVOKE` listener runs wholly inside one `try`, so a request
   that is not an object, an unreadable op or a missing or throwing ack callback never becomes an unhandled rejection
   (`replyInvoke` ignores a missing ack and logs a throwing one). A failed op acks the `code` of a thrown `ScriptError` and `OP_FAILED`
@@ -56,7 +63,10 @@ For Svelte/Foundry syntax defer to the `web-ui:svelte-5`, `foundry-vtt:foundry-v
 | `components/terminalFontSize.svelte.js` | `terminalFontSize` rune state; `FONT_SIZE_MIN 8`, `MAX 32`, `STEP 2`, `DEFAULT 16`; `clampFontSize` |
 | `bridge/TerminalConnection.svelte.js` | `TerminalConnection` class + `connection` singleton: Socket.IO client to the sidecar, terminal events, `onSocket` hook for sharing the socket |
 | `bridge/popoutState.svelte.js` | `popoutState` rune state `{ open }` |
-| `settings/gates.js` | `registerGateSettings()`: one world-scope, `restricted`, `config: true`, default-closed setting per `GATES` entry of `shared/gates.js` (iterated, no second list); a `boolean` gate is a Boolean, `allowedPluginModules` a String of comma-separated module ids (default `''`; Foundry has no list-of-strings setting editor). `gateLangKey(name, 'Name' \| 'Hint')` derives the `lang/en.json` key `WIRETAP.Settings.Gates.<Name with first letter upper-cased>.<Name\|Hint>`; the hints of `allowMacroExecution`, `allowAgentScripts` and `allowedPluginModules` state the arbitrary-code caveat; `allowDelete` and `allowReplace` (default closed, enforced by `guardWrite`, previews exempt) and `allowBackupAnyFolder` have their own hints, as every `GATES` entry must. `lang/en.json` also holds `WIRETAP.Settings.BackupFolder` (Name, Hint) for the Backup folder setting, which no code registers yet |
+| `settings/gates.js` | `registerGateSettings()`: one world-scope, `restricted`, `config: true`, default-closed setting per `GATES` entry of `shared/gates.js` (iterated, no second list); a `boolean` gate is a Boolean, `allowedPluginModules` a String of comma-separated module ids (default `''`; Foundry has no list-of-strings setting editor). `gateLangKey(name, 'Name' \| 'Hint')` derives the `lang/en.json` key `WIRETAP.Settings.Gates.<Name with first letter upper-cased>.<Name\|Hint>`; the hints of `allowMacroExecution`, `allowAgentScripts` and `allowedPluginModules` state the arbitrary-code caveat; `allowDelete` and `allowReplace` (default closed, enforced by `guardWrite`, previews exempt) and `allowBackupAnyFolder` have their own hints, as every `GATES` entry must. `lang/en.json` also holds `WIRETAP.Settings.BackupFolder` (Name, Hint) for the Backup folder setting |
+| `settings/bridgeSettings.js` | `registerBridgeSettings()`: the world-scope, `restricted`, `config: true` String setting `backupFolder` (default `''`, the sidecar's default folder) |
+| `bridge/bridgeSettings.js` | `readBridgeSettings()` (`sanitizeBridgeSettings` of `shared/bridgeSettings.js` over `game.settings`; the defaults when a read throws) and `isBridgeSettingKey(key)` (true for `wiretap.<bridge setting>`) |
+| `bridge/pieces.js`, `bridge/backup/**` | The piece channel and the backup export and restore; see `wiretap-backups` |
 | `bridge/scripts/**` | The client script runtime: registry, `callTool` dispatcher, `ctx`, the shipped scripts `list_document_types`, `get_document`, `search_documents`, `describe_schema`, `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`, `open_sheet`, `close_sheet`, `roll`, `draw_table` and `execute_macro`, the canonical document export (see `wiretap-scripts`; the gameplay scripts in `wiretap-gameplay`) |
 | `bridge/sheetQuery.js` | `OPEN_SHEET_QUERY`, `CLOSE_SHEET_QUERY`, `handleOpenSheetQuery`, `handleCloseSheetQuery`, `registerSheetQueries()`: the receiving side of a GM's cross-user sheet request; each handler refuses a sender who is not a GM (`SHEET_DENIED`), the open handler also requires OBSERVER for this client's user, and both answer `{ ok: false, code, message }` instead of throwing (see `wiretap-gameplay`) |
 | `bridge/gates.js` | `readGateState()` (reads `game.settings` for every gate, a throwing read leaves the gate out, parses the module string, returns `sanitizeGateState(raw)`), `requireGate(name, moduleId?)` (`gateDenial(readGateState(), name, moduleId)`: reads this client's settings at call time, params never carry a gate value) and `gateNameFromSettingKey(key)` (gate name for a `wiretap.<gate>` key, else null) |
@@ -71,4 +81,5 @@ For Svelte/Foundry syntax defer to the `web-ui:svelte-5`, `foundry-vtt:foundry-v
   `terminalFontSize`, `terminalThemes`, `OnceInit` which asserts the `serverUrl` default `http://127.0.0.1:31416`
   matching the sidecar's IPv4 loopback bind, the `endpointKind` setting, `api.bridge.identified` and the two sheet
   queries; `sheetQuery` covers the query handlers; identify/ack and `BRIDGE_PING`
-  behavior is in `foundryBridge.identify.test.js`; gates: `gateSettings` (registration iterates `GATES`, lang keys for every gate, caveat text), `bridgeGates` (`readGateState` with hostile values, `requireGate`), `foundryBridge.gatePush` (identify payload and push), `foundryBridge.noSettingWrites`); e2e in `tests/e2e/` (see `wiretap-build-test`).
+  behavior is in `foundryBridge.identify.test.js`; gates: `gateSettings` (registration iterates `GATES`, lang keys for every gate, caveat text), `bridgeGates` (`readGateState` with hostile values, `requireGate`), `foundryBridge.gatePush` (identify payload and push), `foundryBridge.noSettingWrites`); bridge settings:
+  `bridgeSettings.client`; the backup ops and their invocation argument through the bridge: `foundryBridge.backupOps`; e2e in `tests/e2e/` (see `wiretap-build-test`).

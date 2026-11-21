@@ -35,6 +35,8 @@
       grouped by agent turn, with turn boundaries from Claude Code hooks or agent-called markers; a pre-write copy of
       each document a turn touches. A lighter option: each update, replace or delete returns a handle to the
       document's earlier version, restorable with the existing write tools
+- [ ] Whole-world backup (a later option; M21 backs up lists and groups only). Today a whole-world backup is made on
+      Foundry's setup screen with the world shut down
 - [ ] Script dispatcher mode for MCP clients that do not defer tool schemas: `list_scripts` / `describe_script` /
       `run_script` (docs/PLAN.md D19; per-script deferred tools are the primary mode, build this only if such a client is
       targeted)

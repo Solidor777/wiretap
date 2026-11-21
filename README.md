@@ -100,7 +100,8 @@ method `405`.
   handles and tool-list changes; it does not point to the Wiretap skill (see below). An earlier, longer text (531
   characters) cost about 221 tokens of context (measured, same results file); the current text is shorter and was not
   re-measured.
-- **Registered scripts.** Every tool except the built-in `read_handle` is a script a GM client registers. A registered
+- **Registered scripts.** Every tool except the sidecar's built-ins (`read_handle` and the four backup tools, see
+  [Document backups](#document-backups)) is a script a GM client registers. A registered
   GM client pushes its complete script list with the Socket.IO event `bridge:registry`, whose payload is
   `{ apiVersion: 1, scripts: [...] }` (a plain array is refused); each event replaces the endpoint's previous list. A
   script definition is `{ name, version, description, inputSchema, result: { budgetBytes }, requires, mutates, gate? }`,
@@ -122,7 +123,8 @@ method `405`.
   beyond that fails at once with `SCRIPT_BUSY`. The client sends one registry push per task however many scripts register in it; the sidecar applies at most 2
   `bridge:registry` pushes per second from one socket: later pushes in the same second are coalesced, and the latest is applied when the second ends (an earlier
   coalesced push is acked `{ ok: true, coalesced: true }`). The listed definitions of all tools, with the room kept
-  for the sidecar's own `read_handle`, fit 16,000 bytes; a tool that would overflow it is refused with a logged reason.
+  for the sidecar's five built-in tools, fit 16,000 bytes; a tool that would overflow it is refused with a logged
+  reason.
   The write tools, `roll`, `draw_table` and `execute_macro` are listed with `readOnlyHint` false; `open_sheet` and
   `close_sheet` with true. A tool
   added during a `claude` session was deferred (found through `ToolSearch`) and callable in the same session.
@@ -262,6 +264,60 @@ method `405`.
   `404` before any body is read. A refused request is answered with `Connection: close` once the rest of its body
   (up to 8 MiB) has been read and discarded, so the client sees the status instead of a reset connection.
 
+## Document backups
+
+Four tools run in the sidecar and save Foundry documents to files and put them back. The documents travel between the
+GM's browser and the sidecar in pieces of at most 512,000 bytes and never pass through the agent's context. The
+user-facing skill tells the agent to make or offer a backup before a bulk update, a replace, a delete or a macro that
+changes documents.
+
+- **`backup_documents`** takes exactly one of `uuids` (1 to 200; an embedded document's uuid backs up its parent
+  document), `folderUuid` (a Folder, its subfolders and everything in them), `documentName` (every world document of
+  that type and its Folders) or `pack` (a compendium pack and its Folders), plus optional `folder`, `note` (at most 200
+  bytes), `dryRun` (measure only; nothing is written) and `timeoutMs` (1,000 to 300,000 ms, default 120,000). It
+  returns `{ file, folder, documents, bytes }` (`folder` is `default`, `setting` or `named`), plus `unreadable`
+  (selected documents that could not be read) and `parents` when above 0. A backup holds at most 10,000 documents and
+  64,000,000 bytes (`BACKUP_TOO_LARGE`); `User` and `Setting` documents are refused, because the export drops
+  passwords and redacts setting values. A document that cannot be exported whole is counted as unreadable, never
+  written cut.
+- **`list_backups`** takes `folder` and `limit` (1 to 50, default 10) and returns the newest backups as
+  `[file, created, documents, note]` rows with the `total` count (and `invalid` for files that fail the checks).
+- **`restore_backup`** takes `file`, `folder`, `uuids` (restore only these), `dryRun` (plan only) and `timeoutMs`.
+- **`delete_backup`** takes `file` and `folder` and moves the file to the recycle bin.
+
+**Where backups go.** With no `folder`, a backup goes to the GM's **Backup folder** setting when it is set (an absolute
+path to a folder that exists) and otherwise to the default folder `.wiretap/backups/` in the module folder (created on
+first use; gitignored). A `folder` argument must be an absolute path to a folder that exists; naming any folder other
+than those two needs the `allowBackupAnyFolder` gate. Symbolic links (and Windows junctions) are refused for the folder
+and the file. The sidecar names every file (`<UTC time>-<8 random characters>.wtbackup.jsonl`), creates it exclusively
+so no file is ever overwritten, and opens, restores or deletes only a file of that name whose header checks out.
+`list_backups` and `delete_backup` work with no GM connected, on the default folder only; a backup and a restore need a
+GM's browser. One backup or restore runs at a time (`BACKUP_BUSY`).
+
+**What a backup holds.** A JSON Lines file: a header (world, Foundry and system versions, note, counts), then one line
+per document with its stored data, Folders first, parent before child. It is redacted like every read (no `User`
+password, no secret-named keys in flags); a restore copies the live value of each left-out secret back, and counts in
+`secretLost` the documents where none exists any more.
+
+**Restoring.** A restore is refused for a backup of another world. It is **not atomic**: documents are applied one by
+one in file order, and each runs Foundry's hooks and the game system's side effects, which are not reverted; a restore
+stopped by its time limit or a disconnect is partly applied. Each document goes through the write gates exactly as the
+write tools would: a document that still exists is replaced (`allowReplace`; `allowOwnershipWrites` when its
+ownership differs; `allowDelete` when embedded documents were added since, because they are removed), and a deleted one
+is created again with its id (`allowOwnershipWrites`, as for `create_documents` with that ownership). A compendium
+target needs `allowCompendiumWrites` and an unlocked pack. A document that fails (a closed gate, a pack or type that no
+longer exists, invalid data) is reported in its row and does not stop the others. `dryRun` runs every check with the
+gates of a real run and writes nothing. The result counts `replaced`, `created`, `skipped`, `failed` and `secretLost`,
+shows up to 20 rows (failures first) and lists `differences` when the Foundry or system version differs from the
+backup's.
+
+**Recycle bin only.** Wiretap never deletes a file permanently: `delete_backup`, and a partial file left by a failed
+backup, go through the recycle bin (the `trash` package). If the recycle bin refuses, the file stays and the call fails
+with `TRASH_FAILED` naming it. Limit, per the `trash` README: a sidecar running as the Windows SYSTEM account (or
+another service account) sends files to that account's recycle bin, not the signed-in user's.
+
+**Whole-world backups** are not made by these tools: make one on Foundry's setup screen with the world shut down.
+
 ## Wiretap skill for Claude Code
 
 `skills/wiretap/SKILL.md` is a short user-facing skill that tells an agent which Wiretap tools exist
@@ -269,7 +325,9 @@ method `405`.
 `mcp__wiretap__describe_schema`, `mcp__wiretap__create_documents`, `mcp__wiretap__update_documents`,
 `mcp__wiretap__delete_documents`, `mcp__wiretap__replace_document`, `mcp__wiretap__batch`,
 `mcp__wiretap__open_sheet`, `mcp__wiretap__close_sheet`, `mcp__wiretap__roll`, `mcp__wiretap__draw_table`,
-`mcp__wiretap__execute_macro`, `mcp__wiretap__read_handle`) and how to use them. It is not installed automatically:
+`mcp__wiretap__execute_macro`, `mcp__wiretap__backup_documents`, `mcp__wiretap__list_backups`,
+`mcp__wiretap__restore_backup`, `mcp__wiretap__delete_backup`, `mcp__wiretap__read_handle`) and how to use them,
+including when to make or offer a backup. It is not installed automatically:
 copy the `skills/wiretap` directory into the `.claude/skills/` directory of the project that runs `claude` (a skill for
 one project), or into `~/.claude/skills/` (a skill for every project), so that the file is
 `.claude/skills/wiretap/SKILL.md`, then start a new `claude` session. A symbolic link to the directory works the same
@@ -342,7 +400,7 @@ origins, plus `http://localhost:30001` and `http://127.0.0.1:30001`, the Vite de
 
 The list is not configurable yet; a Foundry served from another port or host needs the constant edited.
 
-## Bridge routing and identify (protocol v4)
+## Bridge routing and identify (protocol v5)
 
 Foundry GM clients register with the sidecar as **endpoints** over Socket.IO. Each endpoint has a `kind`: `human` (a
 person's tab) or `agent` (an agent-runner browser).
@@ -379,13 +437,14 @@ checks before retrying.
 
 ```js
 socket.emit('bridge:identify', {
-   protocolVersion: 4,
+   protocolVersion: 5,
    userId,
    userName,
    isGM: true,
    kind: 'human', // or 'agent'
    dom: true,
    gateState, // optional risk-gate snapshot, see below
+   settings, // optional bridge settings: { backupFolder }, see below
 }, (ack) => { /* { ok: true } or { ok: false, error: { code, message } } */ });
 ```
 
@@ -400,11 +459,13 @@ entry; a disconnect removes it. Limits: `userId` is at most 64 bytes and `userNa
 **Risk gates.** A gate is a world-scope GM setting that unlocks a class of dangerous operation. The registry is
 `shared/gates.js` (`GATES`): the boolean gates `allowMacroExecution`, `allowUserWrites`, `allowSettingWrites`,
 `allowFileUpload`, `allowOwnershipWrites`, `allowCompendiumWrites`, `allowModuleConfigWrites`, `allowDelete`,
-`allowReplace` and `allowAgentScripts` (all default `false`) and `allowedPluginModules` (an array of module ids, default
-empty). There is no undo gate. The client reports its gate values as a snapshot object with exactly those keys: in the identify's optional
-`gateState`, and again by emitting `bridge:gateState` with the snapshot as the payload (ack callback optional) whenever
-a gate changes. The sidecar sanitizes every snapshot: only the registry names are read, each only as an own property and
-only with its registry type (booleans; `allowedPluginModules` is at most 64 entries, each a Foundry module id of 1 to 64
+`allowReplace`, `allowBackupAnyFolder` and `allowAgentScripts` (all default `false`) and `allowedPluginModules` (an
+array of module ids, default empty). There is no undo gate. The client reports its gate values as a snapshot object
+with exactly those keys: in the identify's optional `gateState`, and again by emitting `bridge:gateState`
+`{ gateState, settings }` (ack callback optional) whenever a gate or a bridge setting changes; a payload without
+`gateState` closes every gate. `settings` carries the world settings the sidecar acts on, today only `backupFolder` (a
+string of at most 1,024 bytes with no control characters; anything else is treated as unset), kept per endpoint. The
+sidecar sanitizes every snapshot: only the registry names are read, each only as an own property and only with its registry type (booleans; `allowedPluginModules` is at most 64 entries, each a Foundry module id of 1 to 64
 characters from `[a-z0-9_-]` starting with a letter or digit, duplicates removed, and a longer list is treated as
 empty); every other key and every wrong-typed value is dropped and the gate stays closed. An absent or non-object
 snapshot closes every gate. The snapshot belongs to the sending endpoint: a repeated identify replaces it, a
@@ -427,7 +488,7 @@ a sidecar check ran. No write path may write a `Setting` whose key is in the `wi
 to its key first; pass a namespaced setting as `{ namespace, key }`). The module's own client sends no snapshot, so every
 gate reads closed.
 
-**Wiretap client.** The module's Foundry client sends this identify (protocol 4, `dom: true`) on every (re)connect, with
+**Wiretap client.** The module's Foundry client sends this identify (protocol 5, `dom: true`) on every (re)connect, with
 `kind` taken from the client-scope setting `wiretap.endpointKind` (`human` by default; an agent runner sets `agent`). The
 client counts as identified only after an `{ ok: true }` ack: `game.modules.get('wiretap').api.bridge.identified` is
 `true` from that ack until a disconnect or a refusal, so a runner waits on it before invoking tools. A refused ack is
@@ -442,8 +503,10 @@ within the call's reply wait: 10 s, or `timeoutMs` + 2 s for a tool that declare
 the message names that wait and says the operation may still have applied; it is reported after up to the wait plus
 the sidecar's health ping of at most 1 s), `ENDPOINT_GONE` (the endpoint disconnected, or could not be written to,
 before it acked; reported at once, not after the wait), `OP_FAILED` (the default when the client gives no code), `PROTOCOL_MISMATCH`,
-`NOT_GM`, `ENDPOINT_LIMIT`. All of them except `OP_FAILED` are reserved: a code of that name in a client's failure ack
-is reported as `OP_FAILED`. Messages are at most 512 bytes (256 for `NO_ENDPOINT`), truncated with `…`; `failures` is
+`NOT_GM`, `ENDPOINT_LIMIT`. All of them except `OP_FAILED` are reserved, as are `TOOL_GONE` and the backup codes
+only the sidecar produces (`BACKUP_NOT_FOUND`, `BACKUP_INVALID`, `BACKUP_BUSY`, `BACKUP_FOLDER_INVALID`,
+`BACKUP_WRITE_FAILED`, `TRASH_FAILED`): a code of that name in a client's failure ack is reported as `OP_FAILED`.
+Messages are at most 512 bytes (256 for `NO_ENDPOINT`), truncated with `…`; `failures` is
 capped at 10 entries with `failureCount` holding the true total. MCP error results are at most 512 bytes in total:
 `<code>: <message>`, then as many `path: message` failure lines as fit, then ` (+N more)` for the failures not shown.
 A registered script's ack result is shown as text (a string as is, anything else as JSON) behind the result enforcer with
@@ -466,8 +529,15 @@ default; each unlocks a class of dangerous operation for agents:
 | `allowModuleConfigWrites` | Writing the module configuration (enables and disables modules) |
 | `allowDelete` | Deleting documents with `delete_documents` or the deletes of a `batch` (previews need no gate) |
 | `allowReplace` | Replacing whole documents with `replace_document` (previews need no gate) |
+| `allowBackupAnyFolder` | Writing, listing, restoring and deleting backup files in a folder other than the default (`.wiretap/backups` in the module folder) or the Backup folder setting |
 | `allowAgentScripts` | Saving, disabling and running agent-saved scripts (arbitrary code) |
 | `allowedPluginModules` | Plugin skills and scripts of the module ids listed (comma-separated; empty by default) |
+
+One more world-scope, GM-only setting is not a gate:
+
+| Setting | Holds |
+|---|---|
+| `backupFolder` | The absolute path of the folder backups are written to; empty (the default) uses `.wiretap/backups` in the module folder. A GM client sends it to the sidecar with its gate snapshot. |
 
 The gate definitions live in `shared/gates.js`; the settings are registered from that table. A GM client sends its
 gate snapshot to the sidecar when it identifies and again whenever a gate setting changes. The sidecar uses the snapshot

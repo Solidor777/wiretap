@@ -845,7 +845,7 @@ it('refuses a document that cannot be exported, without throwing', ...);   // to
 
 // tests/unit/backupSelection.test.js
 it('maps an embedded uuid to its parent once and counts it in parents', ...);   // [item uuid, actor uuid] -> 1 entry
-it('keeps one entry for a uuid listed twice and for a document named by uuid and by its folder', ...);
+it('keeps one entry for a uuid listed twice, puts named folders first, parent first, and keeps a pack', ...);
 it('refuses a missing uuid with DOC_NOT_FOUND and a User or Setting with ARGS_INVALID', ...);
 it('selects a world folder group: the folder, its subfolders, then their documents, parents first', ...);
 it('selects a pack folder group from pack.folders and the index', ...);

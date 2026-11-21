@@ -51,8 +51,8 @@ proxy gives the defaults). Tests: `tests/unit/bridgeSettings.test.js`.
 - Code: `PIECE_REFUSED` (the receiver refused a piece; the stream stops).
 - Typedefs: `BackupPiece` = `BackupDataPiece` `{ requestId, seq, data: Uint8Array }` | `BackupEndPiece`
   `{ requestId, seq, end: true, pieces, bytes }`; `PieceAck` `{ ok: true }` | `{ ok: false, error: { code, message } }`;
-  `BridgeStatePush` `{ gateState, settings }`. The comment of `BRIDGE_GATE_STATE` names `BridgeStatePush` as its
-  payload, while the sidecar and client code still send and read a bare `GateState`.
+  `BridgeStatePush` `{ gateState, settings }`, the `BRIDGE_GATE_STATE` payload the client sends and the sidecar reads
+  (a payload without `gateState` closes every gate). The identify carries the same `settings` beside `gateState`.
 
 ## Backup tools (`server/backupTools.ts`)
 

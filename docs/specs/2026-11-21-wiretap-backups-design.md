@@ -88,6 +88,10 @@ All are registry scripts or sidecar built-ins as noted; names are public API (ow
   the backup, so before the replace the client copies the live value of every such key into the restored data. A key
   of that kind that was deleted after the backup cannot come back; the result counts documents where this applies.
   (Owner delegated the design on 2026-11-21; designer's call, chosen over writing unredacted backups.)
+- A document whose export hits the redaction walk bounds (50,000 nodes, 24 levels, or JSON text nested 4 deep in
+  strings) is not backed up: it is counted as unreadable (`DOC_UNREADABLE`), never written cut, since a cut export no
+  longer holds the document whole.
+  (Designer's call.)
 
 ### File format and naming
 

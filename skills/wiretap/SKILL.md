@@ -4,8 +4,8 @@ description: Use when working with the live Foundry VTT world through the Wireta
 ---
 # Wiretap: Foundry VTT tools
 Wiretap acts on the live Foundry world through MCP tools that work via a connected GM's browser. With none connected, a
-call fails with `NO_ENDPOINT`, naming what to start. An undeclared argument (a misspelled `dryrun`) is refused.
-
+call fails with `NO_ENDPOINT`, naming what to start (`list_backups` and `delete_backup` still work on the default
+folder). An undeclared argument (a misspelled `dryrun`) is refused.
 ## Recipes
 - **Read a document.** `mcp__wiretap__get_document` with `uuid`, or `documentName` and `id` (add `parentUuid` for an
 embedded one, `pack` for a compendium one). The default is a compact view (name, type, key fields, embedded `[id, name,
@@ -36,8 +36,8 @@ deleted; omit `flags`: other modules' flags go). Leave `ownership` out; `_id`, `
 atomic: Foundry checks all first, stops at the first failure and keeps what it did; `WRITE_NOT_APPLIED` says "N of M
 operations applied". `actAs` (a user id) on any write only checks that user's permission first (`ACT_AS_DENIED`).
 - **Backups.** Before a bulk update (more than about 10 documents), any `replace_document`, any delete, or an
-`execute_macro` that changes documents, offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded one
-saves its parent) or one `folderUuid`, `documentName` or `pack`, and a `note`. Tell the user the `file` and where it
+`execute_macro` that changes documents, make or offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded
+one saves its parent) or one `folderUuid`, `documentName` or `pack`, and a `note`. Tell the user the `file` and where it
 went (`folder: "default"` is `.wiretap/backups` in the module folder; `"setting"` is the GM's Backup folder setting).
 `mcp__wiretap__list_backups` lists them. `mcp__wiretap__restore_backup` (`file`, `uuids`, `dryRun`) only when the user
 asks: not atomic, hooks run; it needs `allowReplace`, `allowOwnershipWrites` to re-create a deleted document and
