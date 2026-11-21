@@ -661,7 +661,10 @@ export function startMcpServer(
    // Builds a session's backup tools for its endpoint kind; one store and one busy lock serve every session.
    const backupTools: (endpoint: EndpointKind | undefined) => ToolRegistration[] = createBackupTools({
       bridge,
-      store: createBackupStore(options.backups),
+      store: createBackupStore({
+         log,
+         ...options.backups,
+      }),
       log,
    });
    // The names of the tools every session has, which a registered tool may not reuse.

@@ -27,9 +27,12 @@ import {
    parseHeaderLine,
    type BackupHeader,
 } from '../shared/backup.js';
+import { getBudget } from '../shared/budgets.js';
 import { describeCause } from '../shared/logText.js';
+import { utf8Bytes } from '../shared/utf8.js';
 import { BridgeError } from './endpoints.ts';
 import { defaultConfigRoot, ensureWiretapDir, refuseSymbolicLink } from './mcpConfigFile.ts';
+import { truncateUtf8 } from './utf8.ts';
 
 /** Moves files to the recycle bin; the `trash` package's call shape. */
 export type TrashFunction = (paths: string[], options: { glob: false }) => Promise<void>;
@@ -46,6 +49,8 @@ export interface BackupStoreOptions {
    randomSuffix?: () => string;
    /** The platform whose path rules apply to folder equality; default `process.platform`. */
    platform?: NodeJS.Platform;
+   /** Receives one sidecar log line; default `console.log`. */
+   log?: (line: string) => void;
 }
 
 /** Where a folder came from: the default folder, the Backup folder setting, or a folder the caller named. */
@@ -105,8 +110,8 @@ export interface BackupStore {
    resolveFolder(folder: string | undefined, settingFolder: string): ResolvedFolder;
    /** Check a folder, creating the default one when `create` is set; returns whether it exists. */
    checkFolder(folder: ResolvedFolder, create: boolean): boolean;
-   /** Create a new backup file exclusively. */
-   createFile(folder: ResolvedFolder): BackupFileWriter;
+   /** Create a new backup file exclusively; a file left by a failed create is moved to the recycle bin. */
+   createFile(folder: ResolvedFolder): Promise<BackupFileWriter>;
    /** Open and check a backup file by name. */
    openFile(folder: ResolvedFolder, file: string): BackupFileReader;
    /** List the folder's backups, newest first. */
@@ -122,6 +127,9 @@ type PathState = 'missing' | 'directory' | 'file' | 'other';
 
 // Longest recycle-bin failure reason in a `TRASH_FAILED` message, in UTF-8 bytes.
 const TRASH_REASON_MAX_BYTES: number = 120;
+
+// Longest error text a tool result carries, `<code>: <message>`, in UTF-8 bytes.
+const ERROR_MAX_BYTES: number = getBudget('ERROR_MAX_BYTES').value;
 
 /**
  * Build a `BACKUP_FOLDER_INVALID` error.
@@ -206,13 +214,18 @@ function readAll(fd: number, buffer: Buffer, position: number): number {
 }
 
 /**
- * Log a file-system failure and return the fixed `BACKUP_WRITE_FAILED` error that replaces it.
- * @param {unknown} cause - The failure.
- * @returns {BridgeError} The error to throw.
+ * Add the name of a partial backup file the recycle bin refused to a failure, keeping `<code>: <message>` within the
+ * error budget.
+ * @param {BridgeError} error - The failure.
+ * @param {string} file - The partial file's name.
+ * @returns {BridgeError} The failure with the sentence appended.
  */
-function writeFailed(cause: unknown): BridgeError {
-   console.error(`Wiretap sidecar | backup file write failed: ${describeCause(cause)}`);
-   return new BridgeError(BACKUP_WRITE_FAILED, 'The backup file could not be written.');
+export function namePartialFile(error: BridgeError, file: string): BridgeError {
+   // The sentence naming the file.
+   const sentence: string = ` The partial file ${file} could not be moved to the recycle bin.`;
+   // Bytes left for the original message.
+   const room: number = ERROR_MAX_BYTES - utf8Bytes(`${error.code}: `) - utf8Bytes(sentence);
+   return new BridgeError(error.code, `${truncateUtf8(error.message, room)}${sentence}`);
 }
 
 /**
@@ -231,10 +244,22 @@ export function createBackupStore(options: BackupStoreOptions = {}): BackupStore
    const randomSuffix: () => string = options.randomSuffix ?? (() => randomBytes(6).toString('base64url'));
    // The platform whose path rules apply.
    const platform: NodeJS.Platform = options.platform ?? process.platform;
+   // The sidecar log.
+   const log: (line: string) => void = options.log ?? ((line: string) => console.log(line));
    // The `.wiretap` directory.
    const wiretapDir: string = path.join(root, '.wiretap');
    // The default backup folder.
    const defaultFolder: string = path.join(wiretapDir, 'backups');
+
+   /**
+    * Log a file-system failure and return the fixed `BACKUP_WRITE_FAILED` error that replaces it.
+    * @param {unknown} cause - The failure.
+    * @returns {BridgeError} The error to throw.
+    */
+   function writeFailed(cause: unknown): BridgeError {
+      log(`Wiretap sidecar | backup file write failed: ${describeCause(cause)}`);
+      return new BridgeError(BACKUP_WRITE_FAILED, 'The backup file could not be written.');
+   }
 
    /**
     * Compare two resolved paths, ignoring case on Windows.
@@ -251,17 +276,18 @@ export function createBackupStore(options: BackupStoreOptions = {}): BackupStore
     * @param {string | undefined} folder - The caller's folder, or undefined for none.
     * @param {string} settingFolder - The Backup folder setting; empty when unset.
     * @returns {ResolvedFolder} The resolved folder.
-    * @throws {BridgeError} `BACKUP_FOLDER_INVALID` when the folder or the setting is not an absolute path.
+    * @throws {BridgeError} `BACKUP_FOLDER_INVALID` when the folder is not an absolute path, or when no folder is given
+    *         and the setting is not an absolute path.
     */
    function resolveFolder(folder: string | undefined, settingFolder: string): ResolvedFolder {
       if (folder !== undefined && !path.isAbsolute(folder)) {
          throw folderInvalid('The folder must be an absolute path.');
       }
-      if (settingFolder !== '' && !path.isAbsolute(settingFolder)) {
+      if (folder === undefined && settingFolder !== '' && !path.isAbsolute(settingFolder)) {
          throw folderInvalid('The Backup folder setting must be an absolute path.');
       }
-      // The resolved setting, or null when unset.
-      const setting: string | null = settingFolder === '' ? null : path.resolve(settingFolder);
+      // The resolved setting, or null when unset or, beside a given folder, not absolute.
+      const setting: string | null = path.isAbsolute(settingFolder) ? path.resolve(settingFolder) : null;
       if (folder === undefined) {
          return setting === null
             ? {
@@ -329,12 +355,14 @@ export function createBackupStore(options: BackupStoreOptions = {}): BackupStore
    }
 
    /**
-    * Create a new backup file exclusively at mode 0o600 and write the blank header line.
+    * Create a new backup file exclusively at mode 0o600 and write the blank header line. When the file was created and
+    * the blank header line cannot be written, the file is closed and moved to the recycle bin.
     * @param {ResolvedFolder} folder - The folder, already checked.
-    * @returns {BackupFileWriter} The writer.
-    * @throws {BridgeError} `BACKUP_WRITE_FAILED` on any file-system failure, an existing file included.
+    * @returns {Promise<BackupFileWriter>} The writer.
+    * @throws {BridgeError} `BACKUP_WRITE_FAILED` on any file-system failure, an existing file included; its message
+    *         names the created file when the recycle bin refuses it.
     */
-   function createFile(folder: ResolvedFolder): BackupFileWriter {
+   async function createFile(folder: ResolvedFolder): Promise<BackupFileWriter> {
       // The creation time, used for both the name and the header.
       const createdAt: Date = now();
       // The file name.
@@ -351,10 +379,23 @@ export function createBackupStore(options: BackupStoreOptions = {}): BackupStore
          writeAll(fd, Buffer.from(blankHeaderLine()), 0);
          size = HEADER_LINE_BYTES;
       } catch (error) {
-         if (fd !== null) {
-            fs.closeSync(fd);
+         // The error that replaces the failure.
+         const failure: BridgeError = writeFailed(error);
+         if (fd === null) {
+            throw failure;
          }
-         throw writeFailed(error);
+         try {
+            fs.closeSync(fd);
+         } catch (cause) {
+            log(`Wiretap sidecar | new backup ${file} not closed: ${describeCause(cause)}`);
+         }
+         try {
+            await trashPath(filePath);
+         } catch (cause) {
+            log(`Wiretap sidecar | new backup ${file} not recycled: ${describeCause(cause)}`);
+            throw namePartialFile(failure, file);
+         }
+         throw failure;
       }
       /**
        * Return the open descriptor.

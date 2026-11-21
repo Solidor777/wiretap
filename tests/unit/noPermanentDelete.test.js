@@ -112,10 +112,10 @@ describe('recycle bin only', () => {
       expect(offenders).toEqual([]);
    });
 
-   it('only server/backups.ts imports trash', () => {
+   it('server/backups.ts is the one file that imports trash', () => {
       /** @type {string[]} Files that import the recycle-bin package. */
       const importers = SOURCES.filter(({ text }) => TRASH_IMPORT.test(text)).map(({ rel }) => rel);
-      expect(['server/backups.ts']).toEqual(expect.arrayContaining(importers));
+      expect(importers).toEqual(['server/backups.ts']);
    });
 
    it('the patterns catch what they ban', () => {

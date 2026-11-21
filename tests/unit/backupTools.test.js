@@ -313,9 +313,9 @@ function backupFiles(dir) {
  * @param {BackupStore} store - The store that writes the file.
  * @param {string} folderPath - The folder, or the default when omitted.
  * @param {{ lines?: string[], note?: string }} [content] - The document lines and the note.
- * @returns {string} The file name.
+ * @returns {Promise<string>} The file name.
  */
-function writeBackup(store, folderPath = store.defaultFolder, content = {}) {
+async function writeBackup(store, folderPath = store.defaultFolder, content = {}) {
    /** @type {import('../../server/backups.ts').ResolvedFolder} The folder the file goes to. */
    const folder = {
       path: folderPath,
@@ -323,7 +323,7 @@ function writeBackup(store, folderPath = store.defaultFolder, content = {}) {
    };
    store.checkFolder(folder, true);
    /** @type {import('../../server/backups.ts').BackupFileWriter} The new file. */
-   const writer = store.createFile(folder);
+   const writer = await store.createFile(folder);
    /** @type {string[]} The document lines to write. */
    const lines = content.lines ?? LINES;
    for (const line of lines) {
@@ -344,16 +344,17 @@ const DIR_LINK = process.platform === 'win32' ? 'junction' : 'dir';
  * Write a valid backup into a real directory and reach it through links: a named folder that is a link to it, and a
  * `.wiretap` that is a link to its parent, so the default folder resolves to it too.
  * @param {Fixture} fixture - The store, fake bridge and tools.
- * @returns {{ link: string, target: string, file: string }} The linked named folder, the real folder and the file.
+ * @returns {Promise<{ link: string, target: string, file: string }>} The linked named folder, the real folder and the
+ * file.
  */
-function linkedFolders(fixture) {
+async function linkedFolders(fixture) {
    /** @type {string} The real directory standing in for `.wiretap`. */
    const realWiretap = path.join(fixture.root, 'real-wiretap');
    /** @type {string} The real folder holding the backup. */
    const target = path.join(realWiretap, 'backups');
    fs.mkdirSync(target, { recursive: true });
    /** @type {string} The backup. */
-   const file = writeBackup(fixture.store, target);
+   const file = await writeBackup(fixture.store, target);
    /** @type {string} A named folder that links to the real folder. */
    const link = path.join(fixture.root, 'link');
    fs.symlinkSync(target, link, DIR_LINK);
@@ -405,6 +406,7 @@ describe('backup tool definitions', () => {
          });
          expect(definitionBytes(tool.name, tool.description, listed), tool.name).toBeLessThanOrEqual(limit);
       }
+      expect(fixture.tools[0].description).toContain('Use or offer before bulk or risky changes.');
    });
 });
 
@@ -782,6 +784,56 @@ describe('backup_documents', () => {
       expect(fixture.trash.calls).toHaveLength(0);
       expect(backupFiles(fixture.store.defaultFolder)).toEqual([]);
    });
+
+   it('refuses a stream whose data does not end in a newline and trashes the file', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      /** @type {Piece[]} One complete line, then a line with no newline. */
+      const pieces = streamOf([LINES[0], LINES[1].slice(0, -1)]);
+      clientStreams(fixture, pieces, (bytes) => ({
+         documents: 1,
+         bytes: HEADER_LINE_BYTES + bytes,
+         unreadable: 0,
+         parents: 0,
+         world: WORLD,
+      }));
+      expect(await fixture.call('backup_documents', { documentName: 'Actor' })).toEqual({
+         error: 'BACKUP_INCOMPLETE: The backup stream ended inside a document line.',
+      });
+      expect(fixture.trash.calls).toHaveLength(1);
+      expect(backupFiles(fixture.store.defaultFolder)).toEqual([]);
+   });
+
+   it('still recycles the partial file when closing it fails', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      /** @type {BackupStore['createFile']} The real create. */
+      const create = fixture.store.createFile;
+      fixture.store.createFile = async (folder) => {
+         /** @type {import('../../server/backups.ts').BackupFileWriter} The real writer. */
+         const writer = await create(folder);
+         return {
+            ...writer,
+            close: () => {
+               writer.close();
+               throw new BridgeError('BACKUP_WRITE_FAILED', 'The backup file could not be written.');
+            },
+         };
+      };
+      clientStreams(fixture, [
+         streamOf(LINES)[0],
+         {
+            seq: 5,
+            data: Buffer.from(LINES[1]),
+         },
+      ], () => ({}));
+      expect(await fixture.call('backup_documents', { documentName: 'Actor' })).toEqual({
+         error: 'BACKUP_INCOMPLETE: A backup piece arrived out of order.',
+      });
+      expect(fixture.trash.calls).toHaveLength(1);
+      expect(backupFiles(fixture.store.defaultFolder)).toEqual([]);
+      expect(fixture.logs.some((line) => line.includes('not closed'))).toBe(true);
+   });
 });
 
 describe('createBackupSink', () => {
@@ -860,7 +912,7 @@ describe('backup lock', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} A backup to restore and delete. */
-      const file = writeBackup(fixture.store);
+      const file = await writeBackup(fixture.store);
       /** @type {(() => void) | undefined} Lets the running backup finish. */
       let release;
       fixture.bridge.behaviour = () => new Promise((resolve) => {
@@ -893,6 +945,30 @@ describe('backup lock', () => {
          trashed: true,
       });
    });
+
+   it('holds the lock after a restore answers until its pump has finished with the file', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      /** @type {string} A backup to restore and delete. */
+      const file = await writeBackup(fixture.store);
+      /** @type {PromiseWithResolvers<void>} Releases the first restore piece's ack. */
+      const ackFirst = Promise.withResolvers();
+      fixture.bridge.onPiece = async (piece) => {
+         if (piece.seq === 0) {
+            await ackFirst.promise;
+         }
+      };
+      fixture.bridge.behaviour = async () => RESTORE_RESULT;
+      expect((await fixture.call('restore_backup', { file })).file).toBe(file);
+      /** @type {string} The busy refusal. */
+      const busy = 'BACKUP_BUSY: A backup or restore is already running; retry when it ends.';
+      expect(await fixture.call('delete_backup', { file })).toEqual({ error: busy });
+      expect(await fixture.call('restore_backup', { file })).toEqual({ error: busy });
+      ackFirst.resolve();
+      await fixture.bridge.ended;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(await fixture.call('delete_backup', { file })).toMatchObject({ trashed: true });
+   });
 });
 
 describe('restore_backup', () => {
@@ -903,7 +979,7 @@ describe('restore_backup', () => {
          /** @type {string[]} Three lines of about 300 KB each, so the file needs two pieces. */
          const lines = ['a', 'b', 'c'].map((letter) => `{"x":"${letter.repeat(300_000)}"}\n`);
          /** @type {string} The backup. */
-         const file = writeBackup(fixture.store, fixture.store.defaultFolder, { lines });
+         const file = await writeBackup(fixture.store, fixture.store.defaultFolder, { lines });
          /** @type {Buffer} The file's document bytes. */
          const body = fs.readFileSync(path.join(fixture.store.defaultFolder, file)).subarray(HEADER_LINE_BYTES);
          /** @type {number} Reader closes seen. */
@@ -978,7 +1054,7 @@ describe('restore_backup', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The backup. */
-      const file = writeBackup(fixture.store);
+      const file = await writeBackup(fixture.store);
       fixture.bridge.onPiece = async () => {
          throw new BridgeError('PIECE_REFUSED', 'The Foundry client refused a restore piece: ARGS_INVALID.');
       };
@@ -996,7 +1072,7 @@ describe('restore_backup', () => {
    it('restore of an off-pattern or invalid file fails before anything is sent', async () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
-      writeBackup(fixture.store);
+      await writeBackup(fixture.store);
       expect((await fixture.call('restore_backup', { file: '../escape.wtbackup.jsonl' })).error)
          .toMatch(/^BACKUP_NOT_FOUND: /);
       /** @type {string} A file with a backup name and a broken header. */
@@ -1011,7 +1087,7 @@ describe('restore_backup', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The backup. */
-      const file = writeBackup(fixture.store);
+      const file = await writeBackup(fixture.store);
       fixture.bridge.behaviour = async () => {
          throw new BridgeError(ENDPOINT_GONE, 'The Foundry endpoint disconnected before it answered.');
       };
@@ -1025,7 +1101,7 @@ describe('restore_backup', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The backup. */
-      const file = writeBackup(fixture.store);
+      const file = await writeBackup(fixture.store);
       /** @type {string[][]} Twenty rows of 250-byte uuids. */
       const rows = Array.from({ length: 20 }, (_, index) => [
          `Actor.${String(index).padStart(244, '0')}`,
@@ -1055,7 +1131,7 @@ describe('restore_backup', () => {
          /** @type {Fixture} The store, fake bridge and tools under test. */
          const fixture = setup();
          /** @type {string} The backup. */
-         const file = writeBackup(fixture.store);
+         const file = await writeBackup(fixture.store);
          /** @type {object} A dry run's result as `restoreBackup` of the client builds it, every optional field set. */
          const clientResult = {
             ...RESTORE_RESULT,
@@ -1082,7 +1158,7 @@ describe('restore_backup', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The backup. */
-      const file = writeBackup(fixture.store);
+      const file = await writeBackup(fixture.store);
       /** @type {string} A difference of the longest kind the client builds. */
       const difference = `foundryVersion: ${'v'.repeat(64)} -> ${'w'.repeat(64)}`;
       /** @type {object[]} Client results the client restore cannot send, each one change away from a real one. */
@@ -1134,15 +1210,43 @@ describe('restore_backup', () => {
       ];
       for (const result of malformed) {
          fixture.bridge.behaviour = async () => JSON.parse(JSON.stringify(result));
-         expect((await fixture.call('restore_backup', { file })).error).toMatch(/^BACKUP_INCOMPLETE: /);
+         expect(await fixture.call('restore_backup', { file })).toEqual({
+            error: 'BACKUP_INCOMPLETE: The Foundry client sent a restore result of an unexpected shape; its '
+               + 'documents may already be applied.',
+         });
       }
+   });
+
+   it('returns a skipped row that echoes the longest non-ASCII uuid the arguments allow', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      /** @type {string} The backup. */
+      const file = await writeBackup(fixture.store);
+      /** @type {string} A uuid of 256 characters, each 3 UTF-8 bytes: 768 bytes. */
+      const uuid = '€'.repeat(256);
+      fixture.bridge.behaviour = async () => ({
+         replaced: 2,
+         created: 0,
+         skipped: 1,
+         failed: 0,
+         rows: [[uuid, 'skipped', 'not in the backup']],
+         secretLost: 0,
+      });
+      expect(await fixture.call('restore_backup', {
+         file,
+         uuids: [uuid],
+      })).toMatchObject({
+         file,
+         skipped: 1,
+         rows: [[uuid, 'skipped', 'not in the backup']],
+      });
    });
 
    it('refuses to restore from a folder that is a link or whose .wiretap is a link', async () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       fixture.bridge.endpoint.gateState.allowBackupAnyFolder = true;
-      const { link, file } = linkedFolders(fixture);
+      const { link, file } = await linkedFolders(fixture);
       expect((await fixture.call('restore_backup', {
          file,
          folder: link,
@@ -1159,7 +1263,7 @@ describe('list_backups and delete_backup', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       for (let index = 0; index < 30; index += 1) {
-         writeBackup(fixture.store, fixture.store.defaultFolder, { note: `note ${index} ${'n'.repeat(100)}` });
+         await writeBackup(fixture.store, fixture.store.defaultFolder, { note: `note ${index} ${'n'.repeat(100)}` });
       }
       /** @type {Record<string, unknown>} The default listing. */
       const listing = await fixture.call('list_backups', {});
@@ -1200,7 +1304,7 @@ describe('list_backups and delete_backup', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} A backup in the default folder. */
-      const file = writeBackup(fixture.store);
+      const file = await writeBackup(fixture.store);
       /** @type {string} A named folder. */
       const namedDir = path.join(fixture.root, 'named');
       fs.mkdirSync(namedDir);
@@ -1219,7 +1323,7 @@ describe('list_backups and delete_backup', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       fixture.bridge.endpoint.gateState.allowBackupAnyFolder = true;
-      const { link, target, file } = linkedFolders(fixture);
+      const { link, target, file } = await linkedFolders(fixture);
       expect((await fixture.call('delete_backup', {
          file,
          folder: link,
@@ -1234,7 +1338,7 @@ describe('list_backups and delete_backup', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The backup. */
-      const file = writeBackup(fixture.store);
+      const file = await writeBackup(fixture.store);
       /** @type {Record<string, unknown>} The parsed tool result. */
       const result = await fixture.call('delete_backup', { file });
       expect(result).toEqual({

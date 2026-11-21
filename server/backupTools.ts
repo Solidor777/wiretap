@@ -34,7 +34,14 @@ import { defaultBridgeSettings, type BridgeSettings } from '../shared/bridgeSett
 import { closedGateState, gateDenial, type GateState } from '../shared/gates.js';
 import { ENDPOINT_GONE, GATE_DENIED, OP_BACKUP_EXPORT, OP_BACKUP_RESTORE } from '../shared/protocol.js';
 import { utf8Bytes } from '../shared/utf8.js';
-import type { BackupFileReader, BackupFileWriter, BackupStore, ResolvedFolder } from './backups.ts';
+import {
+   namePartialFile,
+   type BackupFileReader,
+   type BackupFileWriter,
+   type BackupListing,
+   type BackupStore,
+   type ResolvedFolder,
+} from './backups.ts';
 import {
    BridgeError,
    type Endpoint,
@@ -112,8 +119,15 @@ interface DeleteArgs {
 // time-limit failure arrives before the sidecar gives up.
 const REPLY_GRACE_MS: number = 2000;
 
-// Longest string a restore result may carry in a field or a row, in UTF-8 bytes.
+// Longest string a restore result may carry in a field or after the uuid of a row, in UTF-8 bytes.
 const RESTORE_STRING_MAX_BYTES: number = 256;
+
+// Most UTF-16 code units in one entry of a `uuids` argument.
+const UUID_ARG_MAX_CHARS: number = 256;
+
+// Longest uuid a restore row may carry, in UTF-8 bytes: a skipped row echoes an asked uuid, and one UTF-16 code unit
+// takes at most 3 UTF-8 bytes (a surrogate pair takes 4 for 2 units).
+const RESTORE_UUID_MAX_BYTES: number = UUID_ARG_MAX_CHARS * 3;
 
 // The count fields of a restore result; the client restore always sends each.
 const RESTORE_COUNT_KEYS: readonly string[] = [
@@ -128,9 +142,6 @@ const RESTORE_COUNT_KEYS: readonly string[] = [
 // `systemId`, `systemVersion`), one entry each; a fourth means the result did not come from the client restore.
 const RESTORE_DIFFERENCES_MAX: number = 3;
 
-// Longest error text a tool result carries, `<code>: <message>`, in UTF-8 bytes.
-const ERROR_MAX_BYTES: number = getBudget('ERROR_MAX_BYTES').value;
-
 // The newline byte that ends every document line of a backup.
 const NEWLINE: number = 0x0a;
 
@@ -139,6 +150,10 @@ const SELECTOR_MESSAGE: string = 'Give exactly one of uuids, folderUuid, documen
 
 // The refusal of a client result that does not match the pieces the client sent.
 const MISMATCH_MESSAGE: string = 'The Foundry client sent a result that does not match the pieces it sent.';
+
+// The refusal of a restore result the client restore cannot have built; the client applies documents before it answers.
+const RESTORE_MISMATCH_MESSAGE: string = 'The Foundry client sent a restore result of an unexpected shape; its '
+   + 'documents may already be applied.';
 
 // The refusal of a call made while a backup or restore runs.
 const BUSY_MESSAGE: string = 'A backup or restore is already running; retry when it ends.';
@@ -149,6 +164,14 @@ const BUSY_MESSAGE: string = 'A backup or restore is already running; retry when
  */
 function mismatch(): BridgeError {
    return new BridgeError(BACKUP_INCOMPLETE, MISMATCH_MESSAGE);
+}
+
+/**
+ * Build the `BACKUP_INCOMPLETE` error for a restore result of an unexpected shape.
+ * @returns {BridgeError} The error.
+ */
+function restoreMismatch(): BridgeError {
+   return new BridgeError(BACKUP_INCOMPLETE, RESTORE_MISMATCH_MESSAGE);
 }
 
 /**
@@ -250,12 +273,13 @@ export function fitRestoreResult(result: object, maxBytes: number): object {
 
 /**
  * Create the sink of one backup stream. Data pieces must arrive with `seq` 0, 1, 2, …; the received bytes plus the
- * header line must stay within `BACKUP_MAX_BYTES`; the end marker must name the data piece count and byte total. The
- * first failure is kept, refuses every later piece, and is what `failure()` returns.
- * @param {() => BackupFileWriter} openWriter - Creates the backup file; runs on the first data piece.
+ * header line must stay within `BACKUP_MAX_BYTES`; the end marker must name the data piece count and byte total and
+ * follow a newline, so the file holds only complete document lines. The first failure is kept, refuses every later
+ * piece, and is what `failure()` returns.
+ * @param {() => Promise<BackupFileWriter>} openWriter - Creates the backup file; runs on the first data piece.
  * @returns {BackupSink} The sink.
  */
-export function createBackupSink(openWriter: () => BackupFileWriter): BackupSink {
+export function createBackupSink(openWriter: () => Promise<BackupFileWriter>): BackupSink {
    // The first failure, if any.
    let failure: BridgeError | undefined;
    // The file writer, once created.
@@ -266,6 +290,8 @@ export function createBackupSink(openWriter: () => BackupFileWriter): BackupSink
    let bytes: number = 0;
    // Newline bytes accepted.
    let lines: number = 0;
+   // The last data byte accepted, or undefined before the first.
+   let lastByte: number | undefined;
    // Whether the end marker was accepted.
    let ended: boolean = false;
 
@@ -295,6 +321,9 @@ export function createBackupSink(openWriter: () => BackupFileWriter): BackupSink
                   'The backup stream ended with a piece count or size that does not match the pieces received.',
                ));
             }
+            if (lastByte !== undefined && lastByte !== NEWLINE) {
+               fail(new BridgeError(BACKUP_INCOMPLETE, 'The backup stream ended inside a document line.'));
+            }
             ended = true;
             return;
          }
@@ -304,7 +333,7 @@ export function createBackupSink(openWriter: () => BackupFileWriter): BackupSink
             fail(new BridgeError(BACKUP_TOO_LARGE, `The backup would exceed ${BACKUP_MAX_BYTES} bytes.`));
          }
          try {
-            writer ??= openWriter();
+            writer ??= await openWriter();
             writer.append(data);
          } catch (error) {
             fail(error instanceof BridgeError
@@ -314,6 +343,7 @@ export function createBackupSink(openWriter: () => BackupFileWriter): BackupSink
          pieces += 1;
          bytes += data.length;
          lines += countNewlines(data);
+         lastByte = data.at(-1) ?? lastByte;
       },
 
       gone(): void {
@@ -366,21 +396,6 @@ function chooseFolder(
 }
 
 /**
- * Add the name of a partial backup file the recycle bin refused to a failure, keeping `<code>: <message>` within the
- * error budget.
- * @param {BridgeError} error - The failure.
- * @param {string} file - The partial file's name.
- * @returns {BridgeError} The failure with the sentence appended.
- */
-function namePartialFile(error: BridgeError, file: string): BridgeError {
-   // The sentence naming the file.
-   const sentence: string = ` The partial file ${file} could not be moved to the recycle bin.`;
-   // Bytes left for the original message.
-   const room: number = ERROR_MAX_BYTES - utf8Bytes(`${error.code}: `) - utf8Bytes(sentence);
-   return new BridgeError(error.code, `${truncateUtf8(error.message, room)}${sentence}`);
-}
-
-/**
  * Check that a value is an array of `min` to `max` strings of at most `RESTORE_STRING_MAX_BYTES` bytes each.
  * @param {unknown} value - The untrusted value.
  * @param {number} min - The fewest entries.
@@ -392,18 +407,31 @@ function isShortStringArray(value: unknown, min: number, max: number): value is 
 }
 
 /**
+ * Check that a value is a restore row `[uuid, state, reason?]`: a uuid of at most `RESTORE_UUID_MAX_BYTES` bytes, then
+ * one or two strings of at most `RESTORE_STRING_MAX_BYTES` bytes.
+ * @param {unknown} value - The untrusted value.
+ * @returns {boolean} Whether it is such a row.
+ */
+function isRestoreRow(value: unknown): boolean {
+   return Array.isArray(value)
+      && typeof value[0] === 'string'
+      && utf8Bytes(value[0]) <= RESTORE_UUID_MAX_BYTES
+      && isShortStringArray(value.slice(1), 1, 2);
+}
+
+/**
  * Check a restore result a GM client sent against the `RestoreResult` the client restore builds
  * (`src/bridge/backup/restoreBackup.js`): the counts `replaced`, `created`, `skipped`, `failed` and `secretLost` as
- * non-negative integers; `rows`, at most `RESTORE_ROWS_MAX` rows of `[string, string, string?]`; `differences`, when
- * present, one to `RESTORE_DIFFERENCES_MAX` strings; `dryRun`, when present, `true`; no other field. Every string is
- * at most `RESTORE_STRING_MAX_BYTES` bytes.
+ * non-negative integers; `rows`, at most `RESTORE_ROWS_MAX` rows that pass `isRestoreRow`; `differences`, when
+ * present, one to `RESTORE_DIFFERENCES_MAX` strings of at most `RESTORE_STRING_MAX_BYTES` bytes; `dryRun`, when
+ * present, `true`; no other field.
  * @param {unknown} value - The untrusted result.
  * @returns {Record<string, unknown>} A copy of the fields.
  * @throws {BridgeError} `BACKUP_INCOMPLETE` for any other shape.
  */
 function checkRestoreResult(value: unknown): Record<string, unknown> {
    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      throw mismatch();
+      throw restoreMismatch();
    }
    // The fields, each checked below.
    const entries: Array<[string, unknown]> = Object.entries(value);
@@ -421,11 +449,11 @@ function checkRestoreResult(value: unknown): Record<string, unknown> {
       !RESTORE_COUNT_KEYS.every((key) => isCount(fields[key])) ||
       !Array.isArray(fields.rows) ||
       fields.rows.length > RESTORE_ROWS_MAX ||
-      !fields.rows.every((row) => isShortStringArray(row, 2, 3)) ||
+      !fields.rows.every(isRestoreRow) ||
       (fields.differences !== undefined && !isShortStringArray(fields.differences, 1, RESTORE_DIFFERENCES_MAX)) ||
       (fields.dryRun !== undefined && fields.dryRun !== true)
    ) {
-      throw mismatch();
+      throw restoreMismatch();
    }
    // `Object.fromEntries` defines own data properties, so a `__proto__` key cannot change the prototype.
    return fields;
@@ -438,7 +466,8 @@ function checkRestoreResult(value: unknown): Record<string, unknown> {
  *          that routes to `endpoint` (undefined for no restriction).
  */
 export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKind | undefined) => ToolRegistration[] {
-   const { bridge, store } = deps;
+   // The Foundry bridge and the backup file store.
+   const { bridge, store }: BackupToolsDeps = deps;
    // The sidecar log.
    const log: (line: string) => void = deps.log ?? ((line: string) => console.log(line));
    // The clock.
@@ -477,7 +506,8 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
    }
 
    /**
-    * Close a partial backup file and move it to the recycle bin; when that fails, name the file in the failure.
+    * Close a partial backup file and move it to the recycle bin, also when closing it fails; when the recycle bin
+    * refuses it, name the file in the failure.
     * @param {BackupFileWriter} writer - The partial file.
     * @param {unknown} error - The failure of the backup.
     * @returns {Promise<unknown>} The failure to throw.
@@ -485,6 +515,10 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
    async function discardPartial(writer: BackupFileWriter, error: unknown): Promise<unknown> {
       try {
          writer.close();
+      } catch (cause) {
+         log(`Wiretap sidecar | partial backup ${writer.file} not closed: ${describeCause(cause)}`);
+      }
+      try {
          await store.trashPath(writer.filePath);
          return error;
       } catch (cause) {
@@ -597,7 +631,8 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
    function measurement(value: unknown, kind: ResolvedFolder['kind']): object {
       // The client result viewed as a field map.
       const fields: Record<string, unknown> = (value ?? {}) as Record<string, unknown>;
-      const { documents, bytes, unreadable, parents } = fields;
+      // The client's counts, each checked below.
+      const { documents, bytes, unreadable, parents }: Record<string, unknown> = fields;
       if (!isCount(documents) || !isCount(bytes) || !isCount(unreadable) || !isCount(parents)) {
          throw mismatch();
       }
@@ -628,7 +663,8 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
       const writer: BackupFileWriter | undefined = sink.writer();
       // The client result viewed as a field map.
       const fields: Record<string, unknown> = (value ?? {}) as Record<string, unknown>;
-      const { documents, bytes, unreadable, parents } = fields;
+      // The client's counts, each checked below.
+      const { documents, bytes, unreadable, parents }: Record<string, unknown> = fields;
       // The world description viewed as a field map.
       const world: Record<string, unknown> = (typeof fields.world === 'object' && fields.world !== null
          ? fields.world
@@ -773,29 +809,32 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
          }
          throw error;
       } finally {
-         busy = false;
-         // The file opened by `prepare`, closed once the pump also ended.
+         // The file opened by `prepare`; the lock is held until the pump has ended and the file is closed, so no
+         // delete or second restore reaches a file the pump may still hold open.
          const opened: BackupFileReader | undefined = reader;
-         if (opened !== undefined) {
+         if (opened === undefined) {
+            busy = false;
+         } else {
             void pumping.then(() => {
                try {
                   opened.close();
                } catch (cause) {
                   log(`Wiretap sidecar | backup ${opened.file} could not be closed: ${describeCause(cause)}`);
+               } finally {
+                  busy = false;
                }
             });
          }
       }
-      // The checked result with the sidecar's file name first.
+      // The checked result with the sidecar's file name first; the check refuses a `file` field.
       const checked: Record<string, unknown> = {
          file: args.file,
          ...checkRestoreResult(result),
       };
-      checked.file = args.file;
       // The result fitted to the budget.
       const fitted: object = fitRestoreResult(checked, getBudget('RESTORE_RESULT_MAX_BYTES').value);
       if (utf8Bytes(JSON.stringify(fitted)) > getBudget('RESTORE_RESULT_MAX_BYTES').value) {
-         throw mismatch();
+         throw restoreMismatch();
       }
       return jsonResult(fitted);
    }
@@ -807,10 +846,10 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
     * @returns {Promise<CallToolResult>} The listing.
     */
    async function listBackups(args: ListArgs, routing: InvokeOptions): Promise<CallToolResult> {
-      // The folder.
+      // The folder; `store.list` checks it.
       const folder: ResolvedFolder = sidecarFolder(routing, args.folder);
-      store.checkFolder(folder, false);
-      const { rows, total, invalid } = store.list(folder, args.limit ?? LIST_LIMIT_DEFAULT);
+      // The folder's backups, newest first, with full notes.
+      const { rows, total, invalid }: BackupListing = store.list(folder, args.limit ?? LIST_LIMIT_DEFAULT);
       return jsonResult(fitListResult({
          folder: folder.kind,
          rows: rows.map(([file, created, documents, note]) => [
@@ -862,15 +901,15 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
          .optional();
       // The shared `uuids` argument.
       const uuidsArg: z.ZodOptional<z.ZodArray<z.ZodString>> = z
-         .array(z.string().max(256))
+         .array(z.string().max(UUID_ARG_MAX_CHARS))
          .min(1)
          .max(BACKUP_UUIDS_MAX)
          .optional();
       return [
          {
             name: 'backup_documents',
-            description: 'Save documents (uuids, or one folderUuid, documentName or pack) to a new backup file in the '
-               + 'sidecar. Offer before bulk or risky changes.',
+            description: 'Save documents (uuids, or one folderUuid, documentName or pack) to a new sidecar backup '
+               + 'file. Use or offer before bulk or risky changes.',
             inputSchema: {
                uuids: uuidsArg,
                folderUuid: z.string().max(256).optional(),

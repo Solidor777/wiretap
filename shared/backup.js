@@ -1,6 +1,7 @@
 /**
  * The document backup file format and its limits, shared by the Foundry client (which exports and restores the
- * documents) and the Node sidecar (which writes, lists, reads and recycles the files). Plain JS so both sides import it.
+ * documents) and the Node sidecar (which writes, lists, reads and recycles the files). Plain JS so both sides import
+ * it.
  *
  * A backup file is JSON Lines: line 1 is a header padded with spaces to exactly `HEADER_LINE_BYTES` bytes, so the
  * sidecar can write a blank line first and fill it in place once the document count and byte total are known; every

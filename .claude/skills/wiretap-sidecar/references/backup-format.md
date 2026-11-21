@@ -59,10 +59,11 @@ proxy gives the defaults). Tests: `tests/unit/bridgeSettings.test.js`.
 `createBackupTools({ bridge, store, log?, now? })` returns `(endpoint) => ToolRegistration[]`: the four registrations
 for a session (every invoke and snapshot passes `{ endpoint }` when the session restricts its kind, else `{}`). One busy
 flag is shared by every session: a backup or restore (dry runs included) or a delete while one runs is `BACKUP_BUSY`;
-`list_backups` is never refused. The flag clears when the invoke settles. `BackupBridge` is the slice of the Foundry
+`list_backups` is never refused. A backup clears the flag when its invoke settles; a restore clears it once its pump
+has ended and the file is closed, which can be after the call answered. `BackupBridge` is the slice of the Foundry
 bridge used (`invoke`, `snapshot`, `expectPieces`, `sendPiece`); the `FoundryBridge` interface of `server/mcp.ts`
-extends it. `startMcpServer` builds one store (`createBackupStore(options.backups)`) and one `createBackupTools({ bridge,
-store, log })`, so the busy flag is one per MCP server; every session registers `read_handle`, then the four tools for
+extends it. `startMcpServer` builds one store (`createBackupStore({ log, ...options.backups })`, so the store logs
+through the sidecar log) and one `createBackupTools({ bridge, store, log })`, so the busy flag is one per MCP server; every session registers `read_handle`, then the four tools for
 its endpoint kind, then the caller's `tools`. Their names are in `RESERVED_SCRIPT_NAMES`, so no script can take them.
 `createWiretapServer(port, mcpPort, mode, { backups? })` passes `backups` through; production passes none (module root,
 real `trash`). Measured listed sizes (`npx tsx tests/measure/measureContext.mjs`): `backup_documents` 800 B,
@@ -72,8 +73,10 @@ result to its budget through the `FIXTURES` of `contextBudgetHarness.js` (fake G
 
 - Definitions: each listed definition (`z.toJSONSchema(z.object(inputSchema), { target: 'draft-7', io: 'input' })`, the
   SDK's conversion) is at most `DEFINITION_MAX_BYTES` (800 B), measured by `tests/unit/backupTools.test.js`;
-  `backup_documents` is exactly 800 B. An argument has a `.describe` only where its name and type do not say what it
-  is: `folder` (absolute, default the backup folder), `note`, `dryRun`, and `file` and `uuids` of `restore_backup`.
+  `backup_documents` is exactly 800 B; its description ends "Use or offer before bulk or risky changes." (the unit test
+  asserts it). An argument has a `.describe` only where its name and type do not say what it is: `folder` (absolute,
+  default the backup folder), `note`, `dryRun`, and `file` and `uuids` of `restore_backup`. Each `uuids` entry is at
+  most `UUID_ARG_MAX_CHARS` (256) UTF-16 code units.
 
 - Folder and gate: `store.resolveFolder(args.folder, settings.backupFolder)`; kind `named` with
   `allowBackupAnyFolder` closed is `GATE_DENIED`. Backup and restore judge it inside the invoke's `prepare` on the
@@ -85,26 +88,33 @@ result to its budget through the `FIXTURES` of `contextBudgetHarness.js` (fake G
   else `BACKUP_INCOMPLETE` unless the end marker arrived, `documents` is at least 1 and equals the newline count,
   `bytes` equals the file size, `unreadable`/`parents` are non-negative integers and the four `world` fields pass
   `isWorldField`; more than `BACKUP_MAX_DOCUMENTS` (10,000) documents is `BACKUP_TOO_LARGE` (`parseHeaderLine` refuses
-  such a header, so the file could not be opened, restored or recycled). Then `writer.finish` writes the header. Any failure after the file exists closes it and sends it to
-  `store.trashPath`; if that fails the backup keeps its own error code (not `TRASH_FAILED`), and a `BridgeError`'s
-  message gains `The partial file <name> could not be moved to the recycle bin.` (fitted to 512 B); any other error
-  is thrown unchanged, and the sidecar log names the file either way. Result `{ file, folder, documents, bytes }` (+ `unreadable`, `parents` when above 0); a dry run
-  `{ dryRun: true, folder, documents, bytes }` (+ the same).
-- `createBackupSink(openWriter)`: data pieces must come with `seq` 0, 1, 2, …; the file is created on the first;
-  header plus received bytes over `BACKUP_MAX_BYTES` is `BACKUP_TOO_LARGE`; the end marker's `seq`/`pieces` must equal
-  the data piece count and `bytes` the data bytes; `gone()` records `ENDPOINT_GONE` (nothing saved) and never throws;
-  the first failure is kept and refuses every later piece. `counts()` gives pieces, bytes, newline count and `ended`.
+  such a header, so the file could not be opened, restored or recycled). Then `writer.finish` writes the header.
+  Any failure after the file exists runs `discardPartial`: it closes the file (a close failure is logged and the file
+  is still recycled) and sends it to `store.trashPath`; if that fails the backup keeps its own error code (not
+  `TRASH_FAILED`), and a `BridgeError`'s message gains `The partial file <name> could not be moved to the recycle
+  bin.` (`namePartialFile` of `server/backups.ts`, fitted to 512 B); any other error is thrown unchanged, and the
+  sidecar log names the file either way. Result `{ file, folder, documents, bytes }` (+ `unreadable`, `parents` when
+  above 0); a dry run `{ dryRun: true, folder, documents, bytes }` (+ the same).
+- `createBackupSink(openWriter)` (`openWriter` returns a promise of the writer): data pieces must come with `seq` 0,
+  1, 2, …; the file is created on the first; header plus received bytes over `BACKUP_MAX_BYTES` is
+  `BACKUP_TOO_LARGE`; the end marker's `seq`/`pieces` must equal the data piece count and `bytes` the data bytes, and
+  the last data byte must be a newline (else `BACKUP_INCOMPLETE` "The backup stream ended inside a document line.");
+  `gone()` records `ENDPOINT_GONE` (nothing saved) and never throws; the first failure is kept and refuses every
+  later piece. `counts()` gives pieces, bytes, newline count and `ended`.
 - `restore_backup` (budget 4000): `prepare` runs `checkFolder(folder, false)` (a linked folder or `.wiretap` is
   `BACKUP_FOLDER_INVALID`), opens `store.openFile(folder, file)` and sends `{ header, uuids?, dryRun?,
   timeoutMs }`; `onSent` starts the pump (not awaited): `readPiece(512000)` pieces with `seq` 0, 1, … then the end
-  marker, each `sendPiece` waiting until the reply deadline; a pump failure is logged and stops it. The reader closes once the
-  pump and the invoke both ended. `ENDPOINT_GONE` becomes "the restore may be partly applied". The client result must
-  have the shape `RestoreResult` of `src/bridge/backup/restoreBackup.js`: `replaced`, `created`, `skipped`, `failed`
-  and `secretLost` non-negative integers; `rows` at most 20 rows of `[string, string, string?]`; `differences`, when
-  present, 1 to 3 strings (one per differing world field); `dryRun`, when present, `true`; no other key; every string
-  at most 256 B; else `BACKUP_INCOMPLETE`; it is returned with `file` first,
-  fitted by `fitRestoreResult`, and `BACKUP_INCOMPLETE` if it still exceeds 4000 B.
-- `list_backups` (budget 2000): `checkFolder(folder, false)`, `store.list(folder, limit ?? 10)`, notes cut to 40 B,
+  marker, each `sendPiece` waiting until the reply deadline; a pump failure is logged and stops it. The reader
+  closes, and the busy flag clears, once the pump and the invoke both ended. `ENDPOINT_GONE` becomes "the restore may
+  be partly applied". The client result must have the shape `RestoreResult` of `src/bridge/backup/restoreBackup.js`:
+  `replaced`, `created`, `skipped`, `failed` and `secretLost` non-negative integers; `rows` at most 20 rows of
+  `[uuid, string, string?]` (`isRestoreRow`: the uuid at most `RESTORE_UUID_MAX_BYTES`, 768 B, since a skipped row
+  echoes an asked uuid of up to 256 code units of up to 3 bytes each; the other strings at most 256 B);
+  `differences`, when present, 1 to 3 strings of at most 256 B (one per differing world field); `dryRun`, when
+  present, `true`; no other key. Any other shape, or a result that still exceeds 4000 B after `fitRestoreResult`, is
+  `BACKUP_INCOMPLETE` "The Foundry client sent a restore result of an unexpected shape; its documents may already be
+  applied." It is returned with `file` first.
+- `list_backups` (budget 2000): `store.list(folder, limit ?? 10)` (which checks the folder), notes cut to 40 B,
   `{ folder, rows, total }` (+ `invalid` when above 0), fitted by `fitListResult`.
 - `delete_backup` (budget 128): `checkFolder(folder, false)`, `store.trashFile(folder, file)`,
   `{ file, trashed: true }`.

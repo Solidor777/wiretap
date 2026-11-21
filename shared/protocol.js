@@ -166,6 +166,8 @@ export const GATE_DENIED = 'GATE_DENIED';
  * @property {EndpointKind} kind - Whether this client is a person's tab or an agent runner.
  * @property {boolean} dom - Whether this endpoint is a browser client able to run DOM operations.
  * @property {import('./gates.js').GateState} [gateState] - Risk-gate snapshot; absent or invalid closes every gate.
+ * @property {import('./bridgeSettings.js').BridgeSettings} [settings] - Bridge settings; an absent or invalid value
+ * leaves that setting unset.
  */
 
 /**

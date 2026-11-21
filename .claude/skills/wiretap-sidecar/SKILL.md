@@ -66,7 +66,7 @@ Current-state reference; verify against code before relying on a detail. Core co
 
 `shared/protocol.js` exports `TERMINAL_LAUNCH|INPUT|RESIZE|CLOSE|DATA|STATE|EXIT`, `PROTOCOL_VERSION` (5), `BRIDGE_IDENTIFY`, `BRIDGE_GATE_STATE`,
 `BRIDGE_REGISTRY`, `BRIDGE_INVOKE`, `BRIDGE_PING`, `OP_CALL_TOOL`, the backup events, ops and typedefs (references/backup-format.md), `ENDPOINT_KINDS`, the error codes `NO_ENDPOINT`,
-`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `TOOL_GONE`, `PROTOCOL_MISMATCH`, `NOT_GM`, `GATE_DENIED`, `PIECE_REFUSED`, and typedefs for the identify (with its optional `gateState`; the optional `settings` the client sends is not in the typedef), identify ack, gate-state ack, `BridgeRegistryAck`, invoke, op ack and error payloads. Routing,
+`ENDPOINT_TIMEOUT`, `ENDPOINT_UNAVAILABLE`, `ENDPOINT_GONE`, `ENDPOINT_LIMIT`, `OP_FAILED`, `TOOL_GONE`, `PROTOCOL_MISMATCH`, `NOT_GM`, `GATE_DENIED`, `PIECE_REFUSED`, and typedefs for the identify (with its optional `gateState` and `settings`), identify ack, gate-state ack, `BridgeRegistryAck`, invoke, op ack and error payloads. Routing,
 the endpoint registry and the error contract are in `server/endpoints.ts` (see `wiretap-mcp-bridge`). Both sides import these constants; adding an event means editing this file and both consumers.
 
 ## Script definition (`shared/scripts.js`)
