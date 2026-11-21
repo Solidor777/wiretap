@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { CONTROL_PATTERN } from '$shared/logText.js';
 import { utf8Bytes } from '$shared/utf8.js';
 import { openSheetHandler } from '~/bridge/scripts/openSheet.js';
 
@@ -78,6 +79,7 @@ describe('open_sheet', () => {
    });
 
    afterEach(() => {
+      vi.useRealTimers();
       globalThis.game = savedGame;
       delete globalThis.fromUuid;
    });
@@ -212,6 +214,42 @@ describe('open_sheet', () => {
          uuid,
          userId: 'MOCKPLAYER000001',
       }, ctx)))).toBeLessThanOrEqual(128);
+   });
+
+   it('keeps the result within 128 bytes of JSON and free of control characters for a reply of quotes and controls',
+      async () => {
+         player.query = vi.fn(async () => ({
+            ok: true,
+            appId: '"\\\u0001\u001f\u0085'.repeat(60),
+         }));
+         /** @type {{ ok: true, appId: string }} The bounded result. */
+         const result = await openSheetHandler({
+            uuid,
+            userId: 'MOCKPLAYER000001',
+         }, ctx);
+         expect(utf8Bytes(JSON.stringify(result))).toBeLessThanOrEqual(128);
+         expect(CONTROL_PATTERN.test(result.appId)).toBe(false);
+         expect(result.appId.startsWith('"\\')).toBe(true);
+      });
+
+   it('reports SHEET_QUERY_FAILED after 5000 ms when the target client never answers', async () => {
+      vi.useFakeTimers();
+      player.query = vi.fn(() => new Promise(() => {}));
+      /** @type {{ settled: boolean }} Whether the call has ended. */
+      const state = { settled: false };
+      /** @type {Promise<any>} The pending refusal. */
+      const pending = refusal(openSheetHandler({
+         uuid,
+         userId: 'MOCKPLAYER000001',
+      }, ctx)).finally(() => {
+         state.settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(state.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const error = await pending;
+      expect(error.code).toBe('SHEET_QUERY_FAILED');
+      expect(error.message).toBe('The user\'s client did not answer within 5000 ms.');
    });
 
    it('refuses a wiretap setting with DOC_EXCLUDED', async () => {

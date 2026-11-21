@@ -9,18 +9,22 @@
 
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { cleanForLog, describeCause } from '$shared/logText.js';
-import { truncateUtf8 } from '$shared/utf8.js';
+import { utf8Bytes } from '$shared/utf8.js';
 
 /**
- * Most bytes of the sheet id a result carries. A sheet id is `<SheetClassName>-<uuid with dots as dashes>`; the
- * bound keeps `{ ok: true, appId }` within the 128-byte `SHEET_RESULT_MAX_BYTES` whatever the class name.
+ * Most bytes the sheet id takes in a result's JSON, its quotes and escapes included. A sheet id is
+ * `<SheetClassName>-<uuid with dots as dashes>`; `boundAppId` holds every id to this bound, so the JSON of
+ * `{ ok: true, appId }` (20 bytes besides the id) stays within the 128-byte `SHEET_RESULT_MAX_BYTES` whatever the
+ * sheet or the target client's reply holds.
  * @type {number}
  */
 export const APP_ID_MAX_BYTES = 100;
 
 /**
- * How long a user query waits for the target client's answer, in milliseconds. It stays under the 8000 ms script
- * timeout, so a silent client ends as `SHEET_QUERY_FAILED`, not `SCRIPT_TIMEOUT`.
+ * How long a user query waits for the target client's answer, in milliseconds. Foundry's server applies it, and
+ * `askUser` applies it on this client too, because the server may never answer a query whose target disconnects as
+ * it is sent. It stays under the 8000 ms script timeout, so a silent or departed client ends as
+ * `SHEET_QUERY_FAILED`, not `SCRIPT_TIMEOUT`.
  * @type {number}
  */
 export const SHEET_QUERY_TIMEOUT_MS = 5000;
@@ -41,6 +45,51 @@ const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
  * @typedef {{ ok: true, appId: string } | { ok: false, code: string, message: string }} SheetOutcome
  * The outcome of rendering a sheet: the sheet id, or the refusal.
  */
+
+/**
+ * Make a sheet id safe and small for a result: control characters become spaces, and the text is cut until its JSON
+ * form, quotes and escapes included, is at most `APP_ID_MAX_BYTES`.
+ * @param {string} appId - The sheet id, from this client's sheet or from the target client's reply.
+ * @returns {string} The cleaned, bounded id.
+ */
+export function boundAppId(appId) {
+   /** @type {number} The raw byte bound of the cut. */
+   let limit = APP_ID_MAX_BYTES;
+   /** @type {string} The id cleaned and cut to the raw byte bound. */
+   let bounded = cleanForLog(appId, limit);
+   // Each step lowers the raw bound by one byte; JSON escapes at most double a cleaned text's bytes, so the loop ends
+   // by half the bound, and an empty text's JSON form always fits.
+   while (utf8Bytes(JSON.stringify(bounded)) > APP_ID_MAX_BYTES) {
+      limit -= 1;
+      bounded = cleanForLog(appId, limit);
+   }
+   return bounded;
+}
+
+/**
+ * Wait at most `SHEET_QUERY_TIMEOUT_MS` for a user query's answer.
+ * @param {Promise<unknown>} query - The pending query.
+ * @returns {Promise<unknown>} The answer.
+ * @throws {Error} An error naming the wait when no answer comes in time; the query's own rejection otherwise.
+ */
+async function withinQueryTimeout(query) {
+   /** @type {ReturnType<typeof setTimeout> | undefined} The timer that ends the wait. */
+   let timer;
+   /** @type {Promise<never>} Rejects when the wait ends without an answer. */
+   const expiry = new Promise((resolve, reject) => {
+      timer = setTimeout(() => {
+         reject(new Error(`The user's client did not answer within ${SHEET_QUERY_TIMEOUT_MS} ms.`));
+      }, SHEET_QUERY_TIMEOUT_MS);
+   });
+   try {
+      return await Promise.race([
+         query,
+         expiry,
+      ]);
+   } finally {
+      clearTimeout(timer);
+   }
+}
 
 /**
  * Render a document's sheet on this client, bringing it to the front when it is already open.
@@ -69,7 +118,7 @@ export async function renderSheet(document) {
    }
    return {
       ok: true,
-      appId: truncateUtf8(sheet.id, APP_ID_MAX_BYTES),
+      appId: boundAppId(sheet.id),
    };
 }
 
@@ -128,13 +177,14 @@ export function remoteUser(userId) {
  * @param {(reply: unknown) => boolean} isSuccess - Whether a reply is the query's success shape.
  * @returns {Promise<object>} The success reply.
  * @throws {ScriptError} The target client's refusal code and bounded message; `SHEET_QUERY_FAILED` when the query
- * rejects (no answer in time, the target disconnected) or the reply has neither shape.
+ * rejects (the server's timeout, the target disconnected), no answer comes within `SHEET_QUERY_TIMEOUT_MS`, or the
+ * reply has neither shape.
  */
 export async function askUser(user, queryName, uuid, isSuccess) {
    /** @type {unknown} The target client's answer. */
    let reply;
    try {
-      reply = await user.query(queryName, { uuid }, { timeout: SHEET_QUERY_TIMEOUT_MS });
+      reply = await withinQueryTimeout(user.query(queryName, { uuid }, { timeout: SHEET_QUERY_TIMEOUT_MS }));
    } catch (error) {
       throw new ScriptError('SHEET_QUERY_FAILED', describeCause(error, CAUSE_MAX_BYTES));
    }

@@ -7,9 +7,8 @@
 
 import { resolveDocument, unreadable } from '~/bridge/scripts/canonical.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
-import { APP_ID_MAX_BYTES, askUser, remoteUser, renderSheet } from '~/bridge/scripts/sheets.js';
+import { askUser, boundAppId, remoteUser, renderSheet } from '~/bridge/scripts/sheets.js';
 import { OPEN_SHEET_QUERY } from '~/bridge/sheetQuery.js';
-import { truncateUtf8 } from '$shared/utf8.js';
 
 /**
  * Whether a target client's reply is the open query's success shape.
@@ -50,6 +49,7 @@ export async function openSheetHandler(args, ctx) {
    const reply = await askUser(user, OPEN_SHEET_QUERY, document.uuid, isOpened);
    return {
       ok: true,
-      appId: truncateUtf8(reply.appId, APP_ID_MAX_BYTES),
+      // The reply comes from another user's client over the socket, so it is cleaned and bounded like a local id.
+      appId: boundAppId(reply.appId),
    };
 }

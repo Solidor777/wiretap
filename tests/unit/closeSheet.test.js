@@ -77,6 +77,7 @@ describe('close_sheet', () => {
    });
 
    afterEach(() => {
+      vi.useRealTimers();
       globalThis.game = savedGame;
       delete globalThis.fromUuid;
    });
@@ -156,6 +157,26 @@ describe('close_sheet', () => {
       }, ctx));
       expect(error.code).toBe('SHEET_QUERY_FAILED');
       expect(error.message).toBe('The user\'s client sent an unexpected reply.');
+   });
+
+   it('reports SHEET_QUERY_FAILED after 5000 ms when the target client never answers', async () => {
+      vi.useFakeTimers();
+      player.query = vi.fn(() => new Promise(() => {}));
+      /** @type {{ settled: boolean }} Whether the call has ended. */
+      const state = { settled: false };
+      /** @type {Promise<any>} The pending refusal. */
+      const pending = refusal(closeSheetHandler({
+         uuid,
+         userId: 'MOCKPLAYER000001',
+      }, ctx)).finally(() => {
+         state.settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(state.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const error = await pending;
+      expect(error.code).toBe('SHEET_QUERY_FAILED');
+      expect(error.message).toBe('The user\'s client did not answer within 5000 ms.');
    });
 
    it('refuses a wiretap setting with DOC_EXCLUDED', async () => {
