@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { createFoundryBridge } from '../../server/foundryBridge.ts';
 import { closedGateState } from '../../shared/gates.js';
+import { defaultBridgeSettings } from '../../shared/bridgeSettings.js';
 import {
    BRIDGE_GATE_STATE,
    BRIDGE_IDENTIFY,
@@ -111,7 +112,7 @@ describe('createFoundryBridge gate state', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
       const acks = [];
-      fake.fire(BRIDGE_GATE_STATE, { allowUserWrites: true }, (ack) => acks.push(ack));
+      fake.fire(BRIDGE_GATE_STATE, { gateState: { allowUserWrites: true } }, (ack) => acks.push(ack));
       expect(acks).toEqual([{ ok: true }]);
       expect(bridge.gateState().allowUserWrites).toBe(true);
    });
@@ -119,7 +120,7 @@ describe('createFoundryBridge gate state', () => {
    it('tolerates a missing ack callback', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
-      expect(() => fake.fire(BRIDGE_GATE_STATE, { allowUserWrites: true })).not.toThrow();
+      expect(() => fake.fire(BRIDGE_GATE_STATE, { gateState: { allowUserWrites: true } })).not.toThrow();
       expect(bridge.gateState().allowUserWrites).toBe(true);
    });
 
@@ -127,7 +128,7 @@ describe('createFoundryBridge gate state', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a', { gateState: { allowMacroExecution: true } });
       const acks = [];
-      fake.fire(BRIDGE_GATE_STATE, 'open', (ack) => acks.push(ack));
+      fake.fire(BRIDGE_GATE_STATE, { gateState: 'open' }, (ack) => acks.push(ack));
       expect(acks).toEqual([{ ok: true }]);
       expect(bridge.gateState()).toEqual(closedGateState());
    });
@@ -138,7 +139,7 @@ describe('createFoundryBridge gate state', () => {
       const stranger = makeSocket('stranger');
       bridge.handleConnection(stranger.socket);
       const acks = [];
-      stranger.fire(BRIDGE_GATE_STATE, { allowMacroExecution: true }, (ack) => acks.push(ack));
+      stranger.fire(BRIDGE_GATE_STATE, { gateState: { allowMacroExecution: true } }, (ack) => acks.push(ack));
       expect(acks).toHaveLength(1);
       expect(acks[0]).toMatchObject({ ok: false, error: { code: NOT_GM } });
       expect(bridge.gateState()).toEqual({ ...closedGateState(), allowFileUpload: true });
@@ -153,7 +154,7 @@ describe('createFoundryBridge gate state', () => {
       bridge.handleConnection(fake.socket);
       fake.fire(BRIDGE_IDENTIFY, identify({ isGM: false }), () => undefined);
       const acks = [];
-      fake.fire(BRIDGE_GATE_STATE, { allowMacroExecution: true }, (ack) => acks.push(ack));
+      fake.fire(BRIDGE_GATE_STATE, { gateState: { allowMacroExecution: true } }, (ack) => acks.push(ack));
       expect(acks[0]).toMatchObject({ ok: false, error: { code: NOT_GM } });
       expect(bridge.gateState()).toEqual(closedGateState());
    });
@@ -163,7 +164,7 @@ describe('createFoundryBridge gate state', () => {
       const fake = register(bridge, 'a');
       fake.fire('disconnect');
       const acks = [];
-      fake.fire(BRIDGE_GATE_STATE, { allowMacroExecution: true }, (ack) => acks.push(ack));
+      fake.fire(BRIDGE_GATE_STATE, { gateState: { allowMacroExecution: true } }, (ack) => acks.push(ack));
       expect(acks[0]).toMatchObject({ ok: false, error: { code: NOT_GM } });
       expect(bridge.gateState()).toEqual(closedGateState());
    });
@@ -172,14 +173,14 @@ describe('createFoundryBridge gate state', () => {
       const { bridge } = makeBridge();
       const stranger = makeSocket('stranger');
       bridge.handleConnection(stranger.socket);
-      expect(() => stranger.fire(BRIDGE_GATE_STATE, {})).not.toThrow();
+      expect(() => stranger.fire(BRIDGE_GATE_STATE, { gateState: {} })).not.toThrow();
    });
 
    it('keeps one snapshot per endpoint', () => {
       const { bridge } = makeBridge();
       const human = register(bridge, 'h', { kind: 'human', userId: 'uh' });
       register(bridge, 'a', { kind: 'agent', userId: 'ua', gateState: { allowMacroExecution: true } });
-      human.fire(BRIDGE_GATE_STATE, { allowUserWrites: true }, () => undefined);
+      human.fire(BRIDGE_GATE_STATE, { gateState: { allowUserWrites: true } }, () => undefined);
       expect(bridge.gateState({ endpoint: 'agent' })).toEqual({ ...closedGateState(), allowMacroExecution: true });
       expect(bridge.gateState({ endpoint: 'human' })).toEqual({ ...closedGateState(), allowUserWrites: true });
       expect(bridge.gateState()).toEqual({ ...closedGateState(), allowMacroExecution: true });
@@ -193,14 +194,14 @@ describe('createFoundryBridge gate state', () => {
       for (let i = 0; i < 25; i++) {
          const fake = makeSocket(`s${i}`);
          bridge.handleConnection(fake.socket);
-         fake.fire(BRIDGE_GATE_STATE, {}, (ack) => acks.push(ack));
+         fake.fire(BRIDGE_GATE_STATE, { gateState: {} }, (ack) => acks.push(ack));
       }
       expect(acks).toHaveLength(25);
       expect(lines.filter((line) => line.startsWith('Wiretap sidecar | refused gate state'))).toHaveLength(10);
       clock += 61_000;
       const late = makeSocket('late');
       bridge.handleConnection(late.socket);
-      late.fire(BRIDGE_GATE_STATE, {}, () => undefined);
+      late.fire(BRIDGE_GATE_STATE, { gateState: {} }, () => undefined);
       expect(lines.filter((line) => line.includes('suppressed'))).toEqual([
          'Wiretap sidecar | 15 further gate state refusals suppressed',
       ]);
@@ -209,11 +210,11 @@ describe('createFoundryBridge gate state', () => {
    it('never writes a snapshot into the log, on the accepted or the refused path', () => {
       const { bridge, lines } = makeBridge();
       const fake = register(bridge, 'a', { gateState: { allowMacroExecution: true } });
-      fake.fire(BRIDGE_GATE_STATE, { allowUserWrites: true }, () => undefined);
+      fake.fire(BRIDGE_GATE_STATE, { gateState: { allowUserWrites: true } }, () => undefined);
       const stranger = makeSocket('stranger');
       bridge.handleConnection(stranger.socket);
       const probe = { allowFileUpload: true, allowedPluginModules: ['secret-module'] };
-      stranger.fire(BRIDGE_GATE_STATE, probe, () => undefined);
+      stranger.fire(BRIDGE_GATE_STATE, { gateState: probe }, () => undefined);
       expect(lines.some((line) => line.includes('refused gate state'))).toBe(true);
       expect(lines.join('\n')).not.toMatch(
          /allowMacroExecution|allowUserWrites|allowFileUpload|allowedPluginModules|secret-module|gateState/,
@@ -232,7 +233,7 @@ describe('createFoundryBridge gate state', () => {
          },
       );
       const acks = [];
-      expect(() => fake.fire(BRIDGE_GATE_STATE, hostile, (ack) => acks.push(ack))).not.toThrow();
+      expect(() => fake.fire(BRIDGE_GATE_STATE, { gateState: hostile }, (ack) => acks.push(ack))).not.toThrow();
       expect(acks).toEqual([{ ok: true }]);
       expect(bridge.gateState()).toEqual(closedGateState());
    });
@@ -242,7 +243,7 @@ describe('createFoundryBridge gate state', () => {
       const fake = register(bridge, 'a', { gateState: { allowMacroExecution: true } });
       const acks = [];
       expect(() =>
-         fake.fire(BRIDGE_GATE_STATE, { allowUserWrites: true }, (ack) => {
+         fake.fire(BRIDGE_GATE_STATE, { gateState: { allowUserWrites: true } }, (ack) => {
             acks.push(ack);
             if (acks.length === 1) {
                throw new Error('ack failed');
@@ -254,11 +255,62 @@ describe('createFoundryBridge gate state', () => {
       expect(bridge.gateState()).toEqual(closedGateState());
    });
 
+   it('stores the settings of a gate-state push', () => {
+      const { bridge } = makeBridge();
+      const fake = register(bridge, 'a');
+      fake.fire(
+         BRIDGE_GATE_STATE,
+         {
+            gateState: { allowUserWrites: true },
+            settings: { backupFolder: 'C:/backups' },
+         },
+         () => undefined,
+      );
+      expect(bridge.snapshot()).toEqual({
+         socketId: 'a',
+         gateState: {
+            ...closedGateState(),
+            allowUserWrites: true,
+         },
+         settings: { backupFolder: 'C:/backups' },
+      });
+      fake.fire(BRIDGE_GATE_STATE, { gateState: {} }, () => undefined);
+      expect(bridge.snapshot().settings).toEqual(defaultBridgeSettings());
+   });
+
+   it('closes every gate for a bare gate snapshot payload', () => {
+      const { bridge } = makeBridge();
+      const fake = register(bridge, 'a', { gateState: { allowDelete: true } });
+      const acks = [];
+      fake.fire(BRIDGE_GATE_STATE, { allowDelete: true }, (ack) => acks.push(ack));
+      expect(acks).toEqual([{ ok: true }]);
+      expect(bridge.gateState()).toEqual(closedGateState());
+   });
+
+   it('stores the closed state and the default settings when the handler throws', () => {
+      const { bridge } = makeBridge();
+      const fake = register(bridge, 'a', { settings: { backupFolder: 'C:/kept' } });
+      const hostile = {
+         gateState: { allowUserWrites: true },
+         get settings() {
+            throw new Error('trap');
+         },
+      };
+      const acks = [];
+      fake.fire(BRIDGE_GATE_STATE, hostile, (ack) => acks.push(ack));
+      expect(acks[0]).toMatchObject({ ok: false, error: { code: OP_FAILED } });
+      expect(bridge.snapshot()).toEqual({
+         socketId: 'a',
+         gateState: closedGateState(),
+         settings: defaultBridgeSettings(),
+      });
+   });
+
    it('does not throw when the failure ack throws too', () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
       expect(() =>
-         fake.fire(BRIDGE_GATE_STATE, {}, () => {
+         fake.fire(BRIDGE_GATE_STATE, { gateState: {} }, () => {
             throw new Error('ack failed');
          }),
       ).not.toThrow();
@@ -290,7 +342,7 @@ describe('createFoundryBridge invoke with requireGate', () => {
    it('uses a snapshot pushed through BRIDGE_GATE_STATE', async () => {
       const { bridge } = makeBridge();
       const fake = register(bridge, 'a');
-      fake.fire(BRIDGE_GATE_STATE, { allowFileUpload: true }, () => undefined);
+      fake.fire(BRIDGE_GATE_STATE, { gateState: { allowFileUpload: true } }, () => undefined);
       await expect(bridge.invoke(OP_CALL_TOOL, {}, { requireGate: { gate: 'allowFileUpload' } })).resolves.toEqual({
          from: 'a',
       });
