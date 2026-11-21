@@ -11,6 +11,8 @@
  * `Setting` (stored as JSON text) and every `flags` object of the export, so a User's flags and the module flags of
  * any document are covered. Core schema fields and system data are not redacted: core names such as `prototypeToken`
  * match the pattern. The walk is bounded and drops what it cannot finish walking.
+ *
+ * The backup export (`exportForBackup`) applies the same exclusions and also reports the paths they changed.
  */
 
 import { cleanForLog } from '$shared/logText.js';
@@ -288,6 +290,97 @@ function stripExcluded(documentName, data) {
 }
 
 /**
+ * The plain stored data of a document in the canonical form, before the exclusions.
+ * @param {{ toCompendium: Function }} document - The Foundry document, or a stand-in with `toCompendium`.
+ * @returns {Record<string, unknown>} A deep plain copy of `toCompendium` with the canonical options.
+ * @throws {Error} When the document cannot be exported or its data cannot be serialized.
+ */
+function storedExport(document) {
+   return toPlain(document.toCompendium(null, {
+      clearSource: false,
+      keepId: true,
+      clearSort: false,
+      clearOwnership: false,
+   }));
+}
+
+/**
+ * Collect the paths where the redacted copy of a value differs from the unredacted one: a key or list member that the
+ * redaction removed, or a string it changed. Objects and lists present in both are walked; the walk follows the key
+ * order of the unredacted value.
+ * @param {unknown} original - The unredacted value.
+ * @param {unknown} redacted - The same value after the exclusions.
+ * @param {Array<string | number>} path - The path of both values below the export root.
+ * @param {Array<Array<string | number>>} found - Receives the paths, in walk order.
+ * @returns {void}
+ */
+function collectChangedPaths(original, redacted, path, found) {
+   if (typeof original === 'string') {
+      if (original !== redacted) {
+         found.push(path);
+      }
+      return;
+   }
+   if (original === null || typeof original !== 'object' || redacted === null || typeof redacted !== 'object') {
+      return;
+   }
+   /** @type {Array<string | number>} The keys of the unredacted value; a list is addressed by index. */
+   const keys = Array.isArray(original) ? original.map((member, index) => index) : Object.keys(original);
+   for (const key of keys) {
+      /** @type {Array<string | number>} The path of this member. */
+      const memberPath = [
+         ...path,
+         key,
+      ];
+      if (!Object.hasOwn(redacted, key)) {
+         found.push(memberPath);
+      } else {
+         collectChangedPaths(original[key], redacted[key], memberPath, found);
+      }
+   }
+}
+
+/**
+ * Produce the export of a document for a backup file: the canonical stored export of `exportDocument(document, {})`
+ * without `uuid`, plus the path of every key the exclusions removed and every string the redaction changed, so a
+ * restore knows which values the file leaves out. Never throws.
+ * @param {object} document - The Foundry document, or a stand-in with `documentName` and `toCompendium`.
+ * @returns {{ ok: true, data: Record<string, unknown>, secretPaths: Array<Array<string | number>> } | { ok: false,
+ * code: string, message: string }} The plain export with its secret paths, or the refusal.
+ */
+export function exportForBackup(document) {
+   try {
+      /** @type {ReturnType<typeof unreadable>} Why the document may not be read, if so. */
+      const refusal = unreadable(document);
+      if (refusal !== null) {
+         return {
+            ok: false,
+            ...refusal,
+         };
+      }
+      /** @type {Record<string, unknown>} The plain export before the exclusions. */
+      const original = storedExport(document);
+      /** @type {Record<string, unknown>} The plain export after them. */
+      const data = toPlain(original);
+      stripExcluded(document.documentName, data);
+      /** @type {Array<Array<string | number>>} The paths the exclusions changed. */
+      const secretPaths = [];
+      collectChangedPaths(original, data, [], secretPaths);
+      return {
+         ok: true,
+         data,
+         secretPaths,
+      };
+   } catch {
+      return {
+         ok: false,
+         code: 'DOC_UNREADABLE',
+         message: 'The document could not be exported.',
+      };
+   }
+}
+
+/**
  * Produce the canonical export of a document: `toCompendium(null, { clearSource: false, keepId: true, clearSort:
  * false, clearOwnership: false })` (Foundry's defaults would drop `_id`, `sort`, `ownership` and `author`) plus
  * `uuid`; or, when `derived`, the prepared data `toObject(false)` with the same fields added. The exclusions apply
@@ -308,16 +401,7 @@ export function exportDocument(document, options) {
          };
       }
       /** @type {Record<string, unknown>} The plain export. */
-      const data = toPlain(
-         options?.derived === true
-            ? document.toObject(false)
-            : document.toCompendium(null, {
-                 clearSource: false,
-                 keepId: true,
-                 clearSort: false,
-                 clearOwnership: false,
-              }),
-      );
+      const data = options?.derived === true ? toPlain(document.toObject(false)) : storedExport(document);
       stripExcluded(document.documentName, data);
       data.uuid = document.uuid;
       return {
