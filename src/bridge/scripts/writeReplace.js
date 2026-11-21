@@ -30,6 +30,13 @@
  * that would be written (the schema defaults included), validated by step 1, and a dry run stops before step 4. A
  * `User` cannot be replaced: the import would reset its role, permissions and password to defaults; use
  * `update_documents`.
+ *
+ * Restore mode puts a backed-up document back as it was. A plain replace keeps the live `ownership`, `folder` and
+ * `sort` (steps 2 and 3), so restore mode writes the backed-up `sort`, `folder` and `ownership` of the document, and
+ * the `ownership` of each first-level embedded document that stays (matched by `_id`), back into the replacement when
+ * the data holds them. Its first guard does not judge an `ownership` value equal to the live one, nor the
+ * `{ default: 0 }` ownership of an embedded document that has no live counterpart, since writing either changes no
+ * permission; any other `ownership` still needs `allowOwnershipWrites`.
  */
 
 import { cleanForLog } from '$shared/logText.js';
@@ -67,12 +74,40 @@ import {
  */
 
 /**
+ * @typedef {object} ReplacePlan
+ * @property {object} target - The live document to replace.
+ * @property {Record<string, unknown>} replacement - The data the update writes.
+ * @property {string[]} changed - The top-level fields the replacement writes, in data order.
+ * @property {number} dropped - How many embedded documents (nested ones included) the replacement removes.
+ * @property {boolean} dryRun - True when the replace is only previewed.
+ */
+
+/**
+ * @typedef {object} PrepareReplaceParams
+ * @property {string} uuid - The document to replace, a world, embedded or pack document of a primary class.
+ * @property {Record<string, unknown>} data - The new data of the document, the shape of a full read.
+ * @property {boolean} [dryRun] - Validate and report; write nothing.
+ * @property {string} [actAs] - The id of a user whose permission to update is checked in advance (advisory).
+ * @property {boolean} [restore] - Restore mode: write the backed-up `sort`, `folder` and `ownership` back.
+ */
+
+// The top-level fields restore mode writes back from the data: the ones a plain replace keeps live.
+const RESTORED_FIELDS = Object.freeze([
+   'sort',
+   'folder',
+   'ownership',
+]);
+
+// The ownership an embedded document is created with when its data names none, which grants no permission.
+const DEFAULT_OWNERSHIP = Object.freeze({ default: 0 });
+
+/**
  * Remove the `wiretap` scope from every `flags` object of a data tree, in place, so a full read can be sent back.
  * Only a structured `flags: { wiretap: ... }` is removed; any other way of naming the scope stays for the guard.
  * @param {unknown} root - The data tree, a copy the caller owns.
  * @returns {void}
  */
-function stripWiretapFlags(root) {
+export function stripWiretapFlags(root) {
    /** @type {unknown[]} Nodes still to visit. */
    const pending = [root];
    /** @type {Set<unknown>} Nodes already visited, so a cyclic value ends. */
@@ -214,13 +249,97 @@ function guardReplace(target, values, dryRun, drops = false) {
 }
 
 /**
- * Replace a document with the data given. See the file header for the exact semantics.
- * @param {ReplaceParams} params - What to replace.
- * @returns {Promise<ReplacedRow>} The acknowledgement: the uuid and the top-level fields written.
- * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `PATH_UNSAFE_VALUE`, `GATE_DENIED`, `VALIDATION_FAILED`,
- * `ACT_AS_DENIED` or `WRITE_NOT_APPLIED`.
+ * Find the member of an embedded data array that has a given `_id`.
+ * @param {unknown} members - The embedded data array, or any other value.
+ * @param {unknown} id - The `_id` to find.
+ * @returns {Record<string, unknown> | undefined} The member, or undefined when there is none.
  */
-export async function replaceDocument({ uuid, data, dryRun = false, readback = false, actAs }) {
+function memberWithId(members, id) {
+   if (!Array.isArray(members) || typeof id !== 'string') {
+      return undefined;
+   }
+   return members.find((member) => isPlainObject(member) && member._id === id);
+}
+
+/**
+ * Build the data the first guard of a restore judges: the data without each `ownership` that equals its live
+ * counterpart (the document's own, and each first-level embedded document's matched by `_id`), and without an embedded
+ * document's `{ default: 0 }` ownership when it has no live counterpart. Writing either value changes no permission.
+ * @param {Record<string, unknown>} given - The data to restore, without Wiretap records.
+ * @param {Record<string, unknown>} live - `toObject()` of the live document.
+ * @param {{ hierarchy: Record<string, unknown> }} documentClass - The class of both; the keys of its `hierarchy`
+ * are the first-level embedded collections.
+ * @returns {Record<string, unknown>} A shallow copy of the data with those values left out.
+ */
+function withoutUnchangedOwnership(given, live, documentClass) {
+   /** @type {Record<string, unknown>} The data to judge. */
+   const judged = { ...given };
+   if (Object.hasOwn(judged, 'ownership') && foundry.utils.equals(judged.ownership, live.ownership)) {
+      delete judged.ownership;
+   }
+   for (const collection of Object.keys(documentClass.hierarchy)) {
+      if (!Array.isArray(judged[collection])) {
+         continue;
+      }
+      judged[collection] = judged[collection].map((member) => {
+         if (!isPlainObject(member) || !Object.hasOwn(member, 'ownership')) {
+            return member;
+         }
+         /** @type {Record<string, unknown> | undefined} The live embedded document with the same `_id`. */
+         const counterpart = memberWithId(live[collection], member._id);
+         /** @type {boolean} Whether writing the ownership changes no permission. */
+         const unchanged = counterpart === undefined
+            ? foundry.utils.equals(member.ownership, DEFAULT_OWNERSHIP)
+            : foundry.utils.equals(member.ownership, counterpart.ownership);
+         if (!unchanged) {
+            return member;
+         }
+         /** @type {Record<string, unknown>} The member without its ownership. */
+         const rest = { ...member };
+         delete rest.ownership;
+         return rest;
+      });
+   }
+   return judged;
+}
+
+/**
+ * Write the backed-up `sort`, `folder` and `ownership` of a document, and the `ownership` of each first-level
+ * embedded document (matched by `_id`), into the replacement, in place, where the data holds them.
+ * @param {Record<string, unknown>} replacement - The data that will be written.
+ * @param {Record<string, unknown>} given - The data to restore.
+ * @param {{ hierarchy: Record<string, unknown> }} documentClass - The class whose hierarchy lists the collections.
+ * @returns {void}
+ */
+function restoreKeptFields(replacement, given, documentClass) {
+   for (const key of RESTORED_FIELDS) {
+      if (Object.hasOwn(given, key)) {
+         replacement[key] = foundry.utils.deepClone(given[key]);
+      }
+   }
+   for (const collection of Object.keys(documentClass.hierarchy)) {
+      if (!Array.isArray(replacement[collection])) {
+         continue;
+      }
+      for (const member of replacement[collection]) {
+         /** @type {Record<string, unknown> | undefined} The backed-up embedded document with the same `_id`. */
+         const backedUp = isPlainObject(member) ? memberWithId(given[collection], member._id) : undefined;
+         if (backedUp !== undefined && Object.hasOwn(backedUp, 'ownership')) {
+            member.ownership = foundry.utils.deepClone(backedUp.ownership);
+         }
+      }
+   }
+}
+
+/**
+ * Check, guard and build a replace without writing: every check of `replaceDocument`, in its order, ending before the
+ * update. See the file header for the semantics and for restore mode.
+ * @param {PrepareReplaceParams} params - What to replace.
+ * @returns {Promise<ReplacePlan>} The plan to run.
+ * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `PATH_UNSAFE_VALUE`, `GATE_DENIED`, `VALIDATION_FAILED` or
+ * `ACT_AS_DENIED`.
+ */
+export async function prepareReplace({ uuid, data, dryRun = false, actAs, restore = false }) {
    if (!isPlainObject(data)) {
       throw new ScriptError('ARGS_INVALID', 'data must be a JSON object.');
    }
@@ -244,11 +363,11 @@ export async function replaceDocument({ uuid, data, dryRun = false, readback = f
    /** @type {Record<string, unknown>} The data without any Wiretap record, which a caller cannot write. */
    const given = foundry.utils.deepClone(data);
    stripWiretapFlags(given);
-   guardReplace(target, given, dryRun);
-   /** @type {{ id: string, name?: string } | null} The advisory user, if any. */
-   const actAsUser = resolveActAs(actAs);
    /** @type {Function} The configured document class of the target. */
    const documentClass = CONFIG[documentName].documentClass;
+   guardReplace(target, restore ? withoutUnchangedOwnership(given, target.toObject(), documentClass) : given, dryRun);
+   /** @type {{ id: string, name?: string } | null} The advisory user, if any. */
+   const actAsUser = resolveActAs(actAs);
    /** @type {Record<string, unknown>} The data an update writes. */
    const replacement = await replacementOf(documentClass, target, given);
    /** @type {Record<string, unknown>} The live data. */
@@ -257,24 +376,34 @@ export async function replaceDocument({ uuid, data, dryRun = false, readback = f
    const dropped = droppedEmbedded(live, replacement, documentClass);
    guardReplace(target, replacement, dryRun, dropped > 0);
    carryWiretapFlags(replacement, live, documentClass);
+   if (restore) {
+      restoreKeptFields(replacement, given, documentClass);
+   }
    checkActAs(actAsUser, 'update', [
       {
          document: target,
          data: replacement,
       },
    ]);
-   /** @type {string[]} The fields the replacement writes. */
-   const changed = Object.keys(replacement);
-   if (dryRun) {
-      return {
-         uuid: target.uuid,
-         changed,
-         dryRun: true,
-         ...(dropped > 0 ? { dropped } : {}),
-      };
-   }
+   return {
+      target,
+      replacement,
+      changed: Object.keys(replacement),
+      dropped,
+      dryRun,
+   };
+}
+
+/**
+ * Write a prepared replace: `update(data, { diff: false, recursive: false })` with the document hooks.
+ * @param {ReplacePlan} plan - A plan from `prepareReplace`.
+ * @param {boolean} [readback] - Add the canonical export of the replaced document as `exported`.
+ * @returns {Promise<ReplacedRow>} The acknowledgement: the uuid and the top-level fields written.
+ * @throws {ScriptError} `WRITE_NOT_APPLIED` when a hook cancelled the update.
+ */
+export async function runReplace(plan, readback = false) {
    /** @type {object | undefined} The updated document, or undefined when a hook cancelled the update. */
-   const updated = await target.update(foundry.utils.deepClone(replacement), {
+   const updated = await plan.target.update(foundry.utils.deepClone(plan.replacement), {
       diff: false,
       recursive: false,
    });
@@ -283,16 +412,42 @@ export async function replaceDocument({ uuid, data, dryRun = false, readback = f
    }
    /** @type {ReplacedRow} The acknowledgement. */
    const row = {
-      uuid: target.uuid,
-      changed,
-      ...(dropped > 0 ? { dropped } : {}),
+      uuid: plan.target.uuid,
+      changed: plan.changed,
+      ...(plan.dropped > 0 ? { dropped: plan.dropped } : {}),
    };
    if (readback) {
       /** @type {ReturnType<typeof exportDocument>} The canonical export, or its refusal. */
-      const exported = exportDocument(target, {});
+      const exported = exportDocument(plan.target, {});
       if (exported.ok) {
          row.exported = exported.data;
       }
    }
    return row;
+}
+
+/**
+ * Replace a document with the data given. See the file header for the exact semantics.
+ * @param {ReplaceParams} params - What to replace.
+ * @returns {Promise<ReplacedRow>} The acknowledgement: the uuid and the top-level fields written.
+ * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `PATH_UNSAFE_VALUE`, `GATE_DENIED`, `VALIDATION_FAILED`,
+ * `ACT_AS_DENIED` or `WRITE_NOT_APPLIED`.
+ */
+export async function replaceDocument({ uuid, data, dryRun = false, readback = false, actAs }) {
+   /** @type {ReplacePlan} The checked replace. */
+   const plan = await prepareReplace({
+      uuid,
+      data,
+      dryRun,
+      actAs,
+   });
+   if (plan.dryRun) {
+      return {
+         uuid: plan.target.uuid,
+         changed: plan.changed,
+         dryRun: true,
+         ...(plan.dropped > 0 ? { dropped: plan.dropped } : {}),
+      };
+   }
+   return runReplace(plan, readback);
 }
