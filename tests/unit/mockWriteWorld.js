@@ -97,6 +97,25 @@ export class MockValidationError extends Error {
 }
 
 /**
+ * Copy plain data with the keys of every object sorted, so two values compare equal by their JSON whatever their key
+ * order, as Foundry's `foundry.utils.equals` compares plain objects (`common/utils/helpers.mjs`).
+ * @param {unknown} value - The data.
+ * @returns {unknown} The copy with sorted keys.
+ */
+function sortedKeys(value) {
+   if (Array.isArray(value)) {
+      return value.map((member) => sortedKeys(member));
+   }
+   if (typeof value !== 'object' || value === null) {
+      return value;
+   }
+   return Object.fromEntries(Object.keys(value).sort().map((key) => [
+      key,
+      sortedKeys(value[key]),
+   ]));
+}
+
+/**
  * Expand dotted keys into nested objects at every level, as Foundry's `expandObject` does before a document is
  * cleaned (`common/utils/helpers.mjs` `expandObjectInPlace`).
  * @param {unknown} value - The data.
@@ -237,7 +256,9 @@ function markedFailures(changes) {
  * collection name.
  * @param {object[]} [options.users] - The users `{ id, role, name }` of `game.users`.
  * @param {string} [options.userId] - The signed-in user id.
- * @param {Record<string, { documentName: string, locked?: boolean }>} [options.packs] - The packs by id.
+ * @param {Record<string, { documentName: string, locked?: boolean, folders?: Map<string, object> }>} [options.packs] -
+ * The packs by id.
+ * @param {Record<string, string[]>} [options.documentTypes] - The subtypes of each class (`game.documentTypes`).
  * @returns {object} The world: `classes`, `byUuid`, `add`, `calls` and `cancel`.
  */
 export function installWriteWorld(fn, options = {}) {
@@ -296,6 +317,20 @@ export function installWriteWorld(fn, options = {}) {
          static get schema() {
             MockDoc.#schema ??= buildSchema(documentName, classes, children);
             return MockDoc.#schema;
+         }
+
+         /**
+          * The embedded collection fields by name, as Foundry's `Document.hierarchy` lists them
+          * (`common/abstract/document.mjs`).
+          * @returns {Record<string, object>} The fields of the embedded collections.
+          */
+         static get hierarchy() {
+            return Object.fromEntries(
+               Object.values(children).map((collection) => [
+                  collection,
+                  MockDoc.schema.fields[collection],
+               ]),
+            );
          }
 
          static cleanData = fn((data) => cleanFor(documentName, data));
@@ -548,6 +583,7 @@ export function installWriteWorld(fn, options = {}) {
       'Adventure',
       'Region',
       'RegionBehavior',
+      'Folder',
    ];
    /** @type {Record<string, Record<string, string>>} The embedded collections of every class but the Actor. */
    const childrenOf = {
@@ -580,6 +616,7 @@ export function installWriteWorld(fn, options = {}) {
          'User',
          'JournalEntry',
          'Macro',
+         'Folder',
       ],
       EMBEDDED_DOCUMENT_TYPES: [
          'ActiveEffect',
@@ -598,6 +635,7 @@ export function installWriteWorld(fn, options = {}) {
          'Scene',
          'Macro',
          'Adventure',
+         'Folder',
       ],
       USER_ROLES: {
          NONE: 0,
@@ -624,6 +662,7 @@ export function installWriteWorld(fn, options = {}) {
          deepClone: (value) => cloneData(value),
          expandObject: (value) => expandKeys(value),
          isEmpty: (value) => Object.keys(value).length === 0,
+         equals: (a, b) => JSON.stringify(sortedKeys(a)) === JSON.stringify(sortedKeys(b)),
          diffObject: (original, other) =>
             Object.fromEntries(
                Object.entries(other).filter(([key, value]) => JSON.stringify(original[key]) !== JSON.stringify(value)),
@@ -820,7 +859,14 @@ export function installWriteWorld(fn, options = {}) {
       packs: {
          get: (id) => options.packs?.[id],
       },
+      world: { id: 'MOCKWORLD' },
+      system: {
+         id: 'mocksystem',
+         version: '1.0.0',
+      },
+      documentTypes: options.documentTypes ?? {},
    };
+   globalThis.game.folders = globalThis.game.collections.get('Folder');
 
    return {
       classes,

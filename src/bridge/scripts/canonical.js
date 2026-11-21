@@ -12,7 +12,8 @@
  * any document are covered. Core schema fields and system data are not redacted: core names such as `prototypeToken`
  * match the pattern. The walk is bounded and drops what it cannot finish walking.
  *
- * The backup export (`exportForBackup`) applies the same exclusions and also reports the paths they changed.
+ * The backup export (`exportForBackup`) applies the same exclusions and also reports the paths they changed. It
+ * refuses a document the walk cut at a bound, because a backup must hold every document whole.
  */
 
 import { cleanForLog } from '$shared/logText.js';
@@ -92,6 +93,26 @@ export const USER_EXCLUDED_FIELDS = Object.freeze([
  */
 
 /**
+ * @typedef {object} RedactBudget
+ * @property {number} nodes - The objects and lists the walk may still visit.
+ * @property {number} nesting - How many JSON texts the walk has opened around the current one.
+ * @property {boolean} cut - Set when the walk dropped something at a bound (nodes, depth or text nesting); a key
+ * dropped because it names a secret does not set it.
+ */
+
+/**
+ * Create a fresh budget for one redaction walk.
+ * @returns {RedactBudget} The full budget, with nothing cut.
+ */
+function newBudget() {
+   return {
+      nodes: REDACT_MAX_NODES,
+      nesting: 0,
+      cut: false,
+   };
+}
+
+/**
  * @typedef {object} DocumentReference
  * @property {string} [uuid] - A full document uuid; excludes the other fields.
  * @property {string} [documentName] - The document class name, with `id`.
@@ -146,12 +167,13 @@ const JSON_START = /^\s*[{["]/;
  * Redact text that holds JSON: parse it, drop the secret-named keys and serialize it again. Text that is not JSON, or
  * is JSON without an object, a list or a nested JSON string, is returned as it is.
  * @param {string} text - The text to redact.
- * @param {{ nodes: number, nesting: number }} budget - The remaining node budget.
+ * @param {RedactBudget} budget - The remaining budget of the walk.
  * @param {number} depth - How many levels deep the text sits.
  * @returns {string | null} The redacted text, or null when it lies beyond a bound.
  */
 function redactText(text, budget, depth) {
    if (depth > REDACT_MAX_DEPTH || budget.nesting >= REDACT_MAX_STRING_NESTING) {
+      budget.cut = true;
       return null;
    }
    if (!JSON_START.test(text)) {
@@ -192,7 +214,7 @@ const DROPPED = Object.freeze({
 /**
  * Redact one member of an object or list.
  * @param {unknown} member - The value of one key of an object, or one entry of a list.
- * @param {{ nodes: number, nesting: number }} budget - The remaining node budget.
+ * @param {RedactBudget} budget - The remaining budget of the walk.
  * @param {number} depth - How many levels below the export root the member sits.
  * @param {boolean} redacting - True inside free-form data.
  * @returns {{ keep: boolean, value: unknown }} Whether the member stays, and what it becomes.
@@ -216,7 +238,7 @@ function redactMember(member, budget, depth, redacting) {
  * Drop the secret-named keys of a value, in place, and drop what lies beyond the walk bounds. A list is walked in
  * order and cut at the first member beyond a bound, so the indexes of the members kept never move.
  * @param {unknown} node - The value to walk.
- * @param {{ nodes: number, nesting: number }} budget - The remaining node budget.
+ * @param {RedactBudget} budget - The remaining budget of the walk.
  * @param {number} depth - How many levels below the export root the node sits.
  * @param {boolean} redacting - True inside free-form data, where a key named like a secret is dropped.
  * @returns {boolean} Whether the node may stay in its parent; false when it lies beyond a bound.
@@ -227,6 +249,7 @@ function redactNode(node, budget, depth, redacting) {
    }
    budget.nodes -= 1;
    if (depth > REDACT_MAX_DEPTH || budget.nodes < 0) {
+      budget.cut = true;
       return false;
    }
    if (Array.isArray(node)) {
@@ -262,19 +285,23 @@ function redactNode(node, budget, depth, redacting) {
 /**
  * Redact the `value` of a Setting export, which Foundry stores as JSON text. Text that is not JSON is left as it is.
  * @param {Record<string, unknown>} data - The plain export (a copy owned by the caller).
- * @returns {void}
+ * @returns {boolean} True when the walk cut the value at a bound.
  */
 function redactSettingValue(data) {
-   if (typeof data.value === 'string') {
-      data.value = redactText(data.value, { nodes: REDACT_MAX_NODES, nesting: 0 }, 0) ?? 'null';
+   if (typeof data.value !== 'string') {
+      return false;
    }
+   /** @type {RedactBudget} The budget of the value's walk. */
+   const budget = newBudget();
+   data.value = redactText(data.value, budget, 0) ?? 'null';
+   return budget.cut;
 }
 
 /**
  * Remove the excluded fields of a document class from a plain export, in place.
  * @param {string} documentName - The document class name.
  * @param {Record<string, unknown>} data - The plain export (a copy owned by the caller).
- * @returns {void}
+ * @returns {boolean} True when a walk bound cut part of the export, so it no longer holds the whole document.
  */
 function stripExcluded(documentName, data) {
    if (documentName === 'User') {
@@ -282,11 +309,13 @@ function stripExcluded(documentName, data) {
          delete data[field];
       }
    }
-   if (documentName === 'Setting') {
-      redactSettingValue(data);
-   }
+   /** @type {boolean} Whether the walk of a Setting value cut it. */
+   const valueCut = documentName === 'Setting' && redactSettingValue(data);
    // The root walk has its own budget, so a large Setting value cannot leave the flags of the export unwalked.
-   redactNode(data, { nodes: REDACT_MAX_NODES, nesting: 0 }, 0, false);
+   /** @type {RedactBudget} The budget of the root walk. */
+   const budget = newBudget();
+   redactNode(data, budget, 0, false);
+   return valueCut || budget.cut;
 }
 
 /**
@@ -343,7 +372,9 @@ function collectChangedPaths(original, redacted, path, found) {
 /**
  * Produce the export of a document for a backup file: the canonical stored export of `exportDocument(document, {})`
  * without `uuid`, plus the path of every key the exclusions removed and every string the redaction changed, so a
- * restore knows which values the file leaves out. Never throws.
+ * restore knows which values the file leaves out. A document the redaction walk cut at a bound (`REDACT_MAX_NODES`,
+ * `REDACT_MAX_DEPTH` or `REDACT_MAX_STRING_NESTING`) is refused, since its export no longer holds it whole. Never
+ * throws.
  * @param {object} document - The Foundry document, or a stand-in with `documentName` and `toCompendium`.
  * @returns {{ ok: true, data: Record<string, unknown>, secretPaths: Array<Array<string | number>> } | { ok: false,
  * code: string, message: string }} The plain export with its secret paths, or the refusal.
@@ -362,7 +393,13 @@ export function exportForBackup(document) {
       const original = storedExport(document);
       /** @type {Record<string, unknown>} The plain export after them. */
       const data = toPlain(original);
-      stripExcluded(document.documentName, data);
+      if (stripExcluded(document.documentName, data)) {
+         return {
+            ok: false,
+            code: 'DOC_UNREADABLE',
+            message: 'The document is too large or too deeply nested to export whole.',
+         };
+      }
       /** @type {Array<Array<string | number>>} The paths the exclusions changed. */
       const secretPaths = [];
       collectChangedPaths(original, data, [], secretPaths);
