@@ -16,21 +16,38 @@ export function defaultConfigRoot(): string {
 }
 
 /**
- * Throw when a path is a symbolic link; a missing path (ENOENT) is accepted.
+ * Throw when a path is a symbolic link; a missing path (ENOENT) is accepted. On Windows a directory junction counts
+ * as a symbolic link (`lstat` reports it as one).
  * @param {string} target - The path to inspect with `lstat` (the link itself, never its destination).
+ * @param {string} purpose - What the caller is refusing to do, for the message (for example `write the MCP config`).
  * @returns {void}
  * @throws {Error} When the path is a symbolic link, or `lstat` fails for a reason other than ENOENT.
  */
-function refuseSymbolicLink(target: string): void {
+export function refuseSymbolicLink(target: string, purpose: string): void {
    try {
       if (fs.lstatSync(target).isSymbolicLink()) {
-         throw new Error(`refusing to write the MCP config: ${target} is a symbolic link`);
+         throw new Error(`refusing to ${purpose}: ${target} is a symbolic link`);
       }
    } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
          throw error;
       }
    }
+}
+
+/**
+ * Create `<root>/.wiretap` when missing (recursive, mode 0o700 on creation only) and refuse it when it is a symbolic
+ * link. The MCP config file and the default backup folder both live under it.
+ * @param {string} [root] - The directory that contains `.wiretap/`; defaults to the module root.
+ * @returns {string} The absolute path of the `.wiretap` directory.
+ * @throws {Error} When `.wiretap` is a symbolic link or cannot be created.
+ */
+export function ensureWiretapDir(root: string = defaultConfigRoot()): string {
+   // The `.wiretap` directory.
+   const dir: string = path.join(root, CONFIG_DIR_NAME);
+   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+   refuseSymbolicLink(dir, 'use the .wiretap directory');
+   return dir;
 }
 
 /**
@@ -49,12 +66,10 @@ function refuseSymbolicLink(target: string): void {
  */
 export function writeMcpConfig(mcpPort: number, root: string = defaultConfigRoot()): string {
    // The directory that holds the config file.
-   const dir: string = path.join(root, CONFIG_DIR_NAME);
-   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-   refuseSymbolicLink(dir);
+   const dir: string = ensureWiretapDir(root);
    // The config file path.
    const file: string = path.join(dir, mcpConfigFileName(mcpPort));
-   refuseSymbolicLink(file);
+   refuseSymbolicLink(file, 'write the MCP config');
    fs.writeFileSync(file, buildMcpConfig(mcpPort), { mode: 0o600 });
    return file;
 }
