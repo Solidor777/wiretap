@@ -153,6 +153,33 @@ describe('keepId never overwrites a document that exists', () => {
       expect(world.classes.Actor.createDocuments).toHaveBeenCalledTimes(1);
    });
 
+   it('replays a dry-run keyed keepId retry after a real first call, and writes once', async () => {
+      /** @type {object} The arguments of the real first call: an explicit free id kept under one key. */
+      const params = {
+         documentName: 'Actor',
+         data: [{
+            _id: 'MOCKFREEID000004',
+            name: 'MOCK_kept_dry',
+            type: 'npc',
+         }],
+         keepId: true,
+         idempotencyKey: 'MOCK-keep-2',
+      };
+      /** @type {object[]} The rows of the first call. */
+      const first = await createDocuments(params);
+      /** @type {object[]} The rows of the dry-run retry. */
+      const second = await createDocuments({
+         ...params,
+         dryRun: true,
+      });
+      expect(second).toEqual([{
+         ...first[0],
+         dryRun: true,
+         replay: true,
+      }]);
+      expect(world.classes.Actor.createDocuments).toHaveBeenCalledTimes(1);
+   });
+
    it('lets a free id through, and ignores the id of the data without keepId', async () => {
       expect(
          await outcome({

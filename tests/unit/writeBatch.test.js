@@ -607,43 +607,58 @@ describe('batch: created rows follow the order of the entries', () => {
       expect(result.created.map((row) => world.byUuid.get(row.uuid)?.name)).toEqual(names);
    });
 
-   it('answers mixed classes [Actor A, Item B, Actor C] in entry order, also on a dry run', async () => {
-      world.createOrder.reverse = true;
-      /** @type {object} The batch arguments: two actors with an item between them. */
-      const args = {
-         creates: [
+   it('answers mixed classes [Actor A, embedded P, Item B, Actor C, embedded Q] in entry order, also on a dry run',
+      async () => {
+         world.createOrder.reverse = true;
+         /** @type {object} The batch arguments: two actors and a world item, with two embedded items between them. */
+         const args = {
+            creates: [
+               {
+                  documentName: 'Actor',
+                  data: '{"name":"MOCK_A","type":"npc"}',
+               },
+               {
+                  documentName: 'Item',
+                  parentUuid: actor.uuid,
+                  data: '{"name":"MOCK_P","type":"weapon"}',
+               },
+               {
+                  documentName: 'Item',
+                  data: '{"name":"MOCK_B","type":"weapon"}',
+               },
+               {
+                  documentName: 'Actor',
+                  data: '{"name":"MOCK_C","type":"npc"}',
+               },
+               {
+                  documentName: 'Item',
+                  parentUuid: actor.uuid,
+                  data: '{"name":"MOCK_Q","type":"weapon"}',
+               },
+            ],
+         };
+         /** @type {object} A context whose core runs the real batch. */
+         const ctx = { core: { batchDocuments } };
+         /** @type {string[]} The names in entry order. */
+         const expected = [
+            'MOCK_A',
+            'MOCK_P',
+            'MOCK_B',
+            'MOCK_C',
+            'MOCK_Q',
+         ];
+         const preview = await batchHandler(
             {
-               documentName: 'Actor',
-               data: '{"name":"MOCK_A","type":"npc"}',
+               ...args,
+               dryRun: true,
             },
-            {
-               documentName: 'Item',
-               data: '{"name":"MOCK_B","type":"weapon"}',
-            },
-            {
-               documentName: 'Actor',
-               data: '{"name":"MOCK_C","type":"npc"}',
-            },
-         ],
-      };
-      /** @type {object} A context whose core runs the real batch. */
-      const ctx = { core: { batchDocuments } };
-      /** @type {string[]} The names in entry order. */
-      const expected = [
-         'MOCK_A',
-         'MOCK_B',
-         'MOCK_C',
-      ];
-      const preview = await batchHandler(
-         {
-            ...args,
-            dryRun: true,
-         },
-         ctx,
-      );
-      expect(preview.created.map((row) => row.name)).toEqual(expected);
-      const result = await batchHandler(args, ctx);
-      expect(result.created.map((row) => row.name)).toEqual(expected);
-      expect(result.created.map((row) => world.byUuid.get(row.uuid)?.name)).toEqual(expected);
-   });
+            ctx,
+         );
+         expect(preview.created.map((row) => row.name)).toEqual(expected);
+         const result = await batchHandler(args, ctx);
+         expect(result.created.map((row) => row.name)).toEqual(expected);
+         expect(result.created.map((row) => world.byUuid.get(row.uuid)?.name)).toEqual(expected);
+         expect(result.created[1].uuid.startsWith(`${actor.uuid}.Item.`)).toBe(true);
+         expect(result.created[4].uuid.startsWith(`${actor.uuid}.Item.`)).toBe(true);
+      });
 });

@@ -430,6 +430,19 @@ describe('get_document version and ifChanged', () => {
       expect(await versionOf({ source: withSecret('MOCK_A') })).toBe(await versionOf({ source: withSecret('MOCK_B') }));
    });
 
+   it('changes the version when a flag value that is not secret-named changes', async () => {
+      /**
+       * Build the actor source with a plain flag value.
+       * @param {string} note - The flag value.
+       * @returns {Record<string, unknown>} The source.
+       */
+      const withNote = (note) => ({
+         ...actorSource(),
+         flags: { MOCK_mod: { note } },
+      });
+      expect(await versionOf({ source: withNote('A') })).not.toBe(await versionOf({ source: withNote('B') }));
+   });
+
    it('puts the same version in the compact view, the paths result and the fields result', async () => {
       worldWithActor();
       const compactVersion = (await get({ uuid })).version;
@@ -491,22 +504,23 @@ describe('get_document version and ifChanged', () => {
       expect(Object.hasOwn(result, 'version')).toBe(false);
    });
 
-   it('answers { unchanged: true } when ifChanged equals the version, for compact, paths, fields and full', async () => {
-      worldWithActor();
-      const version = (await get({ uuid })).version;
-      for (const extra of [
-         {},
-         { paths: ['name'] },
-         { fields: ['name'] },
-         { mode: 'full' },
-      ]) {
-         expect(await get({
-            uuid,
-            ifChanged: version,
-            ...extra,
-         })).toEqual({ unchanged: true });
-      }
-   });
+   it('answers { unchanged: true } when ifChanged equals the version, for compact, paths, fields and full',
+      async () => {
+         worldWithActor();
+         const version = (await get({ uuid })).version;
+         for (const extra of [
+            {},
+            { paths: ['name'] },
+            { fields: ['name'] },
+            { mode: 'full' },
+         ]) {
+            expect(await get({
+               uuid,
+               ifChanged: version,
+               ...extra,
+            })).toEqual({ unchanged: true });
+         }
+      });
 
    it('returns the normal result when ifChanged differs', async () => {
       worldWithActor();
