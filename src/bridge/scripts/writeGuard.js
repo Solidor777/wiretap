@@ -12,11 +12,11 @@
  * (`denyWiretapSettingWrite`); a `Setting` write with no resolvable key is refused.
  * 5. The category gates, judged from THIS client's world settings at call time (`requireGate`): User documents,
  * Setting documents, the module configuration setting, base64 data URIs, ownership changes, macro code
- * (`allowMacroExecution`: a Macro `command`, a Macro `type` changed to `script`, an Adventure's stored `macros`, a
- * region behavior of type `executeScript` at any nesting, all code that later runs), compendium writes and, for a call
- * that is not a `dryRun`, deleting (`allowDelete`) and replacing
- * (`allowReplace`) documents. The risky operations come from the `operations` the caller names and from the operators
- * of the cleaned `targets`, judged by the schema field they land on (`writeFields.js`).
+ * (`allowMacroExecution`: a Macro `command`, a Macro `type` changed to `script`, an Adventure's stored `macros` that
+ * hold a macro, a region behavior of type `executeScript` at any nesting, all code that later runs), compendium writes
+ * and, for a call that is not a `dryRun`, deleting (`allowDelete`) and replacing (`allowReplace`) documents. The risky
+ * operations come from the `operations` the caller names and from the operators of the cleaned `targets`, judged by
+ * the schema field they land on (`writeFields.js`).
  *
  * The first refusal is thrown as a `GATE_DENIED` script error whose text names the rule or the gate.
  */
@@ -90,10 +90,31 @@ function writesField(objects, name) {
 }
 
 /**
+ * Tell whether any of some objects writes an Adventure's `macros` with something other than an empty list. A key
+ * counts by its first segment, as in `writesField`, and its value is read with any update operator unwrapped
+ * (`DataFieldOperator.get`). Only a value that is an empty array writes no macro; every other value, a dotted key into
+ * the list and a deletion (null) included, counts as writing one.
+ * @param {Record<string, unknown>[]} objects - Data objects, patch objects or cleaned changes.
+ * @returns {boolean} True when a key may write a macro into the Adventure.
+ */
+function writesAdventureMacros(objects) {
+   return objects.some((object) =>
+      Object.entries(object).some(([key, value]) => {
+         if (keyNames(key)[0] !== 'macros') {
+            return false;
+         }
+         /** @type {unknown} The value written, an operator unwrapped. */
+         const written = foundry.data.operators.DataFieldOperator.get(value);
+         return keyNames(key).length > 1 || !Array.isArray(written) || written.length > 0;
+      }),
+   );
+}
+
+/**
  * Tell whether a write sets macro code, which runs when a user executes the macro: a Macro `command` (any value and
  * any op), a Macro `type` changed to `script` in the cleaned changes from another stored type (stored text becomes
- * code; a deleted `type` resets to `chat`), or an Adventure's stored `macros` (importing the adventure creates those
- * Macros).
+ * code; a deleted `type` resets to `chat`), or an Adventure's stored `macros` holding at least one macro (importing
+ * the adventure creates those Macros; an empty list creates none).
  * @param {WriteIntent} intent - What the call is about to write.
  * @returns {boolean} True when the write needs `allowMacroExecution`.
  */
@@ -104,7 +125,7 @@ function writesMacroCode(intent) {
       ...(intent.targets ?? []).map((target) => target.changes),
    ];
    if (intent.documentName === 'Adventure') {
-      return writesField(objects, 'macros');
+      return writesAdventureMacros(objects);
    }
    if (intent.documentName !== 'Macro') {
       return false;

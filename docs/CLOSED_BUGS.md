@@ -104,3 +104,20 @@
   directories have the `<13-digit timestamp>-<pid>-<counter>` form. The collision itself depends on pid reuse and was
   not reproduced on demand, so the fix is verified by construction, not by reproducing the failure.
 
+## An Adventure with an empty `macros` set needed `allowMacroExecution`
+
+- **Was:** `guardWrite` asked for `allowMacroExecution` on any Adventure create whose data held a `macros` key, even
+  an empty one: `writesField` of `src/bridge/scripts/writeGuard.js` tested only that the key exists, so `macros: []`
+  counted as writing macro code. Foundry defaults the set to `[]` (`common/data/fields.mjs` 2289-2297, 2329-2333;
+  READ), so an Adventure's `toObject()` always holds the key (INFERRED, not measured live) and every `fromUuids` copy
+  of an Adventure, and any `data` create that included `macros: []`, was refused while the gate was closed. Found in
+  M15a.
+- **Fix:** `writesAdventureMacros` in `writeGuard.js` counts a `macros` key only when its value, an update operator
+  unwrapped, is not an empty array; a dotted key into the set and a deletion still count. An Adventure whose `macros`
+  hold a macro, by create, update `set` or update `replace`, is still refused while the gate is closed.
+- **Verified:** `tests/unit/macroCommandGate.test.js` "create of an Adventure whose macros list is empty needs no
+  macro gate", "update of an Adventure's macros to an empty list with op set / replace needs no macro gate" and
+  "update of an Adventure's macros with op replace and a macro is denied while the gate is closed";
+  `tests/unit/writeCopyCreate.test.js` "copies an Adventure whose macros set is empty with every gate but the
+  compendium gate closed". Before the fix every case but the denial failed with `Gate allowMacroExecution is closed`.
+

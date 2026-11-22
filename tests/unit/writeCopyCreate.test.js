@@ -515,21 +515,12 @@ describe('create_documents with fromUuids', () => {
       expect(rows[0].missing).toEqual(['system.missing']);
    });
 
-   it('copies an Adventure whose macros set is empty only with allowMacroExecution open', async () => {
+   it('copies an Adventure whose macros set is empty with every gate but the compendium gate closed', async () => {
+      // An Adventure lives only in a compendium pack, so the compendium gate is the one gate open.
       gates.allowCompendiumWrites = true;
       /** @type {object} An Adventure with no macros; its data still holds the `macros` key. */
       const adventure = addAdventure([]);
-      /** @type {Error} The refusal while the macro gate is closed. */
-      const error = await failure({
-         documentName: 'Adventure',
-         fromUuids: [adventure.uuid],
-         pack: 'world.adventures',
-      });
-      expect(error.code).toBe(GATE_DENIED);
-      expect(error.message).toContain('allowMacroExecution');
-      expect(world.calls).toEqual([]);
-      gates.allowMacroExecution = true;
-      /** @type {Record<string, unknown>[]} The acknowledgement once the gate is open. */
+      /** @type {Record<string, unknown>[]} The acknowledgement. */
       const rows = await create({
          documentName: 'Adventure',
          fromUuids: [adventure.uuid],
