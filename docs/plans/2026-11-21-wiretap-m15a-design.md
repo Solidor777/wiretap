@@ -110,7 +110,9 @@ For the change check:
 - `version`: a short text, the cyrb53 hash (the function behind `requestHash` in `writeIdempotency.js`, moved to a
   shared helper if both use it) of the canonical export the read returns, after the exclusions of `ctx.core.readDocument`
   (redaction included: the agent cannot see a secret, so a change to one does not change the version, and the hash never
-  carries information about a secret). Source data only, also when `derived: true`.
+  carries information about a secret). With `derived: true` the version hashes the prepared export the read
+  returns (owner's decision after the plan review: a stored-only hash would say "unchanged" after a derived value changes
+  through another document).
 - Stable serialization: keys sorted at every level before hashing, so a reordered but equal export keeps its version.
 - Input: the whole export `ctx.core.readDocument` returns (`_stats` and `uuid` included). An update that changes only
   `_stats` counts as a change (designer's call: the safe direction). The handler computes the version and passes it to
