@@ -45,7 +45,7 @@ scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B ra
 |---|---|
 | `src/bridge/scripts/writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments` and the planners `prepareCreate`, `prepareUpdates`, `prepareDeletes` that `batch` and `replace_document` reuse (`prepareCreate` / `runCreate` also serve the backup restore); the guard calls, validation (`failuresOf`), `refuseTakenIds`, `refuseUnsafeData` |
 | `src/bridge/scripts/createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | Handlers of the phase A scripts (`updateDocuments.js` groups patch entries by uuid) |
-| `src/bridge/scripts/writeArgs.js`, `writeAck.js` | Argument helpers (`parseDataObjects`, `parseJson`, `checkDataBytes`) and ack shaping |
+| `src/bridge/scripts/writeArgs.js`, `writeAck.js` | Argument helpers (`parseDataObjects`, `parseJson`, `checkDataBytes`, `createId`: the id a create is sent with, for `runCreate` and the idempotency record) and ack shaping |
 | `src/bridge/scripts/writeCopy.js` | `copyDataFromUuids({ documentName, fromUuids, keepId })`: the create data of `create_documents`'s `fromUuids` (below); writes nothing |
 | `src/bridge/scripts/writeReplace.js`, `replaceDocument.js` | `replace_document` and its handler; `prepareReplace` / `runReplace` and restore mode, `stripWiretapFlags`, `droppedEmbedded`, the carry of `flags.wiretap` |
 | `src/bridge/scripts/writeBatch.js`, `writeBatchSettle.js`, `batch.js` | `batch`: planning, `modifyBatch`, settle and repair |
