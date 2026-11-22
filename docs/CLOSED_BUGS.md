@@ -275,3 +275,27 @@
   deleted" and the rest of its `get_document version and ifChanged` block; `tests/e2e/readTools.spec.js` "ifChanged on
   a parent sees an embedded update, an embedded create and an embedded delete" (6 passed on the live world), where each
   step's control read with the old version answers `{unchanged:true}` before the change and not after it.
+
+## `getAncestors` test timed out in full `npm test` runs
+
+- **Was:** `tests/unit/SuperviseServer.test.js` "process helpers > getAncestors starts with the real parent process"
+  passed alone but went past the default 5,000 ms limit in default-worker `npm test` runs: twice in M15a (5,622 ms at
+  the M15a close, `debug/dumps/m15a-close-npmtest.txt`) and once more while it was being measured (5,414 ms,
+  `debug/dumps/flaky-supervise-default-1.txt`).
+- **Cause (measured):** CPU contention slowing the start of a real PowerShell. `getAncestors`
+  (`scripts/lib/superviseServer.mjs:132-174`) runs one `powershell -NoProfile -NonInteractive -Command` through
+  `execFileSync`, with two `Get-CimInstance Win32_Process` queries for one level, and has no wait or retry. With nothing
+  else running the call took 0.8 to 1.5 s (an empty PowerShell 0.3 to 0.65 s, the first query 0.42 to 0.54 s, the
+  second 0.22 to 0.30 s). Under CPU load alone (48 busy loops on 24 logical CPUs, no file activity) it took 1.4 to
+  5.8 s, while the two queries stayed at 0.2 to 0.8 s: the PowerShell start grows, not the queries. A default run uses
+  23 workers (vitest `availableParallelism() - 1`) and kept the CPU at 87 to 96 % on average, on a machine where other
+  processes already used 60 to 98 %.
+- **Excluded:** a wait or retry in the product (none in `getAncestors`); repeated spawns (one PowerShell per test); a
+  slow CIM query (the queries did not grow under load); antivirus as the main cause (pure CPU load with no new files
+  reproduces the slowdown; a per-start scan is in every measurement and cannot be removed without admin rights, so
+  its share is not measured).
+- **Fix:** the test keeps the real PowerShell (it checks the real parent process) and has a 15,000 ms limit, about two
+  and a half times the worst measurement, with the measured reason in a comment. No product code changed.
+- **Verified:** three default-worker `npm test` runs passed (133 files, 2958 passed, 2 skipped each; the test took
+  1,732, 1,990 and 1,544 ms; `debug/dumps/flaky-supervise-fixed-{1,2,3}.txt`). Measurements are in
+  `.superpowers/sdd/2026-11-21-wiretap-m15a-plan/flaky-supervise-report.md`.
