@@ -22,11 +22,11 @@ document; `paths` adds those paths of each. Pass `idempotencyKey` (up to 64 lett
 timeout returns the first ack; the same key with other data is `IDEMPOTENCY_CONFLICT`.
 - **Copy documents.** `mcp__wiretap__create_documents` with `fromUuids` (up to 50 world, embedded or compendium
 documents of class `documentName`) instead of `data`, plus `pack` or `parentUuid` as for `data`: one call; the source
-body never enters your context. A copy gets a new `_id` (unless `keepId`), no `folder`, `sort`, `ownership` or
-`flags.wiretap`; a `User` cannot be copied; rename or adjust it with `update_documents`. **Build an actor** in two
-calls: the Actor with its own items and effects inline in `data`, then `documentName: "Item"`, `parentUuid` the new
-actor, `fromUuids` the compendium items. **Re-read only on change:** keep the `version` of a `get_document` result and
-pass it as `ifChanged`.
+body never enters your context. A copy gets a new `_id` (unless `keepId`), no `folder`, `sort` or `flags.wiretap`,
+and no ownership of its source: Foundry makes the creating user its OWNER, as for any create. A `User` cannot be
+copied; rename or adjust a copy with `update_documents`. **Build an actor** in two calls: the Actor with its own items
+and effects inline in `data`, then `documentName: "Item"`, `parentUuid` the new actor, `fromUuids` the compendium
+items. **Re-read only on change:** keep the `version` of a `get_document` result and pass it as `ifChanged`.
 - **Update documents.** `mcp__wiretap__update_documents` takes `updates`, one patch per entry: `uuid`, `path`, `value`
 (JSON text, so a string is `"\"x\""`) and `op`: `set` merges (default), `replace` swaps the whole value, `delete`
 removes the field (no value). Entries with one uuid form one update; embedded documents use `items.<_id>.system.x` (ids

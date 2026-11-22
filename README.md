@@ -190,8 +190,9 @@ method `405`.
   `dryRun` and `paths`; it returns one `{uuid, name, type}` per document (4,000 bytes at most, 256 per document). A
   copy is built in the Foundry client from the source document, so the source body never reaches the agent, and it
   meets every gate, write guard, validation, `actAs` and `dryRun` check that a `data` create of the same content would.
-  A copy has no `ownership` at any depth, a new `_id` unless `keepId`, and no `folder`, `sort` or `flags.wiretap`; a
-  copy of a compendium document sets `_stats.compendiumSource` to the source uuid. Secret-named values of the source are
+  A copy carries no ownership of its source at any depth, and Foundry makes the creating user its OWNER, as for any
+  create. It has a new `_id` unless `keepId`, and no `folder`, `sort` or `flags.wiretap`; a copy of a compendium
+  document sets `_stats.compendiumSource` to the source uuid. Secret-named values of the source are
   copied as Foundry's own import copies them, and every read of the copy stays redacted. A `User` cannot be copied
   (`ARGS_INVALID`), a missing source is `DOC_NOT_FOUND`, and a source a read refuses gets the read's code (for example
   `DOC_EXCLUDED`). A copy has no 200,000-byte bound, which covers the `data` an agent sends; the cap of 50 `fromUuids`
