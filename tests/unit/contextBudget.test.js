@@ -81,14 +81,17 @@ describe('context budgets of the real MCP server', () => {
    });
 
    /**
-    * Start a harness with extra tools and report on it against the production fixtures plus extra ones.
+    * Start a harness with extra tools and report on it against the production fixtures plus extra ones. The fixtures
+    * run only when asked: a full fixture run writes and reads about 20 backup files, which takes up to 2 s of a report
+    * when every vitest worker is busy, and a test that checks only listings, skills or instructions needs none of it.
     * @param {import('../../server/mcp.ts').ToolRegistration[]} extraTools - Tools to register.
     * @param {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} [extraFixtures] - Their fixtures.
     * @param {string} [skillsRoot] - The skills directory to scan.
     * @param {string} [instructions] - The server instructions text.
+    * @param {boolean | string[]} [runFixtures] - Which fixtures to run, as `collectReport` takes it. Default false.
     * @returns {Promise<import('./contextBudgetHarness.js').BudgetReport>} The measured breaches and sizes.
     */
-   async function reportWith(extraTools, extraFixtures = {}, skillsRoot, instructions) {
+   async function reportWith(extraTools, extraFixtures = {}, skillsRoot, instructions, runFixtures = false) {
       harness = await startHarness({
          tools: extraTools,
          instructions,
@@ -102,11 +105,12 @@ describe('context budgets of the real MCP server', () => {
             ...extraFixtures,
          },
          skillsRoot,
+         runFixtures,
       });
    }
 
    it('keeps the listed production tools and their fixtures inside every budget', async () => {
-      const report = await reportWith([]);
+      const report = await reportWith([], {}, undefined, undefined, true);
       for (const warning of report.warnings) {
          console.warn(`context budget warning | ${warning}`);
       }
@@ -140,7 +144,11 @@ describe('context budgets of the real MCP server', () => {
       expect(report.totals.count).toBe(RESERVED_SCRIPT_NAMES.length + SHIPPED_COUNT);
       expect(report.helperTotals.count).toBe(1);
       expect(report.fixtureRuns.length).toBeGreaterThanOrEqual(8);
-   });
+      // The one test that runs every production fixture: 40 tool calls through HTTP, Socket.IO and the fake GM, with
+      // 20 backup files written and 18 headers read on disk. It takes 0.4 to 0.6 s alone and measured 1.7 to 4.2 s
+      // inside a default-worker `npm test`, where those file writes and reads slow down far more than the tool calls
+      // do, so the default 5 s limit leaves too little room.
+   }, 10000);
 
    it('turns a create_documents ack over the batch budget into a handle within the ack budget', async () => {
       harness = await startHarness();
@@ -332,6 +340,48 @@ describe('context budgets of the real MCP server', () => {
          );
       });
 
+      it('checks that every tool has a fixture without running any when fixtures are not run', async () => {
+         /** @type {string[]} The tools whose fixture was run. */
+         const ran = [];
+         /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures that record a run. */
+         const recording = Object.fromEntries(Object.keys(FIXTURES).map((name) => [
+            name,
+            [
+               {
+                  label: 'recorded',
+                  budget: 'ACK_MAX_BYTES',
+                  run: () => {
+                     ran.push(name);
+                     throw new Error('the fixture ran');
+                  },
+               },
+            ],
+         ]));
+         harness = await startHarness({ tools: [makeTool('test_no_fixture', 'Short.')] });
+         const report = await collectReport({
+            client: harness.client,
+            setGmAck: harness.setGmAck,
+            setGmHandler: harness.setGmHandler,
+            fixtures: recording,
+            runFixtures: false,
+         });
+         expect(report.failures).toEqual(['tool "test_no_fixture": no representative-result fixture']);
+         expect(report.fixtureRuns).toEqual([]);
+         expect(ran).toEqual([]);
+         const named = await collectReport({
+            client: harness.client,
+            setGmAck: harness.setGmAck,
+            setGmHandler: harness.setGmHandler,
+            fixtures: recording,
+            runFixtures: ['read_handle'],
+         });
+         expect(named.failures).toEqual([
+            'tool "read_handle" fixture "recorded": threw the fixture ran',
+            'tool "test_no_fixture": no representative-result fixture',
+         ]);
+         expect(ran).toEqual(['read_handle']);
+      });
+
       it('fails a tool that has no representative-result fixture', async () => {
          const report = await reportWith([makeTool('test_no_fixture', 'Short.')]);
          expect(report.failures).toEqual(['tool "test_no_fixture": no representative-result fixture']);
@@ -350,6 +400,9 @@ describe('context budgets of the real MCP server', () => {
          const report = await reportWith(
             [tool],
             { test_big_answer: trivialFixture('test_big_answer') },
+            undefined,
+            undefined,
+            ['test_big_answer'],
          );
          expect(report.failures).toEqual([
             'tool "test_big_answer" fixture "short answer": result is 300 bytes, at most 256 bytes (ACK_MAX_BYTES)',
@@ -396,11 +449,13 @@ describe('context budgets of the real MCP server', () => {
       }
 
       /**
-       * Report on the running harness with the production fixtures plus the given ones.
+       * Report on the running harness with the production fixtures plus the given ones; as in `reportWith`, the
+       * fixtures run only when asked.
        * @param {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} fixtures - Fixtures by tool name.
+       * @param {boolean | string[]} [runFixtures] - Which fixtures to run, as `collectReport` takes it. Default false.
        * @returns {Promise<import('./contextBudgetHarness.js').BudgetReport>} The breaches and sizes measured on it.
        */
-      function reportOn(fixtures) {
+      function reportOn(fixtures, runFixtures = false) {
          return collectReport({
             client: harness.client,
             setGmAck: harness.setGmAck,
@@ -409,12 +464,13 @@ describe('context budgets of the real MCP server', () => {
                ...FIXTURES,
                ...fixtures,
             },
+            runFixtures,
          });
       }
 
       it('counts a registered tool toward the tool list and holds its results to the budgets', async () => {
          harness = await startHarness({ registry: [registryEntry('registry_one')] });
-         const report = await reportOn({ registry_one: registryFixture('registry_one') });
+         const report = await reportOn({ registry_one: registryFixture('registry_one') }, ['registry_one']);
          expect(report.failures).toEqual([]);
          expect(report.listing.map((tool) => tool.name)).toContain('registry_one');
          expect(report.totals.count).toBe(RESERVED_SCRIPT_NAMES.length + 1 + SHIPPED_COUNT);
@@ -440,7 +496,7 @@ describe('context budgets of the real MCP server', () => {
          const without = await reportOn({});
          expect(without.failures).toEqual(['tool "registry_late": no representative-result fixture']);
          expect(without.totals.count).toBe(RESERVED_SCRIPT_NAMES.length + 1 + SHIPPED_COUNT);
-         const report = await reportOn({ registry_late: registryFixture('registry_late') });
+         const report = await reportOn({ registry_late: registryFixture('registry_late') }, ['registry_late']);
          expect(report.failures).toEqual([]);
       });
 
@@ -466,7 +522,7 @@ describe('context budgets of the real MCP server', () => {
                   },
                },
             ],
-         });
+         }, ['registry_late']);
          expect(report.failures).toEqual([
             'tool "registry_late" fixture "answer over the budget": ' +
                'result is 1500 bytes, at most 512 bytes (ERROR_MAX_BYTES)',
@@ -488,7 +544,7 @@ describe('context budgets of the real MCP server', () => {
             name,
             registryFixture(name),
          ]));
-         const report = await reportOn(fixtures);
+         const report = await reportOn(fixtures, names);
          expect(report.failures).toEqual([]);
          expect(report.totals.count + report.helperTotals.count).toBeLessThanOrEqual(
             getBudget('ALWAYS_LISTED_TOOLS_MAX').value,

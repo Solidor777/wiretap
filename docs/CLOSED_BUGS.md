@@ -180,3 +180,34 @@
   (`[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]` and `[ 'MOCK_A', 'MOCK_C', 'MOCK_B' ]`); after it they pass. Not re-measured on
   the live world here.
 
+
+## contextBudget.test.js timed out inside a default-worker npm test
+
+- **Was:** a default-worker `npm test` failed now and then in `tests/unit/contextBudget.test.js` with "Test timed out
+  in 5000ms" and passed on a rerun; the file passed alone. Captured in `debug/dumps/m15a-npmtest-1.txt` for "accepts a
+  skills directory whose tool mentions all exist and none when the directory is absent"; reproduced once more, in a
+  full run that also timed out "keeps the listed production tools and their fixtures inside every budget". Found in
+  M15a.
+- **Cause (MEASURED with vitest JSON durations and per-phase timing written to `debug/dumps/`):** every report of
+  `collectReport` ran every fixture of every tool, and the `list_backups` fixture
+  (`tests/unit/contextBudgetHarness.js`) made 50 real backups (an MCP call, two Socket.IO pieces and a file write
+  each) and then read 50 headers. One report took 0.24 to 0.42 s alone and 0.9 to 4.5 s in a full run; the 50-backup
+  fixture was 72 to 74% of the fixture time of the file's reports, alone and in full runs. In a full run, steps that touch the disk slowed far more than plain tool calls: a
+  backup's median went from 2.5 to 24 ms and the 50-header list call from 35 ms to 2.7 s, while a plain tool call's
+  median went from 1.5 to 2.0 ms. The skills test runs two reports, and the file's first tests run while the other
+  workers are busiest, so they reached 3.2 to 4.8 s. Excluded: harness start, including the port reservation (31 to
+  602 ms per start), the skills directory read (0.2 to 91 ms), timers and the tool-list debounce (none on the report
+  path; `nextToolListChange` is not used by the failing test), and the plain tool calls through the fake GM (1.5 to
+  2.0 ms median). Unverified: why disk steps slow so much (real-time antivirus scanning is on for this machine; its
+  exclusions were not readable).
+- **Fix:** the `list_backups` fixture makes 17 backups, one more than the 16 rows that fit in
+  `BACKUP_LIST_MAX_BYTES`, and fails unless the listing is cut. The result is the same 1,971 bytes it was with 50.
+  `collectReport` takes `runFixtures` (true, false, or the names of the tools whose fixtures run). The test file's
+  `reportWith` and `reportOn` run none unless asked: the production-budget test runs all, and the four registry tests
+  and "fails a fixture result over its budget" run only their own tools. The production-budget test, the one test that
+  runs every fixture (40 tool calls, 20 backup files written and 18 headers read), has a 10 s limit, with the
+  measured 1.7 to 4.2 s full-run time in a comment.
+- **Verified:** a new test, "checks that every tool has a fixture without running any when fixtures are not run",
+  failed before `runFixtures` existed and passes now. After the fix the file takes 2.3 s alone and 10.0 to 11.6 s in a
+  full run (it took 21 to 23 s before). The skills test takes 0.6 s or less in a full run. Three default-worker
+  `npm test` runs passed: 2956 passed and 2 skipped in each (`debug/dumps/flaky-ctx-npmtest-{1,2,3}.txt`).

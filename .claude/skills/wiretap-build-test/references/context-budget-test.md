@@ -9,3 +9,18 @@ The pack fixtures use `withFittedLabel(row)` of the harness, which gives an ack 
 its JSON at exactly `ACK_MAX_BYTES` (the worst case of the handlers' label cut): `create_pack` "dry run with a
 64-character name and a label cut to fit", `delete_pack` "dry run with the largest count and a long label"
 (`documents: Number.MAX_SAFE_INTEGER`) and "locked pack" (a `PACK_LOCKED` error held to `ERROR_MAX_BYTES`).
+
+Which fixtures run: `collectReport({ runFixtures })` takes true (every fixture, the default, used by
+`tests/measure/measureContext.mjs`), false (none) or the names of the tools whose fixtures run. A listed tool without a
+fixture is a failure in every mode. The test file's `reportWith(extraTools, extraFixtures, skillsRoot, instructions,
+runFixtures)` and `reportOn(fixtures, runFixtures)` default to false. "keeps the listed production tools and their
+fixtures inside every budget" is the one test that runs every production fixture, with a 10 s limit (MEASURED: 0.4 to
+0.6 s alone, 1.7 to 4.2 s in a default-worker `npm test`). "fails a fixture result over its budget" and the registry
+tests that check fixture results run only their own tools' fixtures. "checks that every tool has a fixture without
+running any when fixtures are not run" covers the option. Why: the backup fixtures write and read real files under
+`test/tmp/`, and in a full parallel run those steps slow far more than tool calls do (MEASURED: a backup's median 2.5
+to 24 ms, a 50-header listing 35 ms to 2.7 s). Repeating every fixture in each report pushed tests past 5 s.
+
+The `list_backups` fixture "the most rows the budget holds, cut" makes `LIST_FIXTURE_BACKUPS` (17) backups, one more
+than the 16 rows that fit in `BACKUP_LIST_MAX_BYTES`. It throws unless the listing has `cut: true`, so a format or budget
+change that lets every row fit fails loudly. Its result is 1,971 B, the same as with 50 backups (MEASURED).
