@@ -441,6 +441,57 @@ describe('writing Macro code needs allowMacroExecution', () => {
       expect(adventure.update).not.toHaveBeenCalled();
    });
 
+   it('update of an Adventure deleting its macros is denied while the gate is closed', async () => {
+      gates.allowCompendiumWrites = true;
+      // An op delete on the macros set reaches embedded data, so it also needs the delete gate.
+      gates.allowDelete = true;
+      /** @type {object} A live Adventure inside the pack. */
+      const adventure = world.add(
+         'Adventure',
+         {
+            name: 'MOCK_adventure',
+            macros: [],
+         },
+         { pack: ADVENTURE_PACK },
+      );
+      const error = await outcome(() => updateDocuments({
+         updates: [{
+            uuid: adventure.uuid,
+            patches: [{
+               path: 'macros',
+               op: 'delete',
+            }],
+         }],
+      }));
+      expectMacroDenial(error);
+      expect(adventure.update).not.toHaveBeenCalled();
+   });
+
+   it('update of an Adventure at a dotted path into its macros is denied while the gate is closed', async () => {
+      // The raw patch key is dotted and the cleaned change expands it into a `macros` object; both count as macros.
+      gates.allowCompendiumWrites = true;
+      /** @type {object} A live Adventure inside the pack. */
+      const adventure = world.add(
+         'Adventure',
+         {
+            name: 'MOCK_adventure',
+            macros: [],
+         },
+         { pack: ADVENTURE_PACK },
+      );
+      const error = await outcome(() => updateDocuments({
+         updates: [{
+            uuid: adventure.uuid,
+            patches: [{
+               path: 'macros.0.command',
+               value: 'x',
+            }],
+         }],
+      }));
+      expectMacroDenial(error);
+      expect(adventure.update).not.toHaveBeenCalled();
+   });
+
    it('update of an Adventure\'s macros is denied while the gate is closed', async () => {
       gates.allowCompendiumWrites = true;
       /** @type {object} A live Adventure inside the pack. */
