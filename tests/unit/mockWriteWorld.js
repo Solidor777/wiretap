@@ -278,7 +278,7 @@ function markedFailures(changes) {
  * @param {Record<string, { documentName: string, locked?: boolean, folders?: Map<string, object> }>} [options.packs] -
  * The packs by id.
  * @param {Record<string, string[]>} [options.documentTypes] - The subtypes of each class (`game.documentTypes`).
- * @returns {object} The world: `classes`, `byUuid`, `add`, `calls` and `cancel`.
+ * @returns {object} The world: `classes`, `byUuid`, `add`, `calls`, `cancel` and `createOrder`.
  */
 export function installWriteWorld(fn, options = {}) {
    /** @type {Record<string, string>} Embedded collections: document name to collection name. */
@@ -301,6 +301,19 @@ export function installWriteWorld(fn, options = {}) {
       deleteIds: new Set(),
       createNames: new Set(),
    };
+   /**
+    * The order in which a create call returns its documents. `reverse` returns them in the reverse of the request's
+    * order: Foundry's server pushes each created document after awaiting a fresh id, so the order it answers in is not
+    * the request's (`dist/database/backend/server-backend.mjs` `_createDocuments`).
+    * @type {{ reverse: boolean }}
+    */
+   const createOrder = { reverse: false };
+   /**
+    * Return created documents in the order `createOrder` asks for.
+    * @param {object[]} documents - The created documents, in the request's order.
+    * @returns {object[]} The documents as the mocked server answers them.
+    */
+   const answerOrder = (documents) => (createOrder.reverse ? documents.toReversed() : documents);
    /** @type {Map<string, object>} The documents the server holds, by uuid; a client-only ghost is not among them. */
    const server = new Map();
    /** @type {string[]} The order in which write calls happened, as `<Class>.<call>`. */
@@ -433,16 +446,16 @@ export function installWriteWorld(fn, options = {}) {
             }
             data = data.filter((item) => !cancel.createNames.has(item.name));
             if (operation.parent) {
-               return data.map((item) => operation.parent.attach(documentName, item, operation));
+               return answerOrder(data.map((item) => operation.parent.attach(documentName, item, operation)));
             }
-            return data.map((item) => {
+            return answerOrder(data.map((item) => {
                /** @type {Record<string, unknown>} The data as the backend cleans it. */
                const cleaned = cleanFor(documentName, item);
                return new MockDoc({
                   ...cleaned,
                   _id: operation.keepId ? item._id : nextId()
                }, operation);
-            });
+            }));
          });
 
          static deleteDocuments = fn(async (ids, operation = {}) => {
@@ -519,7 +532,7 @@ export function installWriteWorld(fn, options = {}) {
                if (cancel.cancelCreate) {
                   return [];
                }
-               return data.map((item) => this.attach(name, item, operation));
+               return answerOrder(data.map((item) => this.attach(name, item, operation)));
             });
             this.updateEmbeddedDocuments = fn(async (name, updates) => {
                calls.push(`${documentName}.updateEmbeddedDocuments`);
@@ -964,6 +977,7 @@ export function installWriteWorld(fn, options = {}) {
       classes,
       byUuid,
       cancel,
+      createOrder,
       calls,
       batch,
       server,

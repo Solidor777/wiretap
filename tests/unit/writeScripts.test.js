@@ -219,10 +219,12 @@ describe('create_documents', () => {
             name: 'MOCK_a',
             type: 'npc',
             system: { hp: 3 },
+            _id: expect.stringMatching(/^[A-Za-z0-9]{16}$/),
          },
          {
             name: 'MOCK_b',
             type: 'npc',
+            _id: expect.stringMatching(/^[A-Za-z0-9]{16}$/),
          },
       ]);
       expect(result).toEqual([

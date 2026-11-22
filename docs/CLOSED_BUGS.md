@@ -121,3 +121,25 @@
   `tests/unit/writeCopyCreate.test.js` "copies an Adventure whose macros set is empty with every gate but the
   compendium gate closed". Before the fix every case but the denial failed with `Gate allowMacroExecution is closed`.
 
+## `create_documents` rows came back out of input order
+
+- **Was:** a `parentUuid` copy of `fromUuids: [A, B]` acked rows `[B, A]` in one of two live runs of
+  `tests/e2e/copyTools.spec.js` (MEASURED; the other run gave `[A, B]`). `runCreate` of `src/bridge/scripts/writes.js`
+  mapped the documents in the order Foundry answered, while its JSDoc promised data order. READ in the 14.364 tree:
+  the client keeps the server's order (`client/data/client-backend.mjs` 53-65 and 158-169); the server's
+  `_createDocuments` (`dist/database/backend/server-backend.mjs`, minified, offsets 4537-6250) builds each document
+  inside `Promise.all(data.map(async ...))` and pushes it only after `await createNewId()`, a database lookup
+  (`sublevel-database.mjs`, offset 203: `randomID(16)` until `!await this.has(id)`), so documents whose ids the server
+  generates come back in the order those lookups finish. With `keepId` and an `_id` there is no await before the push.
+  World, embedded and pack creates take that path (`common/abstract/document.mjs` 606-610 and 863-869 send all three
+  to `DatabaseBackend#create`), for `data` and `fromUuids` alike; idempotent creates and the backup restore, which send
+  ids under `keepId`, were not affected (INFERRED from the same code).
+- **Fix:** `runCreate` sends every document with an id under `keepId: true`: the kept `_id` when the call has `keepId`,
+  else a fresh `foundry.utils.randomID()` in place of any `_id` the data holds (the server ignores that `_id` without
+  `keepId`, so the caller-facing meaning of `keepId` is unchanged). It then matches the created documents to the data
+  by id, so row i is data i whatever order Foundry answers in. `refuseTakenIds` and the ack shape are unchanged.
+- **Verified:** `tests/unit/writeCreate.test.js` "createDocuments: rows follow the order of the data" (world,
+  embedded, pack and keepId creates with `world.createOrder.reverse`, which makes the mocked server answer in reverse,
+  and a data `_id` replaced without keepId). Before the fix all five failed (the order cases with
+  `[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]`); after it they pass. Not re-measured on the live world here.
+

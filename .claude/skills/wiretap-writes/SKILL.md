@@ -74,8 +74,11 @@ per call; a parse failure is `ARGS_INVALID` naming the index).
 - `parentUuid` creates embedded documents (`createEmbeddedDocuments`); `pack` creates in a
   compendium (`documentClass.createDocuments(.., { pack })`); neither creates in the world. Result: one
   `{ uuid, name, type }` per document (a dry run has `uuid: null` and `dryRun: true`), shaped by `writeAck.js`
-  `ackDocuments`. `paths` adds a read-back of those paths per created document (`attachReadback`;
-  `checkReadbackPaths` bounds them).
+  `ackDocuments`. Row i is data i: Foundry's server answers a create in the order its `createNewId` lookups finish
+  (`dist/database/backend/server-backend.mjs` `_createDocuments`; world, embedded and pack alike), so `runCreate`
+  sends every document with an id under `keepId: true` (the kept `_id` with `keepId`, else a fresh
+  `foundry.utils.randomID()` in place of any `_id` in the data) and matches the answer to the data by id. `paths`
+  adds a read-back of those paths per created document (`attachReadback`; `checkReadbackPaths` bounds them).
 - `update_documents({ updates[1..200], dryRun?, paths? })`: each entry is one patch `{ uuid, path, value?, op? }`;
   entries with one `uuid` form that document's update. `value` is JSON text; `op` is `set` (default), `replace`
   (Foundry's `ForcedReplacement`) or `delete` (`ForcedDeletion`; takes no `value`); `op` is the only way to an operator
@@ -112,15 +115,8 @@ bridge (at most 10 failures, path and message bounded) and `formatBridgeError` p
 
 ## Strict arguments
 
-Definitions carry `additionalProperties: false` at the root; both validators REJECT an undeclared argument (client
-`shared/schemaValidate.js`, sidecar zod `.strict()` via `argumentSchema` in `server/toolRegistry.ts`); the client's
-`listedNode` emits that keyword so both sides measure the same bytes. A handler never sees an undeclared key inside an
-entry (the sidecar's zod parse and the client's validated copy both drop it), so `batch` sets the definition flag
-`strictNested: true`: every object below the root refuses an undeclared key on both validators, and the listed schema
-omits the nested `additionalProperties` (strict entries would list at 880 B, plus `required` 915 B, plus an `op` enum
-and `maxLength` about 70 B more, over 800 B). The flag is validated in `shared/scripts.js`, part of `schemaSignature`,
-and the sidecar's zod objects are `.strict()` with the JSON key overridden to `undefined`. Tests: `batchHandler.test.js`,
-`schemaValidate.test.js`, `schemaStrict.test.js`, `writeToolsB.test.js` ("undeclared keys in batch entries").
+Both validators reject an undeclared argument at the root, and `batch` (`strictNested: true`) also below it. Read
+references/strict-arguments.md before changing either validator, `strictNested` or a write tool's schema.
 
 ## replace_document (`writeReplace.js`, handler `replaceDocument.js`)
 
@@ -224,7 +220,7 @@ strict batch entries (800 B limit).
 
 Unit over `mockWriteWorld.js` (its `MockValidationError` reproduces the 14.364 behaviour of an empty
 `getAllFailures()`) and `mockFoundryData.js` (see `wiretap-write-guard`; models Foundry's operation preprocessing, `world.batch.failure = { index, phase }`,
-`world.cancel.{updateIds,deleteIds,createNames}`, `_id`-equality `database.get`, a server copy, `fromImport`,
+`world.cancel.{updateIds,deleteIds,createNames}`, `world.createOrder.reverse` (creates answered in reverse), `_id`-equality `database.get`, a server copy, `fromImport`,
 `canUserModify`): `writeCreate`, `writeCopy`, `writeCopyCreate` (references/copies.md), `writeUpdate`, `writeDelete`, `writeScripts`, `writeReplace*`, `writeBatch*`,
 `writeActAs`, `writeIdempotency*`, `writePhaseB`, `handleInput`, plus handle cases in `handles.test.js`. Integration `writeToolsB.test.js` (sidecar with a fake client,
 including handle inputs). e2e `tests/e2e/writeTools.spec.js` (live world, throwaway `Wiretap E2E ` documents):

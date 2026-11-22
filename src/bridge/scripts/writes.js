@@ -578,28 +578,46 @@ export async function prepareCreate({
 
 /**
  * Write a prepared creation through the Foundry document APIs.
+ *
+ * Foundry answers a create in an order of its own: the server's `_createDocuments`
+ * (`dist/database/backend/server-backend.mjs`) builds each document inside `Promise.all`, pushing it only after
+ * `await createNewId()` (`sublevel-database.mjs`, a database lookup) resolves, so documents whose ids the server
+ * generates come back in the order those lookups finish. World, embedded and pack creates all take that path. Every
+ * document is therefore sent with an id: the kept `_id` under `keepId`, otherwise a fresh `foundry.utils.randomID()`
+ * in place of any `_id` the data holds, which is what the server would do (it ignores that `_id` without `keepId`).
+ * The created documents are then matched to the data by id.
  * @param {CreatePlan} plan - A plan from `prepareCreate` with no replay.
  * @param {boolean} [readback] - Add the canonical export of each created document as `exported`.
- * @returns {Promise<CreatedRow[]>} One row per created document, in the order of the data.
+ * @returns {Promise<CreatedRow[]>} One row per document, row i for data i, whatever order Foundry answers in.
  * @throws {ScriptError} `WRITE_NOT_APPLIED` when Foundry created fewer documents than asked.
  */
 export async function runCreate(plan, readback = false) {
    /** @type {Function} The configured document class. */
    const documentClass = CONFIG[plan.documentName].documentClass;
-   /** @type {{ uuid: string }[]} The documents that were created. */
+   /** @type {Record<string, unknown>[]} The data to send, each with the id its document is created with. */
+   const payload = plan.payload.map((item) => ({
+      ...item,
+      _id: plan.keepId && typeof item._id === 'string' && item._id !== '' ? item._id : foundry.utils.randomID(),
+   }));
+   /** @type {{ id: string, uuid: string }[]} The documents that were created, in the order Foundry answered. */
    const created = plan.target.parent
-      ? await plan.target.parent.createEmbeddedDocuments(plan.documentName, plan.payload, { keepId: plan.keepId })
-      : await documentClass.createDocuments(plan.payload, {
-         keepId: plan.keepId,
+      ? await plan.target.parent.createEmbeddedDocuments(plan.documentName, payload, { keepId: true })
+      : await documentClass.createDocuments(payload, {
+         keepId: true,
          ...(plan.target.pack === null ? {} : { pack: plan.target.pack }),
       });
-   if (created.length !== plan.payload.length) {
+   if (created.length !== payload.length) {
       throw new ScriptError(
          'WRITE_NOT_APPLIED',
-         `${created.length} of ${plan.payload.length} documents were created; a hook or the system cancelled the rest.`,
+         `${created.length} of ${payload.length} documents were created; a hook or the system cancelled the rest.`,
       );
    }
-   return created.map((document) => {
+   /** @type {Map<string, { id: string, uuid: string }>} The created documents by id. */
+   const byId = new Map(created.map((document) => [
+      document.id,
+      document,
+   ]));
+   return payload.map((item) => byId.get(item._id)).map((document) => {
       /** @type {CreatedRow} The acknowledgement of this document. */
       const row = rowOf(document, false);
       if (readback) {
