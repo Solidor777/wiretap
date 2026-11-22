@@ -279,87 +279,96 @@ test.describe('wiretap core read tools', () => {
       expect(Object.hasOwn(exported, 'version')).toBe(false);
    });
 
-   test('ifChanged on a parent sees an embedded update, an embedded create and an embedded delete', async ({ page }) => {
-      const uuid = await createRecordedActor(page);
-      // One embedded item, removed with the recorded actor.
-      const itemId = await page.evaluate(async (actorUuid) => {
-         const actor = await fromUuid(actorUuid);
-         const itemType = game.documentTypes.Item.find((type) => type !== CONST.BASE_DOCUMENT_TYPE);
-         const [item] = await actor.createEmbeddedDocuments('Item', [
-            {
-               name: 'Wiretap E2E stamp item',
-               type: itemType,
-            },
-         ]);
-         return item.id;
-      }, uuid);
-      // Evidence for the assertion messages, not an assertion.
-      /** @type {{ update?: boolean, create?: boolean, delete?: boolean }} Whether a step moved _stats.modifiedTime. */
-      const stampMoved = {};
-      /** @type {string | undefined} The id of the embedded effect the create step makes and the delete step removes. */
-      let effectId;
-
-      /**
-       * Run one embedded mutation in the page and assert that the parent's version sees it: a read with the version
-       * from before is unchanged until the mutation and changed after it.
-       * @param {'update' | 'create' | 'delete'} step - The mutation to run.
-       * @returns {Promise<void>}
-       */
-      async function expectVersionSees(step) {
-         const before = await readJson({ uuid });
-         const control = await readJson({
-            uuid,
-            ifChanged: before.version,
-         });
-         expect(control, `${step}: ${JSON.stringify(stampMoved)}`).toEqual({ unchanged: true });
-         const outcome = await page.evaluate(
-            async ({ actorUuid, kind, ids }) => {
-               const actor = await fromUuid(actorUuid);
-               const stamp = actor._stats.modifiedTime;
-               /** @type {string | undefined} The id of an effect this step creates. */
-               let created;
-               if (kind === 'update') {
-                  await actor.items.get(ids.item).update({ name: 'Wiretap E2E stamp item renamed' });
-               } else if (kind === 'create') {
-                  const [effect] = await actor.createEmbeddedDocuments('ActiveEffect', [
-                     {
-                        name: 'Wiretap E2E stamp effect',
-                        type: 'effect',
-                     },
-                  ]);
-                  created = effect.id;
-               } else {
-                  await actor.deleteEmbeddedDocuments('ActiveEffect', [ids.effect]);
-               }
-               return {
-                  moved: actor._stats.modifiedTime !== stamp,
-                  created,
-               };
-            },
-            {
-               actorUuid: uuid,
-               kind: step,
-               ids: {
-                  item: itemId,
-                  effect: effectId,
+   test(
+      'ifChanged on a parent sees an embedded update, an embedded create and an embedded delete',
+      async ({ page }) => {
+         const uuid = await createRecordedActor(page);
+         // One embedded item, removed with the recorded actor.
+         const itemId = await page.evaluate(async (actorUuid) => {
+            const actor = await fromUuid(actorUuid);
+            const itemType = game.documentTypes.Item.find((type) => type !== CONST.BASE_DOCUMENT_TYPE);
+            const [item] = await actor.createEmbeddedDocuments('Item', [
+               {
+                  name: 'Wiretap E2E stamp item',
+                  type: itemType,
                },
-            },
-         );
-         stampMoved[step] = outcome.moved;
-         effectId = outcome.created ?? effectId;
-         const after = await readJson({
-            uuid,
-            ifChanged: before.version,
-         });
-         expect(after, `${step}: ${JSON.stringify(stampMoved)}`).not.toEqual({ unchanged: true });
-         expect(after.version, `${step}: ${JSON.stringify(stampMoved)}`).not.toBe(before.version);
-      }
+            ]);
+            return item.id;
+         }, uuid);
+         // Evidence for the assertion messages, not an assertion.
+         /**
+          * Whether a step moved _stats.modifiedTime.
+          * @type {{ update?: boolean, create?: boolean, delete?: boolean }}
+          */
+         const stampMoved = {};
+         /**
+          * The id of the embedded effect the create step makes and the delete step removes.
+          * @type {string | undefined}
+          */
+         let effectId;
 
-      await expectVersionSees('update');
-      await expectVersionSees('create');
-      await expectVersionSees('delete');
-      e2eLog(`parent _stats.modifiedTime moved per embedded mutation: ${JSON.stringify(stampMoved)}`);
-   });
+         /**
+          * Run one embedded mutation in the page and assert that the parent's version sees it: a read with the version
+          * from before is unchanged until the mutation and changed after it.
+          * @param {'update' | 'create' | 'delete'} step - The mutation to run.
+          * @returns {Promise<void>}
+          */
+         async function expectVersionSees(step) {
+            const before = await readJson({ uuid });
+            const control = await readJson({
+               uuid,
+               ifChanged: before.version,
+            });
+            expect(control, `${step}: ${JSON.stringify(stampMoved)}`).toEqual({ unchanged: true });
+            const outcome = await page.evaluate(
+               async ({ actorUuid, kind, ids }) => {
+                  const actor = await fromUuid(actorUuid);
+                  const stamp = actor._stats.modifiedTime;
+                  /** @type {string | undefined} The id of an effect this step creates. */
+                  let created;
+                  if (kind === 'update') {
+                     await actor.items.get(ids.item).update({ name: 'Wiretap E2E stamp item renamed' });
+                  } else if (kind === 'create') {
+                     const [effect] = await actor.createEmbeddedDocuments('ActiveEffect', [
+                        {
+                           name: 'Wiretap E2E stamp effect',
+                           type: 'effect',
+                        },
+                     ]);
+                     created = effect.id;
+                  } else {
+                     await actor.deleteEmbeddedDocuments('ActiveEffect', [ids.effect]);
+                  }
+                  return {
+                     moved: actor._stats.modifiedTime !== stamp,
+                     created,
+                  };
+               },
+               {
+                  actorUuid: uuid,
+                  kind: step,
+                  ids: {
+                     item: itemId,
+                     effect: effectId,
+                  },
+               },
+            );
+            stampMoved[step] = outcome.moved;
+            effectId = outcome.created ?? effectId;
+            const after = await readJson({
+               uuid,
+               ifChanged: before.version,
+            });
+            expect(after, `${step}: ${JSON.stringify(stampMoved)}`).not.toEqual({ unchanged: true });
+            expect(after.version, `${step}: ${JSON.stringify(stampMoved)}`).not.toBe(before.version);
+         }
+
+         await expectVersionSees('update');
+         await expectVersionSees('create');
+         await expectVersionSees('delete');
+         e2eLog(`parent _stats.modifiedTime moved per embedded mutation: ${JSON.stringify(stampMoved)}`);
+      },
+   );
 
    test('enumerates every document type and reads one document of each type and subtype present', async ({ page }) => {
       await createRecordedActor(page);
