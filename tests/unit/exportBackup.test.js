@@ -145,7 +145,12 @@ describe('exportBackup', () => {
       });
    });
 
-   it('refuses more than 10000 documents and more than 64000000 bytes before sending anything', async () => {
+   // Each cap is reached only by its smallest case: 10001 mocked actors, and one export of more than 64000000 bytes.
+   // Measured: about 2 s alone and 2.5 to 5.1 s in a full default-worker run, past the 5 s default limit. The limit is
+   // about three times the worst full run.
+   it('refuses more than 10000 documents and more than 64000000 bytes before sending anything', {
+      timeout: 15000,
+   }, async () => {
       installBackupWorld(vi.fn, { extraActors: 10_001 - 6 });
       const invocation = fakeInvocation();
       await expect(exportBackup(

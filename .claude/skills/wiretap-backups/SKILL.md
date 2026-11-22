@@ -211,8 +211,9 @@ parts fit, the file store and the client halves.
 ## Tests
 
 Unit: `backupFormat`, `bridgeSettings`, `bridgeSettings.client`, `backups` (the store over a scratch root with
-`fakeTrash`; the 1,001-file header-read cap test has a 30 s limit), `backupTools` (a fake `BackupBridge`, the real
-store), `backupSelection` and `exportBackup` (over `mockBackupWorld.js`), `pieceWriter`, `lineReader`, `pieces`,
+`fakeTrash`; the 1,001-file header-read cap test has a 60 s limit), `backupTools` (a fake `BackupBridge`, the real
+store), `backupSelection` and `exportBackup` (over `mockBackupWorld.js`; the count and byte cap test has a 15 s
+limit), `pieceWriter`, `lineReader`, `pieces`,
 `restoreBackup`, `secretCarry`, `foundryBridge.pieces` (the sidecar bridge's piece events and `sendPiece`),
 `foundryBridge.backupOps` (the client op table), `noPermanentDelete`; restore mode in `writeReplaceRestore`,
 `exportForBackup` in `canonicalBackup`. `backupTestHelpers.js` holds `scratchRoot(prefix)` and `fakeTrash(binDir)`;

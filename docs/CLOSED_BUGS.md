@@ -211,3 +211,26 @@
   failed before `runFixtures` existed and passes now. After the fix the file takes 2.3 s alone and 10.0 to 11.6 s in a
   full run (it took 21 to 23 s before). The skills test takes 0.6 s or less in a full run. Three default-worker
   `npm test` runs passed: 2956 passed and 2 skipped in each (`debug/dumps/flaky-ctx-npmtest-{1,2,3}.txt`).
+
+## searchDocuments.test.js scan-cap test timed out inside a default-worker npm test
+
+- **Was:** a default-worker `npm test` failed in `tests/unit/searchDocuments.test.js` ("search_documents work bounds >
+  stops after the scan cap, reports cut and scanned, and a cursor resumes to cover every document") with "Test timed
+  out in 5000ms" in 2 of 5 full runs (`debug/dumps/m15a-npmtest-2..6.txt`). Found in M15a.
+- **Cause (MEASURED with vitest JSON durations and temporary timing written to `debug/dumps/`):** needless work in
+  the test. It built 4,500 actors and drained them 80 rows a call: 57 calls, each of which orders the whole
+  collection with a yield every 25 documents, 13,790 yields in all. The test took 306 to 1,168 ms alone and 2,165 to
+  5,198 ms in six full runs, the same on `main` (743, 306, 341 ms alone; 5,198 failed, 4,380 and 3,701 ms in full runs)
+  as on this branch (1,168, 336, 310 ms; 2,165, 3,624 and 4,116 ms), so the M15a content version is not the cost:
+  `search.js` and `searchDocuments.js` are unchanged since `main` and call neither `shape.compact` nor
+  `contentVersion`. In full runs the same drain took 2.0 to 3.0 s, against 0.25 s alone.
+- **Fix:** the test holds `SEARCH_SCAN_MAX` + `SEARCH_MAX_LIMIT` actors (2,100: one page more than the scan cap, the
+  least that makes the first call stop at the cap) and drains them at `SEARCH_MAX_LIMIT` rows a call: 21 calls and
+  2,684 yields. Its assertions are unchanged. The drain takes 0.05 s alone and 0.49 to 0.51 s in full runs; the test
+  takes 86 ms alone. In the same work, two backup tests measured near their limits got a limit with the measured
+  reason in a comment: "stops reading headers after 1000" (`tests/unit/backups.test.js`, 11 to 31 s in full runs, one
+  on `main` failed at 31 s against its 30 s limit; now 60 s) and "refuses more than 10000 documents and more than 64000000
+  bytes" (`tests/unit/exportBackup.test.js`, up to 5.1 s in a full run; now 15 s). Their fixtures are the least
+  that reach each cap.
+- **Verified:** three default-worker `npm test` runs passed: 2956 passed and 2 skipped in each
+  (`debug/dumps/flaky-search-npmtest-{1,2,3}.txt`).

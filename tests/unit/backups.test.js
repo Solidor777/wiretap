@@ -479,9 +479,10 @@ describe('list', () => {
       });
    });
 
-   // The cap is only reachable with 1001 real files on disk, so this test writes 1001 files and reads 1000 headers:
-   // about 2.5 s on an idle Windows machine, which passes the 5 s default limit when other test runs share the CPU.
-   it('stops reading headers after 1000', { timeout: 30000 }, () => {
+   // The cap is only reachable with 1001 real files on disk, so this test writes 1001 files and reads 1000 headers.
+   // Measured on Windows with real-time antivirus on: 4.6 to 5.5 s with this file run alone, and 11 to 31 s in a full
+   // default-worker run, where the header reads alone took up to 29 s. The limit is about twice the worst full run.
+   it('stops reading headers after 1000', { timeout: 60000 }, () => {
       /** @type {Fixture} A store over a fresh scratch root. */
       const fixture = setup();
       /** @type {ResolvedFolder} A named folder. */
