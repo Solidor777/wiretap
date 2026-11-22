@@ -68,9 +68,9 @@ per call; a parse failure is `ARGS_INVALID` naming the index).
   neither." (checked in the handler: `required` is `['documentName']`; `handleArgs` stays `['data']`). The handler then
   builds the data (`parseDataObjects`, or `copyDataFromUuids` with `keepId`), checks the read-back paths and calls
   `ctx.core.createDocuments` as for `data`, so a copy meets every gate, guard, validation, `actAs`, `dryRun` and
-  `refuseTakenIds` check the same data would. A copy carries no `ownership`, `folder`, `sort` or `flags.wiretap`; an
-  Adventure copy always needs `allowMacroExecution`. Read references/copies.md (how a copy is built, its refusals, its
-  hash) before changing `writeCopy.js` or the `fromUuids` path.
+  `refuseTakenIds` check the same data would. A copy carries no `ownership`, `folder`, `sort` or `flags.wiretap`.
+  Read references/copies.md (how a copy is built, its refusals, gates, bounds, hash and retries) before changing
+  `writeCopy.js` or the `fromUuids` path.
 - `parentUuid` creates embedded documents (`createEmbeddedDocuments`); `pack` creates in a
   compendium (`documentClass.createDocuments(.., { pack })`); neither creates in the world. Result: one
   `{ uuid, name, type }` per document (a dry run has `uuid: null` and `dryRun: true`), shaped by `writeAck.js`

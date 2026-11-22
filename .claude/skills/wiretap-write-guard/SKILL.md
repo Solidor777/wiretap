@@ -54,7 +54,10 @@ A write that stores code which later runs needs `allowMacroExecution`, the gate 
     unwrapped by `DataFieldOperator.get`) is `script` on a target whose stored `_source.type` is not `script`. The type
     rule is change-only: re-saving a script Macro's type is allowed. A create's `type: 'script'` with no `command`
     stores the default empty command and is not gated.
-  - `Adventure`: any key writing `macros` (importing the adventure creates those Macros).
+  - `Adventure`: a key writing `macros` whose value, an operator unwrapped, is not an empty array
+    (`writesAdventureMacros`; importing the adventure creates those Macros). `macros: []`, by create, update `set` or
+    update `replace`, is not gated, so a `fromUuids` copy of an Adventure with no macros is not; a non-empty list, a
+    dotted key into the set and a deletion (null) are gated.
 - `writesRegionScript(intent)`: each create or replace value (with `CONFIG[documentName].documentClass`, no stored
   source) or each target's cleaned changes (with `target.document.constructor` and `_source`) is copied by
   `writtenData` (a `ForcedReplacement` becomes its value, a `ForcedDeletion` becomes null) and walked by

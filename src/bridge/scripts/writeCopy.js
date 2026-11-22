@@ -7,12 +7,12 @@
  * and this module's copy are built on `ClientDocument#toCompendium(pack, { clearSort = true, clearFolder = false,
  * clearFlags = false, clearSource = true, clearOwnership = true, clearState = true, keepId = false })`
  * (`client/documents/abstract/client-document.mjs` :1113-1134). It starts from `toObject()` (embedded documents
- * included), deletes `_id` unless `keepId`, the top-level
- * `sort` when `clearSort`, `folder` when `clearFolder` and `active` when `clearState`. With `clearSource` it deletes
- * `_stats.compendiumSource`, `duplicateSource` and `exportSource`, and with `clearOwnership` it deletes `author`, of the
- * document and of every embedded document (`Document._clearFieldsRecursively`, `common/abstract/document.mjs`
- * :1311-1330, which follows `hierarchy` only). With `clearOwnership` it also replaces the `ownership` of every such
- * document with `{ default }`, or drops it when it has no numeric `default`: the key stays (:1125-1132).
+ * included), deletes `_id` unless `keepId`, the top-level `sort` when `clearSort`, `folder` when `clearFolder` and
+ * `active` when `clearState`. With `clearSource` it deletes `_stats.compendiumSource`, `duplicateSource` and
+ * `exportSource`, and with `clearOwnership` it deletes `author`, of the document and of every embedded document
+ * (`Document._clearFieldsRecursively`, `common/abstract/document.mjs` :1311-1330, which follows `hierarchy` only). With
+ * `clearOwnership` it also replaces the `ownership` of every such document with `{ default }`, or drops it when it has
+ * no numeric `default`: the key stays (:1125-1132).
  *
  * - A pack import of a world or pack document returns `document.toCompendium(pack, options)`, with `clearOwnership`
  * defaulting to true for a world pack (`client/documents/collections/compendium-collection.mjs:469-474`); `folder` is

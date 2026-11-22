@@ -38,16 +38,29 @@ Current-state reference for the copy half of `create_documents`. The argument ru
 - A copy meets the gates the same data would: a pack target needs `allowCompendiumWrites` (the same `GATE_DENIED`
   text as for `data`), and so on.
 - An Adventure: Foundry's `toObject()` always holds a `macros` key (`common/documents/adventure.mjs:47`, a SetField;
-  `ArrayField` is required with initial `[]`, `common/data/fields.mjs:2289-2297`, `:2329-2333`). `guardWrite`'s
-  Adventure macro check is key presence (`writesField(objects, 'macros')`, `writeGuard.js`), so every Adventure copy
-  needs `allowMacroExecution`, even one with an empty `macros` set. An Adventure given as `data` with no `macros` key
-  does not.
+  `ArrayField` is required with initial `[]`, `common/data/fields.mjs:2289-2297`, `:2329-2333`). `guardWrite` asks for
+  `allowMacroExecution` only when the `macros` set holds a macro (`writesAdventureMacros`, `writeGuard.js`; see
+  `wiretap-write-guard`), so an Adventure copy with an empty `macros` set needs only the gates its target needs
+  (`allowCompendiumWrites` for a pack), and one whose set holds a macro is `GATE_DENIED` while the gate is closed.
+
+## Bounds
+
+A copy has no per-call byte bound. `WRITE_DATA_MAX_BYTES` (200,000 B) is checked only on `data` text, by
+`checkDataBytes` in `parseDataObjects` (`writeArgs.js`), because it bounds what an agent sends; a copy sends only
+uuids (each at most 256 characters), and the cap of 50 `fromUuids` is its bound.
 
 ## Idempotency
 
 With `idempotencyKey`, the handler passes `requestData: { fromUuids }`, so the hash is
 `[documentName, parentUuid ?? null, keepId, { fromUuids }]`: a retry after the source was edited replays the first
 result, and the same key with other `fromUuids` is `IDEMPOTENCY_CONFLICT`.
+
+A keyed retry rebuilds the copies (`copyDataFromUuids`) and judges them before the replay lookup, the same order as the
+`data` path: `prepareCreate` runs `refuseUnsafeData`, resolves the target, runs `guardWrite` on the copied data and,
+with `keepId`, `refuseTakenIds`, and only then calls `applyIdempotency`. So a retry replays only while every source
+still resolves and is readable and its copy passes that guard; otherwise it returns that refusal and writes nothing.
+Foundry validation and the second `guardWrite` on the cleaned data run after the lookup, so a replay does not run them
+(a replay still runs `checkActAs` against the earlier documents).
 
 ## Tests
 
