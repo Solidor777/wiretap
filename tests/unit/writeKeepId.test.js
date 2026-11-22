@@ -132,6 +132,27 @@ describe('keepId never overwrites a document that exists', () => {
       expect(world.classes.Actor.createDocuments).not.toHaveBeenCalled();
    });
 
+   it('replays a keyed keepId retry whose ids the first call took, and writes once', async () => {
+      /** @type {object} The arguments of both calls: an explicit free id kept under one key. */
+      const params = {
+         documentName: 'Actor',
+         data: [{
+            _id: 'MOCKFREEID000003',
+            name: 'MOCK_kept',
+            type: 'npc',
+         }],
+         keepId: true,
+         idempotencyKey: 'MOCK-keep-1',
+      };
+      /** @type {object[]} The rows of the first call. */
+      const first = await createDocuments(params);
+      expect(first[0].uuid).toBe('Actor.MOCKFREEID000003');
+      /** @type {object[]} The rows of the retry. */
+      const second = await createDocuments(params);
+      expect(second).toEqual(first);
+      expect(world.classes.Actor.createDocuments).toHaveBeenCalledTimes(1);
+   });
+
    it('lets a free id through, and ignores the id of the data without keepId', async () => {
       expect(
          await outcome({

@@ -183,7 +183,9 @@ documents" and the remedy (a new key); the missing documents are never created b
 `IDEMPOTENCY_UNAVAILABLE`. The hash reads `[documentName, parentUuid ?? null, keepId, requestData ?? data]`
 (`requestData`: a copy's `{ fromUuids }`). `withKeyLock` serializes calls per class, parent and key. Retention 24 h by
 `_stats.createdTime`. A class with no `flags` field (Setting) cannot carry the record: `prepareCreate` refuses an
-`idempotencyKey` there with `ARGS_INVALID`, as it does for a pack.
+`idempotencyKey` there with `ARGS_INVALID`, as it does for a pack. Order in `prepareCreate`: `refuseUnsafeData`, target,
+`guardWrite`, the key lookup, then (with `keepId`) `refuseTakenIds`, so a keyed `keepId` retry whose ids its first call
+took replays, and a call with no matching record still meets `refuseTakenIds` before any write.
 
 ## Delete and replace gates, operators, guard rules
 

@@ -457,9 +457,6 @@ export async function prepareCreate({
       ...(documentName === 'Setting' ? { settingTargets: data.map((item) => settingKeyOf(item.key)) } : {}),
       inPack: target.inPack,
    });
-   if (keepId) {
-      await refuseTakenIds(documentName, target, data);
-   }
    /** @type {Record<string, unknown>[]} The data with the idempotency record added. */
    let records = data;
    /** @type {boolean} Whether the documents are created with the ids the idempotency records name. */
@@ -510,6 +507,11 @@ export async function prepareCreate({
       }
       records = idempotent.records;
       keptIds = true;
+   }
+   // The taken-id check follows the key lookup: a keyed retry finds the ids its first call took and replays above,
+   // while a call with no matching record is still refused here before any write.
+   if (keepId) {
+      await refuseTakenIds(documentName, target, data);
    }
    /** @type {Function} The configured document class. */
    const documentClass = CONFIG[documentName].documentClass;

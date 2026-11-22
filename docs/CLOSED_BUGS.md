@@ -234,3 +234,23 @@
   that reach each cap.
 - **Verified:** three default-worker `npm test` runs passed: 2956 passed and 2 skipped in each
   (`debug/dumps/flaky-search-npmtest-{1,2,3}.txt`).
+
+## A keyed keepId retry of create_documents was refused as an overwrite
+
+- **Was:** a `create_documents` retry with `keepId: true`, an explicit `_id` (in `data`, or the kept source id of a
+  `fromUuids` copy) and the same `idempotencyKey` was refused with `ARGS_INVALID` "keepId: <Class> '<id>' already
+  exists and would be overwritten" instead of replaying the first call's rows, as the tool description and the skill
+  say repeats do. MEASURED with `npx vitest run tests/unit/writeKeepId.test.js tests/unit/writeCopyCreate.test.js -t
+  "replays a keyed keepId"`: both second calls threw that `ARGS_INVALID` from `refuseTakenIds` (world Actor
+  `MOCKFREEID000003`; embedded Item `MOCKITEM00000002` copied under another actor). Found in M15a.
+- **Cause:** `prepareCreate` (`src/bridge/scripts/writes.js`) ran `refuseTakenIds` before `applyIdempotency` looked
+  the key up, so the documents the first call created made the retry look like an overwrite.
+- **Fix:** `refuseTakenIds` runs after the key lookup. A keyed retry whose key and request hash match stored records
+  returns the replay first; a call with no matching record (no key, or a key with no record yet) still meets
+  `refuseTakenIds` before any write. `refuseUnsafeData`, target resolution and the first `guardWrite` still run before
+  the lookup. The record, the hash and the ack are unchanged.
+- **Verified:** the two tests "replays a keyed keepId retry whose ids the first call took, and writes once"
+  (`tests/unit/writeKeepId.test.js`) and "replays a keyed keepId copy retry whose kept source id the first call took
+  under the parent" (`tests/unit/writeCopyCreate.test.js`) failed before the fix and pass now; "refuses on a dry run
+  too, and under an idempotency key" (a taken id with a key and no record) still passes. `npm test`: 133 files, 2958
+  passed and 2 skipped.

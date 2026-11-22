@@ -499,6 +499,34 @@ describe('create_documents with fromUuids', () => {
       expect(world.calls.slice(before).filter((name) => !name.endsWith('.get'))).toEqual([]);
    });
 
+   it('replays a keyed keepId copy retry whose kept source id the first call took under the parent', async () => {
+      /** @type {object} The actor that holds the source item. */
+      const holder = addActor('MOCK_holder');
+      /** @type {object} The source item, whose id is free under the target until the first copy. */
+      const item = world.addChild(holder, 'Item', {
+         _id: 'MOCKITEM00000002',
+         name: 'MOCK_item',
+         type: 'weapon',
+      });
+      /** @type {object} The actor that receives the copy. */
+      const target = addActor('MOCK_target');
+      /** @type {Record<string, unknown>} The arguments of both calls. */
+      const args = {
+         documentName: 'Item',
+         fromUuids: [item.uuid],
+         parentUuid: target.uuid,
+         keepId: true,
+         idempotencyKey: 'MOCK-copy-keep-1',
+      };
+      /** @type {Record<string, unknown>[]} The first result. */
+      const first = await create(args);
+      expect(first[0].uuid).toBe(`${target.uuid}.Item.MOCKITEM00000002`);
+      /** @type {Record<string, unknown>[]} The repeated result. */
+      const second = await create(args);
+      expect(second).toEqual(first);
+      expect(target.createEmbeddedDocuments).toHaveBeenCalledTimes(1);
+   });
+
    it('adds read-back for paths', async () => {
       /** @type {object} The document copied. */
       const source = addActor('MOCK_actor', { system: { hp: 3 } });
