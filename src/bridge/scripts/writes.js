@@ -26,6 +26,7 @@ import { OPERATOR_VALUE_MESSAGE, UNSAFE_SEGMENTS, findUnsafeValue, groupWrites }
 import { cleanForLog } from '$shared/logText.js';
 import { exportDocument, resolveDocument } from '~/bridge/scripts/canonical.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
+import { createId } from '~/bridge/scripts/writeArgs.js';
 import { applyIdempotency, withKeyLock } from '~/bridge/scripts/writeIdempotency.js';
 import { checkActAs, resolveActAs } from '~/bridge/scripts/writeActAs.js';
 import { FLAGS_KEY } from '$shared/writeKeys.js';
@@ -597,7 +598,7 @@ export async function runCreate(plan, readback = false) {
    /** @type {Record<string, unknown>[]} The data to send, each with the id its document is created with. */
    const payload = plan.payload.map((item) => ({
       ...item,
-      _id: plan.keepId && typeof item._id === 'string' && item._id !== '' ? item._id : foundry.utils.randomID(),
+      _id: createId(item, plan.keepId),
    }));
    /** @type {{ id: string, uuid: string }[]} The documents that were created, in the order Foundry answered. */
    const created = plan.target.parent

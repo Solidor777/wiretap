@@ -1,7 +1,7 @@
 /**
  * Argument helpers shared by the write scripts: parsing the JSON text the argument-schema subset carries (it has no
- * free-form object or any-typed value), bounding the total data, and checking read-back paths before anything is
- * written.
+ * free-form object or any-typed value), bounding the total data, checking read-back paths before anything is
+ * written, and choosing the id a created document is sent with.
  */
 
 import { getBudget } from '$shared/budgets.js';
@@ -20,6 +20,17 @@ export function shapeRefusal(text) {
       return new ScriptError(text.slice(0, split), text.slice(split + 2));
    }
    return new ScriptError('PATH_INVALID', text);
+}
+
+/**
+ * Choose the id a document is created with: the `_id` of its data when the caller keeps ids and gave a non-empty one,
+ * otherwise a fresh `foundry.utils.randomID()` (which is what the server assigns when the `_id` is not kept).
+ * @param {Record<string, unknown>} item - The data of the document.
+ * @param {boolean} keepId - Whether the caller asked to keep the `_id` of the data.
+ * @returns {string} The id to send under `keepId: true`.
+ */
+export function createId(item, keepId) {
+   return keepId && typeof item._id === 'string' && item._id !== '' ? item._id : foundry.utils.randomID();
 }
 
 /**

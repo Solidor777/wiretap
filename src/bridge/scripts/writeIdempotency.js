@@ -32,6 +32,7 @@
 
 import { hashText } from '~/bridge/scripts/contentHash.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
+import { createId } from '~/bridge/scripts/writeArgs.js';
 
 /**
  * The accepted form of an idempotency key.
@@ -120,7 +121,7 @@ export async function withKeyLock(scope, task) {
  */
 function withRecord(item, record, keepId) {
    /** @type {string} The id the document is created with. */
-   const id = keepId && typeof item._id === 'string' && item._id !== '' ? item._id : foundry.utils.randomID();
+   const id = createId(item, keepId);
    return {
       ...item,
       _id: id,
