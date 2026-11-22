@@ -20,6 +20,7 @@ paths:
   - "tests/unit/writeCopy*.test.js"
   - "tests/unit/mockWriteWorld.js"
   - "tests/e2e/writeTools.spec.js"
+  - "tests/e2e/copyTools.spec.js"
   - "tests/e2e/writeHelpers.js"
   - "server/handleInput.ts"
   - "tests/unit/writeReplace*.test.js"

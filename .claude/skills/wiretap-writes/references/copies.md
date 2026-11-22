@@ -78,3 +78,6 @@ Foundry validation and the second `guardWrite` on the cleaned data run after the
   without a key, `keepId` and a taken `_id`, read-back, both Adventure macro cases, the definition bounds.
 - `tests/integration/copyTools.test.js`: the real shipped scripts behind a fake GM through the sidecar and the SDK
   client: a 100 KB copy whose body never reaches the agent, the two-call actor build, a missing source.
+- `tests/e2e/copyTools.spec.js`: the live world: two world Items copied onto an Actor (rows in `fromUuids` order, new
+  ids, no `flags.wiretap`, sources unchanged, refusals, a dry run), and a world Item copied into a throwaway world pack
+  and back (`folder` null, `sort` 0, ownership equal to a plain GM create's, `compendiumSource` the pack uuid).
