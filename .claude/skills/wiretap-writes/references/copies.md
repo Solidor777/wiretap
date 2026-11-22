@@ -17,7 +17,12 @@ Current-state reference for the copy half of `create_documents`. The argument ru
   - every `flags.wiretap` removed (`stripWiretapFlags` of `writeReplace.js`), so a source's idempotency record never
     passes on, with or without an `idempotencyKey` on the copy call.
 - So a source that carries `ownership`, `folder` or `sort` copies with every gate closed, and the copy gets the
-  ownership a create with no `ownership` gets.
+  ownership a create with no `ownership` gets: the schema initial (`{ default: 0 }` for most classes) plus the
+  creating user as OWNER, which the server's `_preCreate` adds whenever the document has an `ownership` value that
+  does not name that user (`dist/database/backend/server-document.mjs`, minified, offset 16411; READ). MEASURED on the
+  live world (14.364, `tests/e2e/copyTools.spec.js` log lines): a world copy of a pack Item and a plain GM create with
+  no `ownership` both store `{ default: 0, <GM id>: 3 }`, the same as Foundry's world import grants. Embedded copies'
+  stored ownership is not measured (Inferred: the server runs the same `_preCreate` for them).
 - Built from the raw document, not the redacted read export: secret-named keys copy unchanged, as Foundry's own import
   copies them; every read of the copy is redacted.
 

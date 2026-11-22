@@ -143,3 +143,19 @@
   and a data `_id` replaced without keepId). Before the fix all five failed (the order cases with
   `[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]`); after it they pass. Not re-measured on the live world here.
 
+## The copy header described a create's ownership wrongly
+
+- **Was:** the header of `src/bridge/scripts/writeCopy.js` said a create whose data holds no `ownership` gets only the
+  schema initial `{ default: NONE }`, and that a copy differs there from Foundry's world import, which grants the
+  importing user OWNER; `references/copies.md` of the `wiretap-writes` skill did not say what that ownership is. On the
+  live titan world (14.364) a world Item the GM created from data with no `ownership`, and a world copy made by
+  `fromUuids` from a pack document, both store `{ default: 0, <GM user id>: 3 }` (MEASURED by
+  `tests/e2e/copyTools.spec.js`, its log lines). READ: the Foundry server's `_preCreate`
+  (`dist/database/backend/server-document.mjs`, minified, offset 16411) sets `ownership.<creating user id>` to OWNER
+  when the document has an `ownership` value that does not name the user. The copy carries no `ownership` key, so it
+  gets what a plain create gets and no gate was affected; only the text was wrong.
+- **Fix:** the `writeCopy.js` header states the server's OWNER grant with that citation and that a copy, like a plain
+  create, ends up with the ownership Foundry's world import grants; `references/copies.md` states the stored value,
+  measured and read. No code changed. Embedded copies' stored ownership is not measured (Inferred: the server runs the
+  same `_preCreate` for them).
+

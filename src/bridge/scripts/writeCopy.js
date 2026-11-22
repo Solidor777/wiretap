@@ -37,12 +37,16 @@
  * (`client/documents/roll-table.mjs:510-518`), and `Scene` deletes `fog.reset`, sets `navigation` to false and deletes
  * `navOrder` (`client/documents/scene.mjs:1554-1562`). Each runs whenever the matching option is not false.
  *
- * A create whose data holds no `ownership` gets the schema initial: `DocumentOwnershipField` starts as `{ default:
- * NONE }` (`common/data/fields.mjs:3784-3790`), a JournalEntryPage as `{ default: INHERIT }`
+ * A create whose data holds no `ownership` starts from the schema initial: `DocumentOwnershipField` starts as
+ * `{ default: NONE }` (`common/data/fields.mjs:3784-3790`), a JournalEntryPage as `{ default: INHERIT }`
  * (`common/documents/journal-entry-page.mjs:74`), and an ActorDelta as null (`common/documents/actor-delta.mjs:54`).
  * Neither `ClientDocument#_preCreate` (`client/documents/abstract/client-document.mjs:431-439`, which only forwards to
- * the type data model) nor `Document#_preCreate` (`common/abstract/document.mjs:1028`, empty) adds one, and an embedded
- * document whose level is INHERIT, or which has no ownership field, defers to its parent (`getUserLevel`,
+ * the type data model) nor `Document#_preCreate` (`common/abstract/document.mjs:1028`, empty) adds a level, but the
+ * server's `_preCreate` (`dist/database/backend/server-document.mjs`, minified, the `ownership.<user id>` update at
+ * offset 16411) sets the creating user to OWNER whenever the document has an `ownership` value that does not name
+ * that user. So a world document a GM creates from data with no `ownership` is stored as
+ * `{ default: NONE, <GM id>: OWNER }`, the same as Foundry's world import grants. An embedded document whose level is
+ * INHERIT, or which has no ownership field, defers to its parent (`getUserLevel`,
  * `common/abstract/document.mjs:392-401`).
  *
  * This module builds one copy for every target kind (world, pack, embedded): `toCompendium` with `clearSort`,
@@ -50,8 +54,8 @@
  * of each embedded document, by the same `_clearFieldsRecursively` walk `fromCompendium` uses, and for an Adventure
  * also of each content entry and its embedded documents, by the walk of the entry's own class. An `ownership` key
  * anywhere in create data needs the `allowOwnershipWrites` gate, so a copy carries none, and the copy gets the
- * ownership a create with no `ownership` gets: Foundry's world import differs here in granting the importing user an
- * explicit OWNER level. `_id` (unless `keepId`), `sort` and `folder` are deleted again so the result does not depend
+ * ownership a create with no `ownership` gets, the creating user's OWNER level included, as Foundry's world import
+ * does. `_id` (unless `keepId`), `sort` and `folder` are deleted again so the result does not depend
  * on which options a subclass honours; an embedded document has no `folder`, so that deletion is a no-op there.
  * `_stats.compendiumSource` is set to the source uuid for a source inside a pack, as `fromCompendium` sets it, whatever
  * the target: a copy into a pack carries it too, where Foundry's own pack import leaves none. Every `flags.wiretap`
