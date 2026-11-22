@@ -164,7 +164,10 @@ password path in `missing`, compact bound over every list of `keyFields.json`, p
 `version` and `ifChanged` (embedded, `_stats`, reordered keys, secret-named values, derived), argument combinations), `listDocumentTypes`, `searchDocuments` (paging, cursor stability, clamps, filters, exclusions, index use), `schemaWalk` (every field class with `mockFields.js`), `describeSchema`, `shippedSkill`, `OnceReady`, `foundryBridge.scripts` (registry push, ack handling, callTool acks) and
 `foundryBridge.client` (write scripts through the bridge); `tests/integration/readTools.test.js` (both read scripts through the
 sidecar with a fake client). e2e: `tests/e2e/readTools.spec.js` (a created actor, then compact/paths/derived/full
-handle and `maxBytes` 16000 on the created actor; every type and subtype present in the titan world read at ≤ 2,000 B;
+handle and `maxBytes` 16000 on the created actor, with its `version` (the same in compact and `paths` results, a
+different derived one, none in the full export) and `ifChanged` unchanged until a rename; a parent's `ifChanged` seeing
+an embedded item update, ActiveEffect create and ActiveEffect delete, which leave the parent's `_stats.modifiedTime`
+unmoved on the live world; every type and subtype present in the titan world read at ≤ 2,000 B;
 `wiretap.*` setting refused, real Settings with secret-named keys redacted, flags redacted, and User password paths in
 `missing` (after asserting the client holds the fields); embedded and compendium reads); `tests/e2e/everyType.spec.js`
 (creates, as recorded `Wiretap E2E ` documents, every class and subtype of the titan world except the classes and folder
