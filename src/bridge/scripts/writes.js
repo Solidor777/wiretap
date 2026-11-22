@@ -344,9 +344,11 @@ async function resolveCreateTarget(documentName, parentUuid, pack) {
 }
 
 /**
- * Refuse `keepId` data whose `_id` is already taken in the collection it would land in. MEASURED on Foundry 14.364:
- * the server does not refuse a repeated `_id`, it overwrites the stored document (world and embedded), while the
- * client keeps its old copy, so the world and the client disagree afterwards.
+ * Refuse `keepId` data whose `_id` is already taken in the collection it would land in, with one early `ARGS_INVALID`.
+ * Foundry 14.364's server `_createDocuments` (`dist/database/backend/server-backend.mjs`) throws "The _id [..] already
+ * exists within the parent collection" for a taken embedded id and has no such check for a top-level document; for a
+ * world document it overwrites the stored document (MEASURED) while the client keeps its old copy, so the world and
+ * the client disagree afterwards.
  * @param {string} documentName - The class created.
  * @param {Awaited<ReturnType<typeof resolveCreateTarget>>} target - Where the documents land.
  * @param {Record<string, unknown>[]} data - The data of each document.

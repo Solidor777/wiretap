@@ -57,7 +57,8 @@ function wasSent(entry) {
 }
 
 /**
- * The ids of the entries that survived the client's pre-write workflow, or a count for a create (which has no id yet).
+ * The ids of the entries that survived the client's pre-write workflow, or a count for a create: a create carries
+ * client ids (`createId`), but its answer is matched by count.
  * @param {SettleEntry} entry - The operation.
  * @returns {string[] | number} The surviving ids of an update or delete; the number of surviving data of a create.
  */
@@ -70,8 +71,8 @@ function survivors(entry) {
 
 /**
  * Tell whether a list of reported documents answers an operation. A result is the dry-run echo of another operation
- * when its parent differs from the operation's, or, for a create (which has no ids to compare), when a document of it
- * carries an id another sent operation updates or deletes.
+ * when its parent differs from the operation's, or, for a create (sent with client ids but matched by count here), when
+ * a document of it carries an id another sent operation updates or deletes.
  * @param {SettleEntry} entry - The sent operation.
  * @param {object[]} documents - One result list.
  * @param {SettleEntry[]} entries - Every operation of the call, in send order.

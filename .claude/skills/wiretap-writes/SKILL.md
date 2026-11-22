@@ -36,9 +36,10 @@ paths:
 
 # Wiretap phase B write tools
 
-Covers the phase A scripts (`create_documents`, `update_documents`, `delete_documents`) and the phase B tools; the guard is in `wiretap-write-guard`. Sixteen shipped
-scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B raw-definition limit, MEASURED by
-`tests/measure/measureContext.mjs`). Foundry version read and measured: 14.364 (`game.version`).
+Covers the phase A scripts (`create_documents`, `update_documents`, `delete_documents`) and the phase B tools; the
+guard is in `wiretap-write-guard`. Sixteen shipped scripts in all; `replace_document` lists at 562 B and `batch` at
+795 B (800 B raw-definition limit, MEASURED by `tests/measure/measureContext.mjs`). Foundry version read and measured:
+14.364 (`game.version`).
 
 ## Files
 
@@ -224,7 +225,8 @@ Unit over `mockWriteWorld.js` (its `MockValidationError` reproduces the 14.364 b
 `writeActAs`, `writeIdempotency*`, `writeKeepId`, `writePhaseB`, `batchHandler` (row order), `handleInput`, plus handle cases in `handles.test.js`. Integration `writeToolsB.test.js` (sidecar with a fake client,
 including handle inputs). e2e `tests/e2e/writeTools.spec.js` (live world, throwaway `Wiretap E2E ` documents):
 replace with a `preUpdateActor` hook and omitted-field reset, batches with unchanged / hook-cancelled middle operations,
-ghost / phantom repair, embedded and parentUuid batches, idempotent and concurrent creates, handle create / replace,
-`_id` and flags refusals, `actAs` denial with a throwaway player, the gates of a throwaway scene's token delta, and one
-test that records how Foundry treats every operator spelling (the representation table in
-`docs/POST_WORK_FINDINGS.md`).
+ghost / phantom repair, embedded and parentUuid batches (created row i is create entry i, and its uuid stores that
+entry's name, over interleaved Actor, embedded Item, world Item and Actor creates), idempotent and concurrent
+creates, handle create / replace, `_id` and flags refusals, `actAs` denial with a throwaway player, the gates of a
+throwaway scene's token delta, and one test that records how Foundry treats every operator spelling (the
+representation table in `docs/POST_WORK_FINDINGS.md`).
