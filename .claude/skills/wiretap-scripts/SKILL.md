@@ -56,6 +56,7 @@ the names in `RESERVED_SCRIPT_NAMES`) is a script. Scripts call ops
 | `core.js` | `scriptCore` (frozen): `createDocuments(params)`, `updateDocuments(params)`, `deleteDocuments(params)`, `documentTypes()`, `readDocument(reference, { derived? })`, `searchDocuments(params)`, `describeSchema(params)`; `ERROR_MESSAGE_MAX_BYTES` (256) |
 | `shape.js` | `shape` (frozen): `compact`, `project`, `paths`, `ack` |
 | `canonical.js` | `exportDocument(document, { derived? })` (the canonical export, the exclusions and the secret redaction), `exportForBackup(document)` (below), `unreadable(document)`, `resolveDocument(reference)`, `WIRETAP_SETTING_PREFIX`, `USER_EXCLUDED_FIELDS`, `SECRET_CORE_SETTINGS`, `SECRET_KEY`, `SECRET_SETTING_KEY`, `REDACT_MAX_DEPTH`, `REDACT_MAX_NODES` |
+| `contentHash.js` | `hashText(text)` (cyrb53, 14 lowercase hex digits), `stableStringify(value)` (`JSON.stringify` with every plain object's keys sorted by code unit, an own `__proto__` key kept), `contentVersion(value)` (`hashText(stableStringify(value))`); used by `requestHash` of `writeIdempotency.js` and the `get_document` version |
 | `keyFields.js`, `keyFields.json` | `keyPathsFor(systemId, documentName, type)` over the reviewed per-subtype key-field lists (the `titan` system only) |
 | `search.js` | `searchDocuments(params, signal)`: candidates, canonical exclusions, filters, ordering, cursor, page bound, work caps; `FILTERS_MAX` |
 | `schemaWalk.js` | The field walker: `createWalkState`, `describeField`, `outlineFields`, `stepInto`; `SCHEMA_DEPTH_MAX` (3), `SCHEMA_NODES_MAX` (150), `OUTLINE_MAX` (80) |
@@ -114,8 +115,8 @@ at most `SCHEMA_ARRAY_ITEMS_MAX` (1000) on both sides. The sidecar imports the l
 
 ## `ctx.shape` (`shape.js`)
 
-- `compact(doc, { keyPattern?, keyPaths?, embedded? })`: `uuid`, `name`, `type` (bounded), `modified` (the export's
-  `_stats.modifiedTime` when finite), `fields` (≤ 24 `system` scalar leaves: those named by `keyPaths` (dotted paths below
+- `compact(doc, { keyPattern?, keyPaths?, embedded?, version? })`: `uuid`, `name`, `type` (bounded), `version` (the
+  option, cut to 32 B, when it is a non-empty string; `get_document` passes its content version), `fields` (≤ 24 `system` scalar leaves: those named by `keyPaths` (dotted paths below
   `system`, in order, own properties only, unsafe segments skipped) when it is a list, else those whose key matches the
   pattern, depth ≤ 6, ≤ 2000 objects visited), `embedded.<collection>` = `{ total, rows: [id, name, type][] }`
   (≤ 8 collections with names shortened to 32 B, ≤ 40 tuples in all). The serialized view is held to
@@ -156,12 +157,13 @@ unreadable. Its caller and the restore that reads `secretPaths` are in `wiretap-
 
 ## Tests
 
-`schemaValidate`, `scriptRegistry`, `scriptShape` (MOCK_ fixtures with 120 embedded items; `modified` and `keyPaths`),
+`schemaValidate`, `scriptRegistry`, `scriptShape` (MOCK_ fixtures with 120 embedded items; `version` and `keyPaths`),
+`contentHash` (`hashText`, `stableStringify`, `contentVersion`, `requestHash` equal to `hashText` of the JSON),
 `callTool`, `scriptCore`, `canonical` and `getDocument` (mocked documents from `mockDocuments.js`: exclusions,
 password path in `missing`, compact bound over every list of `keyFields.json`, projection, `items.*.name`, derived,
-`ifModifiedSince`, argument combinations), `listDocumentTypes`, `searchDocuments` (paging, cursor stability, clamps, filters, exclusions, index use), `schemaWalk` (every field class with `mockFields.js`), `describeSchema`, `shippedSkill`, `OnceReady`, `foundryBridge.scripts` (registry push, ack handling, callTool acks) and
+`version` and `ifChanged` (embedded, `_stats`, reordered keys, secret-named values, derived), argument combinations), `listDocumentTypes`, `searchDocuments` (paging, cursor stability, clamps, filters, exclusions, index use), `schemaWalk` (every field class with `mockFields.js`), `describeSchema`, `shippedSkill`, `OnceReady`, `foundryBridge.scripts` (registry push, ack handling, callTool acks) and
 `foundryBridge.client` (write scripts through the bridge); `tests/integration/readTools.test.js` (both read scripts through the
-sidecar with a fake client). e2e: `tests/e2e/readTools.spec.js` (a created actor, then compact/paths/derived/`ifModifiedSince`/full
+sidecar with a fake client). e2e: `tests/e2e/readTools.spec.js` (a created actor, then compact/paths/derived/full
 handle and `maxBytes` 16000 on the created actor; every type and subtype present in the titan world read at ≤ 2,000 B;
 `wiretap.*` setting refused, real Settings with secret-named keys redacted, flags redacted, and User password paths in
 `missing` (after asserting the client holds the fields); embedded and compendium reads); `tests/e2e/everyType.spec.js`

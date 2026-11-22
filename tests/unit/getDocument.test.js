@@ -126,6 +126,17 @@ describe('get_document definition', () => {
       expect(properties.paths.maxItems).toBe(getBudget('PATHS_PER_CALL_MAX').value);
       expect(properties.fields.maxItems).toBe(getBudget('PATHS_PER_CALL_MAX').value);
    });
+
+   it('declares ifChanged with maxLength 32 and no ifModifiedSince, within 800 B listed', () => {
+      /** @type {{ name: string, description: string, inputSchema: Record<string, any> }} The get_document script. */
+      const { name, description, inputSchema } = getDocumentDefinition;
+      expect(inputSchema.properties.ifChanged).toEqual({
+         type: 'string',
+         maxLength: 32,
+      });
+      expect(Object.hasOwn(inputSchema.properties, 'ifModifiedSince')).toBe(false);
+      expect(definitionBytes(name, description, compileSchema(inputSchema).listed)).toBeLessThanOrEqual(800);
+   });
 });
 
 describe('get_document argument validation', () => {
@@ -217,14 +228,14 @@ describe('get_document argument validation', () => {
 });
 
 describe('get_document compact view', () => {
-   it('shows uuid, name, type, the subtype key leaves, the modified time and the item tuples', async () => {
+   it('shows uuid, name, type, the version, the subtype key leaves and the item tuples', async () => {
       worldWithActor();
       const view = await get({ uuid: 'Actor.MOCKACTOR0000001' });
       expect(view).toMatchObject({
          uuid: 'Actor.MOCKACTOR0000001',
          name: 'MOCK_Actor',
          type: 'player',
-         modified: 1000,
+         version: expect.stringMatching(/^[0-9a-f]{14}$/),
          fields: {
             'system.inspiration': true,
             'system.xp.earned': 12,
@@ -344,58 +355,176 @@ describe('get_document compact view', () => {
    });
 });
 
-describe('get_document ifModifiedSince', () => {
-   it('answers a tiny unchanged ack when the document is not newer', async () => {
+describe('get_document version and ifChanged', () => {
+   /** @type {string} The uuid of the installed actor. */
+   const uuid = 'Actor.MOCKACTOR0000001';
+
+   /**
+    * Install the actor with the given overrides and read its compact version.
+    * @param {Partial<import('./mockDocuments.js').MockDocumentOptions>} [overrides] - Fields replacing the defaults.
+    * @returns {Promise<string>} The version of the compact view.
+    */
+   async function versionOf(overrides = {}) {
+      worldWithActor(overrides);
+      return (await get({ uuid })).version;
+   }
+
+   it('shows a 14-hex version in the compact view and no modified', async () => {
       worldWithActor({ modifiedTime: 1000 });
-      for (const since of [
-         1000,
-         5000,
+      const view = await get({ uuid });
+      expect(view.version).toMatch(/^[0-9a-f]{14}$/);
+      expect(Object.hasOwn(view, 'modified')).toBe(false);
+   });
+
+   it('gives the same version on two reads, and for a source whose keys are in another order', async () => {
+      worldWithActor();
+      const first = (await get({ uuid })).version;
+      expect((await get({ uuid })).version).toBe(first);
+      /** @type {Record<string, unknown>} The default source. */
+      const source = actorSource();
+      /** @type {Record<string, unknown>} The same source with its keys reversed at the top and in `system`. */
+      const reordered = Object.fromEntries(Object.entries(source).reverse());
+      reordered.system = Object.fromEntries(Object.entries(source.system).reverse());
+      expect(await versionOf({ source: reordered })).toBe(first);
+   });
+
+   it('changes the version when an embedded item is updated, created or deleted', async () => {
+      const base = await versionOf();
+      /** @type {Record<string, any>} A source with one item's quantity changed. */
+      const updated = actorSource();
+      updated.items[1].system.quantity = 99;
+      /** @type {Record<string, any>} A source with one more item. */
+      const created = actorSource(4);
+      /** @type {Record<string, any>} A source with the last item removed. */
+      const deleted = actorSource();
+      deleted.items.pop();
+      /** @type {string[]} The versions of the three variants. */
+      const variants = [];
+      for (const source of [
+         updated,
+         created,
+         deleted,
       ]) {
-         expect(
-            await get({
-               uuid: 'Actor.MOCKACTOR0000001',
-               ifModifiedSince: since,
-            }),
-         ).toEqual({ unchanged: true });
+         variants.push(await versionOf({ source }));
       }
+      for (const version of variants) {
+         expect(version).not.toBe(base);
+      }
+      expect(new Set(variants).size).toBe(3);
    });
 
-   it('returns the view when the document is newer, or has no modified time', async () => {
-      worldWithActor({ modifiedTime: 1000 });
-      expect(
-         (
-            await get({
-               uuid: 'Actor.MOCKACTOR0000001',
-               ifModifiedSince: 999,
-            })
-         ).name,
-      ).toBe('MOCK_Actor');
-      worldWithActor({ modifiedTime: null });
-      expect(
-         (
-            await get({
-               uuid: 'Actor.MOCKACTOR0000001',
-               ifModifiedSince: 999999,
-            })
-         ).name,
-      ).toBe('MOCK_Actor');
+   it('changes the version when only _stats changes', async () => {
+      expect(await versionOf({ modifiedTime: 1000 })).not.toBe(await versionOf({ modifiedTime: 2000 }));
    });
 
-   it('applies to paths and full reads too', async () => {
-      worldWithActor({ modifiedTime: 1000 });
+   it('keeps the version when only a secret-named value changes', async () => {
+      /**
+       * Build the actor source with a secret-named flag value.
+       * @param {string} apiKey - The secret value.
+       * @returns {Record<string, unknown>} The source.
+       */
+      const withSecret = (apiKey) => ({
+         ...actorSource(),
+         flags: { MOCK_mod: { apiKey } },
+      });
+      expect(await versionOf({ source: withSecret('MOCK_A') })).toBe(await versionOf({ source: withSecret('MOCK_B') }));
+   });
+
+   it('puts the same version in the compact view, the paths result and the fields result', async () => {
+      worldWithActor();
+      const compactVersion = (await get({ uuid })).version;
+      expect((await get({
+         uuid,
+         paths: ['name'],
+      })).version).toBe(compactVersion);
+      expect((await get({
+         uuid,
+         fields: ['name'],
+      })).version).toBe(compactVersion);
+   });
+
+   it('hashes the prepared export when derived is true', async () => {
+      worldWithActor({ prepared: { system: { hp: { max: 9 } } } });
+      const compactVersion = (await get({ uuid })).version;
+      const derivedArgs = {
+         uuid,
+         paths: ['system.hp.max'],
+         derived: true,
+      };
+      const derivedVersion = (await get(derivedArgs)).version;
+      expect(derivedVersion).toMatch(/^[0-9a-f]{14}$/);
+      expect(derivedVersion).not.toBe(compactVersion);
+      expect((await get(derivedArgs)).version).toBe(derivedVersion);
+      worldWithActor({ prepared: { system: { hp: { max: 10 } } } });
+      expect((await get({ uuid })).version).toBe(compactVersion);
+      expect((await get(derivedArgs)).version).not.toBe(derivedVersion);
+   });
+
+   it('answers unchanged for a derived read only against a derived version', async () => {
+      worldWithActor({ prepared: { system: { hp: { max: 9 } } } });
+      const derivedVersion = (await get({
+         uuid,
+         paths: ['system.hp.max'],
+         derived: true,
+      })).version;
+      expect(await get({
+         uuid,
+         paths: ['system.hp.max'],
+         derived: true,
+         ifChanged: derivedVersion,
+      })).toEqual({ unchanged: true });
+      const stored = await get({
+         uuid,
+         paths: ['system.hp.max'],
+         ifChanged: derivedVersion,
+      });
+      expect(stored.values).toBeTypeOf('object');
+      expect(stored.version).not.toBe(derivedVersion);
+   });
+
+   it('returns no version in mode full', async () => {
+      worldWithActor();
+      const result = await get({
+         uuid,
+         mode: 'full',
+      });
+      expect(Object.hasOwn(result, 'version')).toBe(false);
+   });
+
+   it('answers { unchanged: true } when ifChanged equals the version, for compact, paths, fields and full', async () => {
+      worldWithActor();
+      const version = (await get({ uuid })).version;
       for (const extra of [
+         {},
          { paths: ['name'] },
          { fields: ['name'] },
          { mode: 'full' },
       ]) {
-         expect(
-            await get({
-               uuid: 'Actor.MOCKACTOR0000001',
-               ifModifiedSince: 1000,
-               ...extra,
-            }),
-         ).toEqual({ unchanged: true });
+         expect(await get({
+            uuid,
+            ifChanged: version,
+            ...extra,
+         })).toEqual({ unchanged: true });
       }
+   });
+
+   it('returns the normal result when ifChanged differs', async () => {
+      worldWithActor();
+      const version = (await get({ uuid })).version;
+      /** @type {string} A version that differs from the current one. */
+      const other = version === '00000000000000' ? '00000000000001' : '00000000000000';
+      const view = await get({
+         uuid,
+         ifChanged: other,
+      });
+      expect(view.name).toBe('MOCK_Actor');
+      expect(view.version).toBe(version);
+      const full = await get({
+         uuid,
+         ifChanged: other,
+         mode: 'full',
+      });
+      expect(full._id).toBe('MOCKACTOR0000001');
    });
 
    it('never answers unchanged for an unreadable document', async () => {
@@ -409,12 +538,34 @@ describe('get_document ifModifiedSince', () => {
       );
       setting.key = 'wiretap.allowUserWrites';
       installWorld({ documents: [setting] }, vi.fn);
-      await expect(
-         get({
-            uuid: setting.uuid,
-            ifModifiedSince: 99999,
-         }),
-      ).rejects.toMatchObject({ code: 'DOC_EXCLUDED' });
+      for (const ifChanged of [
+         '',
+         '00000000000000',
+         'MOCK_any',
+      ]) {
+         await expect(
+            get({
+               uuid: setting.uuid,
+               ifChanged,
+            }),
+         ).rejects.toMatchObject({ code: 'DOC_EXCLUDED' });
+      }
+   });
+
+   it('refuses ifModifiedSince as an undeclared argument', async () => {
+      worldWithActor();
+      await expect(get({
+         uuid,
+         ifModifiedSince: 1,
+      })).rejects.toMatchObject({ code: 'ARGS_INVALID' });
+   });
+
+   it('refuses an ifChanged longer than 32 characters', async () => {
+      worldWithActor();
+      await expect(get({
+         uuid,
+         ifChanged: 'a'.repeat(33),
+      })).rejects.toMatchObject({ code: 'ARGS_INVALID' });
    });
 });
 
@@ -431,6 +582,7 @@ describe('get_document fields and paths', () => {
       expect(result).toEqual({
          fields: { system: { resource: { stamina: { value: 6 } } } },
          missing: ['system.nope'],
+         version: expect.stringMatching(/^[0-9a-f]{14}$/),
       });
    });
 
@@ -563,6 +715,7 @@ describe('get_document exclusions', () => {
             'password',
             'passwordSalt',
          ],
+         version: expect.stringMatching(/^[0-9a-f]{14}$/),
       });
       const derived = await get({
          uuid: user.uuid,
@@ -572,6 +725,7 @@ describe('get_document exclusions', () => {
       expect(derived).toEqual({
          values: {},
          missing: ['password'],
+         version: expect.stringMatching(/^[0-9a-f]{14}$/),
       });
       const fields = await get({
          uuid: user.uuid,
@@ -583,6 +737,7 @@ describe('get_document exclusions', () => {
       expect(fields).toEqual({
          fields: { role: 4 },
          missing: ['password'],
+         version: expect.stringMatching(/^[0-9a-f]{14}$/),
       });
       for (const args of [
          { mode: 'full' },

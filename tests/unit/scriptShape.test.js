@@ -546,38 +546,54 @@ describe('shape.ack', () => {
    });
 });
 
-describe('shape.compact: modified time', () => {
-   it('shows the modified time of the document stats in the header', () => {
-      const view = shape.compact({
-         ...mockActor({ shortNames: true }),
-         _stats: { modifiedTime: 1_760_000_000_000 },
-      });
-      expect(view.modified).toBe(1_760_000_000_000);
+describe('shape.compact: version', () => {
+   it('shows the version option in the header, between type and fields', () => {
+      const view = shape.compact(mockActor({ shortNames: true }), { version: 'a1b2c3d4e5f607' });
+      expect(Object.keys(view).slice(0, 5)).toEqual([
+         'uuid',
+         'name',
+         'type',
+         'version',
+         'fields',
+      ]);
+      expect(view.version).toBe('a1b2c3d4e5f607');
    });
 
-   it('leaves the header field out when the stats hold no finite number', () => {
-      for (const stats of [
-         undefined,
-         { modifiedTime: null },
-         { modifiedTime: 'MOCK_TEXT' },
-         { modifiedTime: Number.NaN },
+   it('cuts a long version to 32 bytes', () => {
+      const view = shape.compact(mockActor({ items: 2 }), { version: 'v'.repeat(100) });
+      expect(view.version.startsWith('v')).toBe(true);
+      expect(ENCODER.encode(view.version).length).toBeLessThanOrEqual(32);
+      expect(view.version.length).toBeLessThan(100);
+   });
+
+   it('leaves version out when the option is missing, empty or not a string, and never shows modified', () => {
+      /** @type {object} An export whose stats hold a modified time. */
+      const doc = {
+         ...mockActor({ items: 2 }),
+         _stats: { modifiedTime: 1_760_000_000_000 },
+      };
+      for (const options of [
+         {},
+         { version: '' },
+         { version: 12 },
+         { version: null },
       ]) {
-         const view = shape.compact({
-            ...mockActor({ items: 2 }),
-            _stats: stats,
-         });
+         const view = shape.compact(doc, options);
+         expect(Object.hasOwn(view, 'version')).toBe(false);
          expect(Object.hasOwn(view, 'modified')).toBe(false);
       }
+      expect(Object.hasOwn(shape.compact(doc, { version: 'a1b2c3d4e5f607' }), 'modified')).toBe(false);
    });
 
-   it('keeps the 2 KB bound with the modified time present and the data at its worst', () => {
-      const view = shape.compact({
-         ...mockActor({
+   it('keeps the 2 KB bound with a version present and the data at its worst', () => {
+      const view = shape.compact(
+         mockActor({
             items: 120,
             nameLength: 18,
          }),
-         _stats: { modifiedTime: 1_760_000_000_000 },
-      });
+         { version: 'a1b2c3d4e5f607' },
+      );
+      expect(view.version).toBe('a1b2c3d4e5f607');
       expect(bytes(view)).toBeLessThanOrEqual(getBudget('COMPACT_VIEW_MAX_BYTES').value);
    });
 });

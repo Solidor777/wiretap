@@ -1,11 +1,16 @@
 /**
  * The shipped `get_document` script: reads one document from the live world, an embedded document or a compendium.
  * The default result is the compact view; `fields` returns a projection, `paths` path slices (optionally of the
- * prepared data) and `mode: 'full'` the canonical export. The result enforcer of the sidecar turns anything over the
- * call's cap into a handle. The definition is in `definitions.js`. The exclusions (credential settings, secret-named
- * keys, User password fields) apply in `ctx.core.readDocument`.
+ * prepared data) and `mode: 'full'` the canonical export. The compact view and the `fields` and `paths` results carry
+ * `version`, the content hash of the export the read returned (`contentHash.js`), so it changes when anything the
+ * agent can read changes, embedded documents and `_stats` included, and not when only an excluded value changes.
+ * `ifChanged` equal to the current version answers `{ unchanged: true }` in every mode; a `derived` read hashes the
+ * prepared export, so its version matches only another derived read. The result enforcer of the sidecar turns
+ * anything over the call's cap into a handle. The definition is in `definitions.js`. The exclusions (credential
+ * settings, secret-named keys, User password fields) apply in `ctx.core.readDocument`.
  */
 
+import { contentVersion } from '~/bridge/scripts/contentHash.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { keyPathsFor } from '~/bridge/scripts/keyFields.js';
 import { shapeRefusal } from '~/bridge/scripts/writeArgs.js';
@@ -51,12 +56,14 @@ export async function getDocumentHandler(args, ctx) {
       },
       { derived: args.derived === true },
    );
-   if (args.ifModifiedSince !== undefined) {
-      /** @type {unknown} The document's last modification time in milliseconds. */
-      const modified = data._stats?.modifiedTime;
-      if (typeof modified === 'number' && Number.isFinite(modified) && modified <= args.ifModifiedSince) {
-         return ctx.shape.ack({ unchanged: true });
-      }
+   /**
+    * The content version of the export the read returned: the stored export, or the prepared one when `derived` is
+    * true. It is computed only when the call returns it or compares it.
+    * @type {string | undefined}
+    */
+   const version = args.ifChanged !== undefined || args.mode !== 'full' ? contentVersion(data) : undefined;
+   if (args.ifChanged !== undefined && args.ifChanged === version) {
+      return ctx.shape.ack({ unchanged: true });
    }
    if (args.paths !== undefined) {
       /** @type {ReturnType<typeof ctx.shape.paths>} The slices, or the refusal. */
@@ -67,6 +74,7 @@ export async function getDocumentHandler(args, ctx) {
       return {
          values: sliced.values,
          missing: sliced.missing,
+         version,
       };
    }
    if (args.fields !== undefined) {
@@ -78,6 +86,7 @@ export async function getDocumentHandler(args, ctx) {
       return {
          fields: projected.value,
          missing: projected.missing,
+         version,
       };
    }
    if (args.mode === 'full') {
@@ -85,5 +94,13 @@ export async function getDocumentHandler(args, ctx) {
    }
    /** @type {readonly string[] | undefined} The key leaves of this subtype, when the system has a list for it. */
    const keyPaths = keyPathsFor(game.system?.id, documentName, data.type);
-   return ctx.shape.compact(data, keyPaths === undefined ? {} : { keyPaths: [...keyPaths] });
+   return ctx.shape.compact(
+      data,
+      keyPaths === undefined
+         ? { version }
+         : {
+            keyPaths: [...keyPaths],
+            version,
+         },
+   );
 }

@@ -135,14 +135,17 @@ method `405`.
   and the subtypes of each (at most 3,000 bytes; the longest subtype lists are left out and named in `omitted` when
   they do not fit). `get_document` reads a world, embedded (`parentUuid`) or compendium (`pack`) document by `uuid`, or
   by `documentName` and `id`. The default result is a compact view of at most 2,000 bytes: `uuid`, `name`, `type`,
-  `modified` (the document's `_stats.modifiedTime`), up to 24 `system` leaves and `[id, name, type]` rows of the
-  embedded documents (40 rows at most, with each collection's total). The leaves come from a reviewed per-subtype list
-  for the `titan` system (`src/bridge/scripts/keyFields.json`) and from a default key-name pattern for any other. `fields`
-  returns a nested projection, `paths` (20 at most) returns slices such as `system.resource` or `items.*.name` keyed by
-  `_id` with the unresolved paths in `missing`, `derived: true` reads the prepared data for those two, `mode: "full"`
-  returns the whole export (`toCompendium` with ids, sort and ownership kept, plus `uuid`), `ifModifiedSince` returns
-  `{"unchanged":true}` when the document is not newer, and `maxBytes` (128 to 16,000) raises the inline limit; a result
-  over the limit is a handle. A client acks a result up to 900,000 bytes. What is never returned: the password fields
+  `version`, up to 24 `system` leaves and `[id, name, type]` rows of the embedded documents (40 rows at most, with each
+  collection's total). The leaves come from a reviewed per-subtype list for the `titan` system
+  (`src/bridge/scripts/keyFields.json`) and from a default key-name pattern for any other. `fields` returns a nested
+  projection, `paths` (20 at most) returns slices such as `system.resource` or `items.*.name` keyed by `_id` with the
+  unresolved paths in `missing`, `derived: true` reads the prepared data for those two, and both results carry
+  `version` too. `mode: "full"` returns the whole export (`toCompendium` with ids, sort and ownership kept, plus
+  `uuid`) without a `version`. The `version` is a short content hash (14 hex digits) of everything the agent can read
+  of the document, embedded documents included, so any readable change changes it; an edit of a secret-named value,
+  which is never returned, does not. `ifChanged` set to the current version returns `{"unchanged":true}` in every mode.
+  A `derived: true` read hashes the prepared values, so its version is compared by another `derived: true` read.
+  `maxBytes` (128 to 16,000) raises the inline limit; a result over the limit is a handle. A client acks a result up to 900,000 bytes. What is never returned: the password fields
   of a `User` (removed from every export; a path to one is listed in `missing`), a `Setting` in the `wiretap.`
   namespace, the core settings that hold credentials (`core.rtcWorldSettings`, the WebRTC TURN user and password) and a
   `Setting` whose key names a secret (each refused with `DOC_EXCLUDED`), and every key named like a secret

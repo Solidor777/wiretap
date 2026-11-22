@@ -66,7 +66,10 @@ export const getDocumentDefinition = {
             items: { type: 'string' },
          },
          derived: { type: 'boolean' },
-         ifModifiedSince: { type: 'number' },
+         ifChanged: {
+            type: 'string',
+            maxLength: 32,
+         },
          maxBytes: {
             type: 'integer',
             minimum: 128,

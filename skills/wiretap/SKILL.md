@@ -6,11 +6,11 @@ description: Use when working with the live Foundry VTT world through the Wireta
 Wiretap acts on the live Foundry world through MCP tools that work via a connected GM's browser. With none connected, a
 call fails with `NO_ENDPOINT`, naming what to start. An undeclared argument (a misspelled `dryrun`) is refused.
 - **Read a document.** `mcp__wiretap__get_document` with `uuid`, or `documentName` and `id` (add `parentUuid` for an
-embedded one, `pack` for a compendium one). The default is a compact view (name, type, key fields, embedded `[id, name,
-type]` rows, `modified`). For more: `paths` (up to 20, like `system.attributes` or `items.*.name`, keyed by `_id`;
-`derived: true` reads prepared values), `fields`, or `mode: "full"` (large becomes a handle). `ifModifiedSince` returns
-`{unchanged: true}`; `maxBytes` raises the inline limit to 16,000. Passwords, credential and `wiretap.*` settings are
-unreadable; secret-named keys are dropped from setting values and flags.
+embedded one, `pack` for a compendium one). The default is a compact view (name, type, `version`, key fields, embedded
+`[id, name, type]` rows); `paths` (up to 20, like `items.*.name`, keyed by `_id`; `derived: true` reads prepared values)
+and `fields` give `version` too; `mode: "full"` gives all (large becomes a handle). `version` hashes all you can read,
+embedded too; `ifChanged: <version>` gives `{unchanged: true}` (derived vs derived). `maxBytes` allows up to 16,000.
+Passwords, credential and `wiretap.*` settings are unreadable; secret-named keys in settings and flags are dropped.
 - **Find documents.** `mcp__wiretap__list_document_types` lists classes and subtypes. `mcp__wiretap__search_documents`
 needs `documentName`; narrow with `type`, `query` (name text), `filters` (up to 5 `path=value`), `pack` or `parentUuid`.
 Rows are `[uuid, name, type]`, 20 per page (`limit` up to 100); follow `nextCursor` as `cursor`, also after a `cut`.

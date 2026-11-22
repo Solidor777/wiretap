@@ -30,6 +30,7 @@
  * cannot forge, move or erase a record; only this module writes it, after the guard has run.
  */
 
+import { hashText } from '~/bridge/scripts/contentHash.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 
 /**
@@ -62,29 +63,12 @@ export const IDEMPOTENCY_SCAN_MAX = 20_000;
  */
 
 /**
- * Hash a request to a short hex text. Algorithm: cyrb53, a non-cryptographic 53-bit string hash by bryc (public
- * domain). It tells an honest retry from a reuse of the key for other data; it is not collision resistant and not a
- * security boundary. A caller who finds two requests with one hash only makes a replay answer the other request of
- * the same key, within the collection that already holds the caller's own documents.
+ * Hash a request to a short hex text: `hashText` of its JSON text.
  * @param {unknown} request - A JSON-serializable description of the request.
  * @returns {string} The hash as 14 hex digits.
  */
 export function requestHash(request) {
-   /** @type {string} The request as text. */
-   const text = JSON.stringify(request);
-   /** @type {number} First hash lane. */
-   let h1 = 0xdeadbeef;
-   /** @type {number} Second hash lane. */
-   let h2 = 0x41c6ce57;
-   for (let index = 0; index < text.length; index += 1) {
-      /** @type {number} The code unit mixed in. */
-      const code = text.charCodeAt(index);
-      h1 = Math.imul(h1 ^ code, 2654435761);
-      h2 = Math.imul(h2 ^ code, 1597334677);
-   }
-   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
+   return hashText(JSON.stringify(request));
 }
 
 /**

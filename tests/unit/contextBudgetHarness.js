@@ -233,7 +233,7 @@ function mockCompactView() {
       uuid: 'Actor.MOCKACTOR0000001',
       name: 'MOCK_ACTOR',
       type: 'player',
-      modified: 1760000000000,
+      version: 'a1b2c3d4e5f607',
       fields: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
          `system.mock.g${index}.value`,
          index,
@@ -667,7 +667,7 @@ export const FIXTURES = {
                name: 'get_document',
                arguments: {
                   uuid: 'Actor.MOCKACTOR0000001',
-                  ifModifiedSince: 1760000000000,
+                  ifChanged: 'a1b2c3d4e5f607',
                },
             });
          },
@@ -682,6 +682,7 @@ export const FIXTURES = {
                   index,
                ])),
                missing: [],
+               version: 'a1b2c3d4e5f607',
             }));
             return client.callTool({
                name: 'get_document',
