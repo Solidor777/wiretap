@@ -73,11 +73,11 @@ Budgets are derived from measurements recorded in [`docs/experiments/2026-10-con
 | 2 | Hard result cap + saved-result handles | Removes the "exceeds maximum allowed tokens" failure; export/import/copy without the body entering context (INFERRED from R4) | Medium (sidecar in-memory store) | Memory growth → bounded per-session LRU in memory; no files, so no deletion | M13 |
 | 3 | Ack-only writes (`uuid`, changed paths) | +172 vs re-reading the document (+1,037 compact) (MEASURED (coord.)) | Low | Agent cannot see derived side effects → optional `paths` on the ack | M5 |
 | 4 | Measurements instead of screenshots | +172 vs +972 for one 800×600 image (MEASURED (coord.), single sample) | Medium (needs DOM endpoint) | Visual-only questions remain → `screenshot` as capped last resort | M15b |
-| 5 | Composite scripts (one call for N steps) | ≈170 per eliminated call + intermediate results (INFERRED from the floor) | Medium per script | Catalogue sprawl; each script is maintained API → catalogue reviewed per milestone | M15a |
+| 5 | Few-call recipes over the generic tools instead of composite scripts: copy by uuid (`create_documents` `fromUuids`) and the two-call actor build, documented in the user-facing skill (D35) | ≈170 per eliminated call + intermediate results (INFERRED from the floor) | Low | Recipe text drifts from the tools → the skill test checks every tool name it mentions | M15a |
 | 6 | Skills as the discovery layer (§2.7) | Tool descriptions stay one line; how-to text is paid only when a skill is invoked (INFERRED; not measured) | Low | Skill text drifts from tools → M13 test checks referenced tool names exist | M14 |
 | 7 | Pagination: default limit 20, max 100, continuation cursor | Bounded search results (INFERRED) | Low | Agent pages blindly → result carries `total` | M4 |
 | 8 | Short actionable errors (≤ 512 B; first 10 validation failures + count) | Bounded; `getAllFailures()` can list every invalid field (READ `common/data/validation-failure.mjs:374`) | Low | Lost detail → `paths` re-check or `dryRun` | M1, M5 |
-| 9 | Change-only reads: `diff_since(cursor)` and `ifModifiedSince` (`{unchanged:true}`) | Re-reads shrink to changed rows (INFERRED) | Low–medium | Clock basis = `_stats.modifiedTime` | M15a |
+| 9 | Change-only reads: a content `version` on `get_document` and `ifChanged` (`{unchanged:true}`) (D35) | An unchanged re-read shrinks to an ack ≤ 256 B (INFERRED) | Low | The version hashes only what the read returns, so a change to a redacted value is not reported (by design: the agent cannot see it); a spurious "changed" costs one re-read | M15a |
 | 10 | Description and schema budgets | ≈150–195 tokens per loaded tool; names ≈13 always (MEASURED (coord.)) | Low | Terse descriptions mislead → skills carry the detail (row 6) | M13 |
 | 11 | Server-side summarisation | Only deterministic (counts, tuples); LLM summarisation impossible (sampling `-32601`, MEASURED (coord.)) | — | Folded into compact views | M4 |
 
@@ -278,7 +278,8 @@ Budgets are the result cap in serialized bytes. "Replaces" counts the calls a ge
 
 | Script | Purpose | Requires | Result budget | Gate | Replaces |
 |---|---|---|---|---|---|
-| `get_document(uuid, paths? \| fields? \| mode?)` | Compact view by default; path slices (§2.8); full export | api | 2 KB compact; hard cap otherwise | — | — |
+| `get_document(uuid, paths? \| fields? \| mode?, derived?, ifChanged?)` | Compact view by default; path slices (§2.8); full export. The compact, `paths` and `fields` results carry a content `version` (a hash of the export the read returns, §4.4); `ifChanged` equal to it returns `{unchanged:true}` | api | 2 KB compact; 256 B unchanged ack; hard cap otherwise | — | full re-reads |
+| `create_documents(documentName, data[] \| fromUuids[], parentUuid?, pack?, keepId?, dryRun?, idempotencyKey?)` | Create from data, or copy world, embedded or compendium documents by uuid (`fromUuids`, 1 to 50) into the world, a parent or a pack; the source body never enters context, and a copy meets every check the same data would | api | 256 B ack per document, 4 KB per call | per category | read + create with the body in context |
 | `update_documents(updates[], dryRun?)` | Path-scoped writes incl. embedded paths and `op` (§2.8) | api | 256 B ack per document | per category | read + update + re-read |
 | `delete_documents(uuids[], dryRun?)` | Document deletion through Foundry document calls (D12) | api | 256 B ack; `dryRun` lists names | `allowDelete` (D12a) | — |
 | `open_sheet(uuid, userId?)` | Render a sheet on the client of the connected user named by `userId` via the `wiretap.openSheet` query, else on the client running the call; never broadcast | api | 128 B `{ok, appId}` | — | — |
@@ -286,19 +287,13 @@ Budgets are the result cap in serialized bytes. "Replaces" counts the calls a ge
 | `element_size(uuid, selector)` | `{x, y, w, h, scrollW, scrollH, visible}` of a selector inside the rendered sheet (`element` getter READ `application.mjs:327`) | dom | 256 B | — | screenshot |
 | `sheet_layout(uuid, depth=2, maxNodes=40)` | Compact tree `[selector, w, h, overflow]` of the sheet parts | dom | 4 KB | — | screenshot + N sizes |
 | `screenshot(uuid, selector?, maxSide=800)` | PNG, explicit last resort; default ≤ 800×600, hard max 1280 px longest side, one image per call | dom + runner | 1 image | — | — |
-| `add_embedded(parentUuid, documentName, data[] \| fromUuids[])` | Add Items / ActiveEffects from data or compendium uuids | api | 256 B + 64 B per created | per category | N × (search + read + create) |
 | `roll(formula, toChat=false)` | `{total, formula, dice}` | api | 512 B | — | — |
-| `diff_since(cursor \| {uuid, handle})` | Documents changed since a cursor (`_stats.modifiedTime`), or changed paths vs a stored export (`foundry.utils.diffObject`) | api | 4 KB page | — | full re-reads |
-| `export_to_handle(uuid, keepId=true)` | `toCompendium` (§4.4) into a sidecar handle; returns `{handle, bytes, summary}` | api + sidecar | 256 B | — | full read |
 | `read_handle(handle, paths? , offset?, length?)` | Slice a stored result (§2.8 grammar) | none | hard cap | — | — |
-| `import_from_handle(handle, mode: create \| replace, keepId?)` | Create a copy (`keepId: false`, `fromCompendium` strips `_id`) or replace in place (`keepId: true`, §4.4) | api | 256 B ack | compendium target → `allowCompendiumWrites` (proposed) | read + create with the body in context |
-| `build_actor(spec)` | Composite: create an Actor, set fields, add Items from compendium uuids or data, add effects | api | 512 B | — | ≥ 5 (create, N searches, N embedded creates, update) |
 | `inspect_sheet(uuid, selectors[])` | Composite: open, measure k selectors plus a layout summary, close | dom | 2 KB | — | 2 + k |
-| `copy_document(uuid, target, overrides?)` | Composite: export → import to a folder or pack; the body never enters context | api | 256 B | as `import_from_handle` | read + create |
 | `save_script(...)` / `disable_script(name)` | §2.5, only if D21 builds it | none | 256 B | `allowAgentScripts` | — |
 
 The other generic core tools (M4/M5: `list_document_types`, `search_documents`, `describe_schema`,
-`create_documents`, `replace_document`, `batch`, `draw_table`, `execute_macro`, `list_endpoints`) are
+`replace_document`, `batch`, `draw_table`, `execute_macro`, `list_endpoints`) are
 entries of the same registry with the budgets of §2.6.
 
 ## 3. Decisions log
@@ -340,6 +335,7 @@ entries of the same registry with the budgets of §2.6.
 | D32 | Handle persistence is opt-in (`persistHandles`, default OFF): a protected file under `.wiretap/`, overwrite-only, with the same size and idle bounds; the at-rest protection is specified at the M19 start (M19) | DECIDED |
 | D33 | Document backups instead of undo: `backup_documents`, `list_backups`, `restore_backup`, `delete_backup`; the GM client exports and applies, the sidecar writes JSON Lines files to `<module root>/.wiretap/backups/` (changeable by the `backupFolder` world setting) or any folder the call names behind `allowBackupAnyFolder`; new files only; the user-facing skill tells the agent to make or offer a backup before bulk or risky changes. Design: [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md) (M21) | DECIDED |
 | D34 | Wiretap code removes a file only by moving it to the recycle bin through the `trash` npm package; no permanent-delete API appears in product code or tests | DECIDED |
+| D35 | M15a fills gaps only: `fromUuids` on `create_documents`, a content `version` with `ifChanged` on `get_document`, no composite tools (`build_actor`, `copy_document`, `add_embedded`, `export_to_handle`, `import_from_handle`; their jobs are documented recipes over the generic tools), no `diff_since`. Design: [`plans/2026-11-21-wiretap-m15a-design.md`](plans/2026-11-21-wiretap-m15a-design.md) | DECIDED |
 
 ## 4. Architecture
 
@@ -349,7 +345,7 @@ entries of the same registry with the budgets of §2.6.
 |---|---|---|
 | MCP session server (`server/mcp*.ts`) | Sidecar (Node) | Stateful Streamable HTTP sessions; tool list = core tools + scripts + plugin tools of the routed endpoint; server `instructions` pointer (§2.7); sends `list_changed` |
 | Result budget enforcer (`server/resultBudget.ts`) | Sidecar | Applies §2.6 caps to every tool result; over cap → handle + summary; caps error text |
-| Handle store (`server/handles.ts`) | Sidecar, memory only | Per-session LRU of large results (D23); slices for `read_handle`, input for `import_from_handle` |
+| Handle store (`server/handles.ts`) | Sidecar, memory only | Per-session LRU of large results (D23); slices for `read_handle`, `handle:<id>` input for the `data` of `create_documents` and `replace_document` |
 | Budget constants (`shared/budgets.js`) | Both | The §2.6 numbers; one source for enforcer, registration checks and tests |
 | Path resolver (`shared/docPath.js`) | Both | §2.8 grammar: parse, refuse unsafe segments, resolve over an export, group embedded writes |
 | Endpoint registry + router (`server/endpoints.ts`, replaces `gmSockets`) | Sidecar | Tracks identified GM endpoints `{socketId, userId, userName, kind: agent\|human, dom: bool, registeredAt}` (plus `gateState`, and `skills[]` from M7); routes per D5, DOM scripts per D25 |
@@ -391,13 +387,15 @@ GM human tab: settings UI → credentials pushed once over bridge:credentials �
 
 ### 4.4 Canonical document representation (D14, view per D24, paths per D26)
 
-- **Full reads** (`mode:"full"`, `export_to_handle`) produce `doc.toCompendium(null, {clearSource: false, keepId:
+- **Full reads** (`mode:"full"`) produce `doc.toCompendium(null, {clearSource: false, keepId:
   true, clearSort: false, clearOwnership: false})` plus `uuid`. The defaults would drop `_id`, `sort`, `ownership` and
   `author` (READ `client-document.mjs:1113-1134`). Optionally prepared values are added under a separate `derived`
   key.
-- **Default reads** return the compact view: `uuid`, `name`, `type`, `modified` (`_stats.modifiedTime`, the clock of
-  `ifModifiedSince`), a per-type key-field list, and embedded documents as `[id, name, type]` tuples (first 40 plus a
-  total count). `fields` returns a projection, `paths` path slices (§2.8), both of the canonical form.
+- **Default reads** return the compact view: `uuid`, `name`, `type`, `version` (a content hash of the export the read
+  returns, embedded documents included, keys sorted; compared by `ifChanged`), a per-type key-field list, and embedded
+  documents as `[id, name, type]` tuples (first 40 plus a total count). `fields` returns a projection, `paths` path
+  slices (§2.8), both of the canonical form, each with the same `version`; a `derived: true` read hashes the prepared
+  export it returns.
 - **Exclusions and redaction** apply in the one export function, so every read path (compact, `fields`, `paths`, full,
   search rows and filters, `describe_schema` examples) inherits them: a `Setting` in the `wiretap.` namespace, in the
   credential denylist (`core.rtcWorldSettings`: `client/av/settings.mjs:97-102` defines the TURN `username` and
@@ -416,7 +414,9 @@ GM human tab: settings UI → credentials pushed once over bridge:credentials �
   `token`, which would refuse `core.tokenAutoRotate`); settings of other modules are readable. Owner decisions are in
   `docs/TODO.md`.
 - **Create** takes the canonical shape. `exportToJSON` drops `_id`, `sort`, `ownership` and `author` by default; reads keep
-  them (`keepId`, D14), and `import_from_handle` in `create` mode drops them so a copy gets new ids.
+  them (`keepId`, D14), and `create_documents` with `fromUuids` builds each copy with `toCompendium` and drops `_id`
+  (unless `keepId`), `sort`, `folder`, every `ownership` and `flags.wiretap`, so a copy gets a new id and needs no
+  ownership gate.
 - **Replace** = `fromImport` → `collection.fromCompendium` → strip `preserveOnImport` → `update(data, {diff: false,
   recursive: false})` **with hooks** (D13). Input may be a handle.
 - `exportToJSON` / `importFromJSON` themselves are world-documents only and trigger a download / notification (READ
@@ -659,19 +659,41 @@ pack created and deleted through the tools, recorded on the §4.8 list. **Accept
 in Wiretap code (D34; the Foundry server removes pack files). **Context budget:** ack ≤ 256 B. **Risks:** deleting a
 pack with content the user wants; `dryRun` and the always-on prompt are the guard.
 
-### M15a — Script library: API and composite scripts
+### M15a — Copy by uuid and content versions
 
-**Goal:** the `api` rows of §2.9 not built in M4–M6. **Depends on:** M5, M6, M13, M14. **In:** `add_embedded`,
-`diff_since`, `export_to_handle`, `read_handle`, `import_from_handle`, `build_actor`, `copy_document`. **Consent at
-start:** the catalogue (names are public API).
+**Goal:** D35. Fill the gaps the generic tools leave, with no new tool name: copy documents by uuid without the source
+body entering the agent's context, an exact change-only read, and documented recipes in place of composite tools.
+Design: [`plans/2026-11-21-wiretap-m15a-design.md`](plans/2026-11-21-wiretap-m15a-design.md). **Depends on:** M5, M6,
+M13, M14. **In:**
 
-**Tests:** unit per script with mocked `game` (happy path, validation, gate, budget fixture); integration through the
-fake client, including `copy_document` with a 100 KB synthetic source (the body never appears in any MCP message,
-asserted on the SDK client's received payloads); e2e on titan: `build_actor` with 3 items and 1 effect from recorded
-`Wiretap E2E ` data, torn down per §4.8. **Acceptance:** every §2.9 `api` script callable end to end. **Context
-budget:** each result within its §2.9 budget in integration and e2e; `build_actor` uses one call where the
-generic-tools path uses ≥ 5, demonstrated by an integration test counting `tools/call` requests for both paths.
-**Risks:** composite scripts hide partial failure → the ack lists every created uuid and the first failure.
+- `fromUuids` on `create_documents`: 1 to 50 uuids of world, embedded or compendium documents of the given class, in
+  place of `data` (exactly one of the two); each copy is built in the GM client from the source's `toCompendium`
+  export with `_id` (unless `keepId`), `sort`, `folder`, every `ownership` and `flags.wiretap` removed, then goes
+  through the same checks as `data` (gates, `guardWrite`, validation, `actAs`, `dryRun`, `refuseTakenIds`). A `User`,
+  a missing source, a source of another class and a source a read refuses write nothing. `idempotencyKey` hashes
+  `fromUuids` as given.
+- A content `version` on `get_document` (compact, `paths` and `fields` results) and `ifChanged`, which returns
+  `{unchanged:true}` when the version is equal; there is no timestamp-based check (`ifModifiedSince`, `modified`). The
+  version covers everything the read returns, embedded documents included, so an embedded create, update or delete
+  changes the parent's version.
+- Recipes in the user-facing skill: copy by uuid in one call; build an actor in two calls (the actor with its own items
+  and effects inline in `data`, then compendium items by `fromUuids` under it); re-read only on change (`version`
+  passed as `ifChanged`).
+
+**Out:** `diff_since` (`docs/TODO.md`), a "to handle" option on `get_document`, `overrides` on copies, `fromUuids` on
+`batch`, and the tools `build_actor`, `copy_document`, `add_embedded`, `export_to_handle`, `import_from_handle`.
+
+**Tests:** unit with mocked `game` (copies for world, pack and embedded targets, the exactly-one-of rule, every refusal
+writing nothing, cleared fields, gates and `dryRun` through `prepareCreate`; version stability under key reorder, change
+on an embedded create, update and delete, redacted values excluded, `ifChanged` equal and unequal, no version in full
+mode); integration through the fake client running the real shipped scripts; e2e on titan: `ifChanged` on a parent
+after an embedded update, create and delete, world items copied onto a recorded actor, and a world item copied into a
+throwaway world pack and back, torn down per §4.8. **Acceptance:** a `fromUuids` copy of a 100 KB synthetic source
+whose body appears in no MCP message the SDK client receives; the actor recipe in exactly two `tools/call` requests,
+counted by an integration test. **Context budget:** `create_documents` and `get_document` definitions ≤ 800 B listed,
+the compact view ≤ 2 KB, the unchanged ack ≤ 256 B, at most 30 listed tools, all by the existing CI budget tests.
+**Risks:** a false "unchanged" (the bug the version fixes) → the version hashes the whole export the read returns; a
+copy that skips a check → it enters the same create path as `data`.
 
 ### M7 — Plugin skill API
 

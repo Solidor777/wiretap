@@ -39,7 +39,8 @@ deleted; omit `flags`: other modules' flags go). Leave `ownership` out; `_id`, `
 `update_documents`. `mcp__wiretap__batch` takes `creates` (`documentName`, `data`, `parentUuid` per document), `updates`
 (patches) and `deletes`, run in that order; a key an entry does not list (`parent` for `parentUuid`) is refused. Not
 atomic: Foundry checks all first, stops at the first failure and keeps what it did; `WRITE_NOT_APPLIED` says "N of M
-operations applied". `actAs` (a user id) on any write only checks that user's permission first (`ACT_AS_DENIED`).
+operations applied". Result rows follow the entries. `actAs` (a user id) on any write only checks that user's
+permission first (`ACT_AS_DENIED`).
 - **Compendium packs.** `mcp__wiretap__create_pack` (`label`, `type` a document type like `Actor`, optional `name`)
 makes an empty world pack; needs `allowCompendiumWrites`. `mcp__wiretap__delete_pack` (`id` is `world.<name>`) removes
 an unlocked world pack and every document in it for good; needs `allowPackDeletion`; marked so Claude Code (per its

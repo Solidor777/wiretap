@@ -23,15 +23,19 @@ document, so none are stated here; the count at the time this file was written i
 | M6 Sheets and gameplay | Done | 2026-11-20 | `fab9300` (plan); `823e070`, `3aeba20`, `c601f8b`, `e5da1ff`, `acec4dd`, `f3b7d38` (tasks 1 to 6); `bbbdcd1`, `4dbf3bf`, `15984e8`, `f08ec17`, `11940fe`, `44c9ac5`, `7fe13ce`, `c3f5129` (buddy-check fixes and plan edits); `8c58704`, `6bc5b2a`, `9e245a2` (e2e); `6a3f7cb`, `717da53` (docs); `418e6f9`, `7887884` (final-review minors) | [`plans/2026-11-20-wiretap-m6-sheets-gameplay.md`](plans/2026-11-20-wiretap-m6-sheets-gameplay.md); as-built notes below; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro` in `src/bridge/scripts/`; 15 tools, 8,149 B of definitions |
 | M21 Document backups | Done | 2026-11-21 | `253257f`, `3914297` (design and plan); `393ac25`, `302d9f9`, `517fb81`, `723a3ad`, `76b9ad8`, `9a6f979`, `a8b78d1`, `9c30bb4`, `e4c2085`, `b61251f`, `cd2967a`, `d5b3960`, `da9bd16`, `fa9e809` (features and fixes); `80403c5`, `79f94ac`, `8f820be`, `f9bc54a` (tests); merges `1881516`, `8570e4f`, `18fc7b1`, `f5409a4`, `ec5a77e`, `8433951`, `176d540`, `eb570e0`, `b70cbc1`, `640f155`; `docs: close M21; progress, README and skills` | [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md), [`plans/2026-11-21-wiretap-m21-backups.md`](plans/2026-11-21-wiretap-m21-backups.md); as-built notes below; `backup_documents`, `list_backups`, `restore_backup`, `delete_backup` in `server/backupTools.ts`; 19 tools, 10,426 B of definitions |
 | M18 Compendium pack tools | Done | 2026-11-21 | `10ffd14`, `75ef915` (design and plan); `a7ce589`, `b4f9f24`, `214426b`, `3b6787b`, `d372696`, `72c6af2`, `b41ab2e` (features and fix); `a48ffd2`, `869a36d`, `989582d`, `e15d83b`, `1361027` (tests); merges `c9773e5`, `ae02d1c`, `f239556`, `5d8da73`, `853581a`, `f47640c`, `9cbf590`, `bab19f8`, `02bda56`, `86aaa0e`, `bf0b67e`; `7c3bbb6`, `343465e` and the final-review docs commit (docs) | [`specs/2026-11-21-wiretap-pack-tools-design.md`](specs/2026-11-21-wiretap-pack-tools-design.md), [`plans/2026-11-21-wiretap-m18-pack-tools.md`](plans/2026-11-21-wiretap-m18-pack-tools.md); as-built notes below; `create_pack`, `delete_pack` in `src/bridge/scripts/`; the `allowPackDeletion` gate; 21 tools, 11,330 B of definitions |
+| M15a Copy by uuid and content versions | Done; one flaky test open (`OPEN_BUGS.md`) | 2026-11-21 to 2026-11-22 | `f883eb8`, `d42de9f` (design and plan); `bbea2d4`, `2c58019`, `6a9fcd2`, `1bed934`, `64c9b78`, `f88bb0c`, `db6e6a2`, `d5d897b`, `786c5a6` (features and fixes); `9595303`, `b54fb70`, `0abefeb`, `c7a7e58`, `c5de351`, `f549e95`, `0ae7ff5` (tests); `144ca8a`, `cb2adf2`, `31643e4`, `6eec27c`, `d27bf23` and `docs: close M15a; progress, README and skills` (docs) | [`plans/2026-11-21-wiretap-m15a-design.md`](plans/2026-11-21-wiretap-m15a-design.md), [`plans/2026-11-21-wiretap-m15a-plan.md`](plans/2026-11-21-wiretap-m15a-plan.md); as-built notes below; `fromUuids` on `create_documents`, `version` and `ifChanged` on `get_document`, the copy, actor and change-only recipes in `skills/wiretap/SKILL.md`; D35; 21 tools, 11,393 B of definitions |
 
-Current suite (MEASURED 2026-11-21, `npm test`): 129 test files passed, 2880 tests passed, 2 skipped (2882). Headless
+Current suite (MEASURED 2026-11-22, `npm test` at the M15a close): 133 test files, 2957 tests passed, 1 failed, 2
+skipped (2960); the failure is the `SuperviseServer.test.js` timeout logged in `OPEN_BUGS.md` (the test passes alone;
+the last fully green run, after `786c5a6`, was 2958 passed and 2 skipped). Headless
 e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless
 `WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs, the M21 specs `backupTools.spec.js` and `gates.spec.js`, and the
-M18 spec `packTools.spec.js` were run on their own (see M6, M21 and M18 below). A full e2e run after M6 has not been
+M18 spec `packTools.spec.js` and the M15a specs `readTools.spec.js` and `copyTools.spec.js` were run on their own (see
+M6, M21, M18 and M15a below). A full e2e run after M6 has not been
 made.
 
-Next milestone in the order of PLAN.md section 5: M15a (M17 dropped by D29, revision 7; M21 added by D33, revision 8,
-and done; M18 done).
+Next milestone in the order of PLAN.md section 5: M7 (M17 dropped by D29, revision 7; M21 added by D33, revision 8,
+and done; M18 and M15a done).
 
 ## M0 status and deviations
 
@@ -155,6 +159,13 @@ already had no undo gate (`shared/gates.js`, `tests/unit/gates.test.js`).
 design `specs/2026-11-21-wiretap-backups-design.md`), approved the `trash` npm dependency and changed the file rule to
 recycle-bin removal only (D34). The user delegated the remaining design calls; they are marked "designer's call" in
 the design.
+
+**Revision 9 (2026-11-22):** the user narrowed M15a to the gaps the generic tools leave (D35, design
+`plans/2026-11-21-wiretap-m15a-design.md`): `fromUuids` on `create_documents` and a content `version` with `ifChanged`
+on `get_document`; the composite tools `build_actor`, `copy_document`, `add_embedded`, `export_to_handle` and
+`import_from_handle` were dropped in favour of skill recipes, and `diff_since` was not built (mode 2 logged in
+`TODO.md`). PLAN.md section 2.9, rows 5 and 9 of section 2.2, section 4.4 and the M15a section were rewritten to that
+scope.
 
 ## As-built notes (moved from PLAN.md)
 
@@ -634,6 +645,73 @@ recycle-bin removal):**
     it).
   - A new skill `wiretap-packs` holds the pack scripts; the carrier is described in `wiretap-mcp-sessions`, the gate in
     `wiretap-write-guard` and `wiretap-sidecar`.
+
+### As-built notes: M15a
+
+**As built (2026-11-22; `fromUuids` on `create_documents` with `writeCopy.js`, the content `version` and `ifChanged`
+on `get_document` with `contentHash.js`, the copy, actor-build and change-only recipes of the user-facing skill):**
+
+- Definition sizes (MEASURED, `npx tsx tests/measure/measureContext.mjs`): `create_documents` 794 B listed (description
+  111 characters; it listed 740 B before `fromUuids`, not the 640 B the design stated, and the design's 159-character
+  description measured 842 B, over the 800 B limit, so the description was shortened and every bound kept),
+  `get_document` 720 B (682 B before `ifChanged`); 21 tools, 11,393 B in all (max 30 tools, 16,000 B); hard failures 0.
+  Fixtures: compact view with 40 tuples 1,981 B of 2,000 B, unchanged ack 18 B, ten-path slice 422 B, 50-document
+  `create_documents` ack 3,541 B of 4,000 B.
+- Integration (MEASURED, `tests/integration/copyTools.test.js`): the largest MCP message the SDK client received during
+  the 100 KB copy was 178 B; the actor recipe took exactly two `tools/call` requests.
+- e2e on the live world (MEASURED, headless, 14.364): `tests/e2e/readTools.spec.js` 6 passed (52.5 s); the parent's
+  `_stats.modifiedTime` moved for none of an embedded update, create and delete, and the `version` changed for all
+  three. `tests/e2e/copyTools.spec.js` 2 passed in each of three runs (1.0 min with the e2e build, 32.0 s, 33.2 s): a
+  two-item embedded copy acked in 245 B (bound 4,000 B) with rows in `fromUuids` order; embedded copies, a plain GM
+  create and a world copy of a pack Item all stored `{ default: 0, <GM id>: 3 }`; the world copy stored `folder: null`,
+  `sort: 0` and `_stats.compendiumSource` equal to the pack document's uuid. Census 0 and gates restored after each run.
+  `tests/e2e/writeTools.spec.js` was not re-run after `batch` began sending client-chosen ids.
+- `skills/wiretap/SKILL.md` is 82 lines; its cap in `tests/unit/shippedSkill.test.js` is 82 (raised from 75 to fit the
+  recipes; the limit is agent-set).
+- Unit test limits raised with a measured reason in each comment: `tests/unit/backups.test.js` "stops reading headers
+  after 1000" 30 s to 60 s (11 to 31 s in full runs), `tests/unit/exportBackup.test.js` "refuses more than 10000
+  documents and more than 64000000 bytes" to 15 s (up to 5.1 s in a full run); `contextBudget.test.js`'s
+  all-fixtures test has 10 s. After the owner freed a filling disk, one verbose full run measured the header test at
+  18,676 ms and the export test at 3,315 ms.
+- Bugs found and fixed in M15a (each in `CLOSED_BUGS.md`): the stale `ifModifiedSince` read; an Adventure with an empty
+  `macros` set refused without `allowMacroExecution`; `create_documents` rows out of input order; `batch` created rows
+  out of entry order; the copy header's wrong ownership text; a keyed `keepId` retry refused as an overwrite; the
+  `contextBudget.test.js` and `searchDocuments.test.js` full-run timeouts. Open at the close: the
+  `SuperviseServer.test.js` full-run timeout (`OPEN_BUGS.md`).
+- Decisions (the owner's own rulings are marked; the rest are designer's or controller's calls):
+  - One builder for every target kind (world, pack, embedded): `toCompendium(null, ...)`, then every `ownership`,
+    `_id` (unless `keepId`), `sort` and `folder` deleted. Rejected: `fromCompendium`, which keeps `folder`, re-adds a
+    top-level `ownership` and exists on world collections only.
+  - `ownership` is removed from copies entirely, at every depth and for Adventure content entries too, so a copy needs
+    no `allowOwnershipWrites`; the stored copy still gets the creating user as OWNER, as any create does, because the
+    server's `_preCreate` adds the creator (`dist/database/backend/server-document.mjs`). Rejected: refusing Adventure
+    copies whose content carries ownership.
+  - The version is 14 lowercase hex digits (`hashText`, the form `requestHash` already returned); `ifChanged` is
+    bounded to 32 characters; the helpers live in `src/bridge/scripts/contentHash.js`.
+  - The version hashes the export the read returns: the prepared export for `derived: true` (owner's ruling, "Hash what
+    is returned"). Rejected: hashing stored data only, which says "unchanged" after a derived value changes through
+    another document.
+  - `idempotencyKey` hashes `{ fromUuids }` in place of `data`, so a retry after a source edit replays; a retry after
+    the source was deleted is `DOC_NOT_FOUND`, not a replay.
+  - `fromUuids` items are bounded to 256 characters and the array to 1 to 50.
+  - Copies have no 200,000 B per-call byte bound; the 50-uuid cap is their bound (owner's ruling 2026-11-22, "Write it
+    down only").
+  - A keyed retry rebuilds the copies and judges them before the replay lookup, the same order as `data` (owner's
+    ruling 2026-11-22, "Write it down only").
+  - An Adventure whose `macros` list is empty needs no macro gate (owner's ruling 2026-11-22, "Empty list passes");
+    a deletion of the set and a dotted path into it stay gated.
+  - Create rows follow input order: `runCreate` sends every document with a client-chosen id under `keepId: true` and
+    matches the answer by id (owner's ruling 2026-11-22, "Keep the fix"). Rejected: creating one document at a time,
+    or dropping the order promise.
+  - `batch` created rows follow entry order (option B): ids under `keepId` per group, rows put back in flat entry order.
+    Rejected: order within each group only, and one create operation per entry.
+  - With `keepId`, `refuseTakenIds` runs after the key lookup, so a keyed retry replays; a call with no matching
+    record still meets it before any write.
+  - The user-facing skill's line cap was raised from 75 to 82 rather than rewording other bullets.
+  - The fake GM client of the integration harness may answer asynchronously, so a test can run the real handlers.
+  - The backups 1,000-header test limit (60 s) and the exportBackup 10,000-document test limit (15 s) were raised with
+    measured reasons after the owner fixed a filling disk.
+  - Task 1 (version) and its e2e were separate commits, because the e2e needs a live Foundry and a second agent type.
 
 ## Decision provenance (moved from PLAN.md section 3)
 

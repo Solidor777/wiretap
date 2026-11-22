@@ -187,7 +187,8 @@ method `405`.
   `create_documents` takes `documentName` and exactly one of `data` (1 to 50 JSON object texts, at most 200,000 bytes
   in all) and `fromUuids` (1 to 50 uuids of world, embedded or compendium documents of that class to copy; both or
   neither is `ARGS_INVALID`), and optionally `parentUuid` (embedded documents), `pack` (a compendium), `keepId`,
-  `dryRun` and `paths`; it returns one `{uuid, name, type}` per document (4,000 bytes at most, 256 per document). A
+  `dryRun` and `paths`; it returns one `{uuid, name, type}` per document, in the order of `data` or `fromUuids`
+  (4,000 bytes at most, 256 per document). A
   copy is built in the Foundry client from the source document, so the source body never reaches the agent, and it
   meets every gate, write guard, validation, `actAs` and `dryRun` check that a `data` create of the same content would.
   A copy carries no ownership of its source at any depth, and Foundry makes the creating user its OWNER, as for any
@@ -245,8 +246,9 @@ method `405`.
   the same key with other data (or after one of its documents was deleted) is `IDEMPOTENCY_CONFLICT`. For a copy the
   request hash covers `fromUuids` as given, not the source content, so a retry after a source was edited returns the
   first call's rows; a keyed retry replays only while every source still resolves and passes the checks that run before
-  the replay lookup (resolution, the read refusals, the write guard and, with `keepId`, the taken-id check), else it
-  returns that refusal and writes nothing. A collection of
+  the replay lookup (resolution, the read refusals and the write guard), else it returns that refusal and writes
+  nothing. With `keepId`, the taken-id check runs after the lookup, so a keyed retry whose ids its first call took
+  replays. A collection of
   more than 20,000 documents is refused with `IDEMPOTENCY_UNAVAILABLE`. The whole `flags.wiretap` scope, and any write
   that would erase `flags`, is refused (`GATE_DENIED`). `actAs` (a user id) on every write tool is best-effort and
   advisory: after the gates have been judged, Foundry is asked whether that user could make the same change

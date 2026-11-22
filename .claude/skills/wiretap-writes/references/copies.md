@@ -65,7 +65,9 @@ A keyed retry rebuilds the copies (`copyDataFromUuids`) and judges them before t
 only then calls `applyIdempotency`. So a retry replays only while every source still resolves and is readable and its
 copy passes that guard; otherwise it returns that refusal and writes nothing. With `keepId`, `refuseTakenIds` runs
 after the lookup: a keyed `keepId` retry whose kept ids its first call took replays, and a call with no matching
-record (no key, or a key with no record yet) still meets `refuseTakenIds` before any write. Foundry validation and the
+record (no key, or a key with no record yet) still meets `refuseTakenIds` before any write. With `keepId`, a taken id
+under a key whose records carry another hash is `IDEMPOTENCY_CONFLICT`, and a keyed call into a pack is refused with
+the pack's `ARGS_INVALID` text, both before the taken-id check. Foundry validation and the
 second `guardWrite` on the cleaned data also run after the lookup, so a replay does not run them (a replay still runs
 `checkActAs` against the earlier documents).
 
@@ -77,7 +79,8 @@ second `guardWrite` on the cleaned data also run after the lookup, so a replay d
 - `tests/unit/writeCopyCreate.test.js`: `fromUuids` through `create_documents` with the mock world: world, embedded and
   pack copies, the exactly-one-of rule, every refusal writing nothing, a closed gate refused as for `data`, a placed
   source with every gate closed, `dryRun`, idempotency replay after an edit and conflict, `flags.wiretap` with and
-  without a key, `keepId` and a taken `_id`, a keyed `keepId` embedded copy whose retry replays, read-back, both Adventure macro cases, the definition bounds.
+  without a key, `keepId` and a taken `_id`, a keyed `keepId` embedded copy whose retry replays, read-back, both
+  Adventure macro cases, the definition bounds.
 - `tests/integration/copyTools.test.js`: the real shipped scripts behind a fake GM through the sidecar and the SDK
   client: a 100 KB copy whose body never reaches the agent, the two-call actor build, a missing source.
 - `tests/e2e/copyTools.spec.js`: the live world: two world Items copied onto an Actor (rows in `fromUuids` order, new

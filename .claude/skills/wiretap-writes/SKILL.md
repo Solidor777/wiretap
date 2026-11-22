@@ -36,7 +36,7 @@ paths:
 
 # Wiretap phase B write tools
 
-Covers the phase A scripts (`create_documents`, `update_documents`, `delete_documents`) and the phase B tools; the guard is in `wiretap-write-guard`. Fourteen shipped
+Covers the phase A scripts (`create_documents`, `update_documents`, `delete_documents`) and the phase B tools; the guard is in `wiretap-write-guard`. Sixteen shipped
 scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B raw-definition limit, MEASURED by
 `tests/measure/measureContext.mjs`). Foundry version read and measured: 14.364 (`game.version`).
 
@@ -185,7 +185,9 @@ documents" and the remedy (a new key); the missing documents are never created b
 `_stats.createdTime`. A class with no `flags` field (Setting) cannot carry the record: `prepareCreate` refuses an
 `idempotencyKey` there with `ARGS_INVALID`, as it does for a pack. Order in `prepareCreate`: `refuseUnsafeData`, target,
 `guardWrite`, the key lookup, then (with `keepId`) `refuseTakenIds`, so a keyed `keepId` retry whose ids its first call
-took replays, and a call with no matching record still meets `refuseTakenIds` before any write.
+took replays, and a call with no matching record still meets `refuseTakenIds` before any write. With `keepId`, a taken
+id under a key whose records carry another hash is `IDEMPOTENCY_CONFLICT`; a keyed call into a pack gets the pack's
+`ARGS_INVALID` text.
 
 ## Delete and replace gates, operators, guard rules
 
@@ -219,7 +221,7 @@ Unit over `mockWriteWorld.js` (its `MockValidationError` reproduces the 14.364 b
 `getAllFailures()`) and `mockFoundryData.js` (see `wiretap-write-guard`; models Foundry's operation preprocessing, `world.batch.failure = { index, phase }`,
 `world.cancel.{updateIds,deleteIds,createNames}`, `world.createOrder.reverse` (creates answered in reverse), `_id`-equality `database.get`, a server copy, `fromImport`,
 `canUserModify`): `writeCreate`, `writeCopy`, `writeCopyCreate` (references/copies.md), `writeUpdate`, `writeDelete`, `writeScripts`, `writeReplace*`, `writeBatch*`,
-`writeActAs`, `writeIdempotency*`, `writePhaseB`, `handleInput`, plus handle cases in `handles.test.js`. Integration `writeToolsB.test.js` (sidecar with a fake client,
+`writeActAs`, `writeIdempotency*`, `writeKeepId`, `writePhaseB`, `batchHandler` (row order), `handleInput`, plus handle cases in `handles.test.js`. Integration `writeToolsB.test.js` (sidecar with a fake client,
 including handle inputs). e2e `tests/e2e/writeTools.spec.js` (live world, throwaway `Wiretap E2E ` documents):
 replace with a `preUpdateActor` hook and omitted-field reset, batches with unchanged / hook-cancelled middle operations,
 ghost / phantom repair, embedded and parentUuid batches, idempotent and concurrent creates, handle create / replace,

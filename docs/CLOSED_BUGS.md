@@ -141,7 +141,9 @@
 - **Verified:** `tests/unit/writeCreate.test.js` "createDocuments: rows follow the order of the data" (world,
   embedded, pack and keepId creates with `world.createOrder.reverse`, which makes the mocked server answer in reverse,
   and a data `_id` replaced without keepId). Before the fix all five failed (the order cases with
-  `[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]`); after it they pass. Not re-measured on the live world here.
+  `[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]`); after it they pass. On the live world (MEASURED, three runs of
+  `tests/e2e/copyTools.spec.js` after the fix, 2 passed each) the `parentUuid` copy's rows followed `fromUuids` every
+  time.
 
 ## The copy header described a create's ownership wrongly
 
@@ -179,7 +181,6 @@
   and the mixed `[Actor A, Item B, Actor C]` through `batchHandler` (dry run and real). Before the fix both failed
   (`[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]` and `[ 'MOCK_A', 'MOCK_C', 'MOCK_B' ]`); after it they pass. Not re-measured on
   the live world here.
-
 
 ## contextBudget.test.js timed out inside a default-worker npm test
 
@@ -254,3 +255,23 @@
   under the parent" (`tests/unit/writeCopyCreate.test.js`) failed before the fix and pass now; "refuses on a dry run
   too, and under an idempotency key" (a taken id with a key and no record) still passes. `npm test`: 133 files, 2958
   passed and 2 skipped.
+
+## `get_document` with `ifModifiedSince` missed embedded changes
+
+- **Was:** `get_document` with `ifModifiedSince` returned `{unchanged:true}` for a parent document whose embedded
+  document had changed, and the compact view's `modified` field had the same blind spot. `getDocument.js` compared only
+  the parent's `_stats.modifiedTime`, and Foundry 14.364 leaves that stamp unchanged when an embedded Item is updated
+  (MEASURED on the live titan world: actor `before` = `after` = 1795310889255, item 1795310889307). Found before M15a;
+  fixed in M15a.
+- **Measured in M15a:** `tests/e2e/readTools.spec.js` records whether the parent's `_stats.modifiedTime` moves for an
+  embedded Item update, an embedded ActiveEffect create and the delete of that ActiveEffect; on the live world it moved
+  for none of the three (`{"update":false,"create":false,"delete":false}`, the same in two runs). A timestamp check
+  cannot see any embedded change, and a delete leaves no timestamp behind at all.
+- **Fix:** `ifModifiedSince` and `modified` are gone. `get_document` computes a content `version` (`contentVersion` of
+  `src/bridge/scripts/contentHash.js`: cyrb53 over the export with every object's keys sorted, 14 hex digits) of the
+  whole export the read returns, embedded collections and `_stats` included and redacted values excluded; the compact,
+  `paths` and `fields` results carry it, and `ifChanged` equal to it returns `{unchanged:true}`.
+- **Verified:** `tests/unit/getDocument.test.js` "changes the version when an embedded item is updated, created or
+  deleted" and the rest of its `get_document version and ifChanged` block; `tests/e2e/readTools.spec.js` "ifChanged on
+  a parent sees an embedded update, an embedded create and an embedded delete" (6 passed on the live world), where each
+  step's control read with the old version answers `{unchanged:true}` before the change and not after it.
