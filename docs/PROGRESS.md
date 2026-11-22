@@ -23,14 +23,14 @@ document, so none are stated here; the count at the time this file was written i
 | M6 Sheets and gameplay | Done | 2026-11-20 | `fab9300` (plan); `823e070`, `3aeba20`, `c601f8b`, `e5da1ff`, `acec4dd`, `f3b7d38` (tasks 1 to 6); `bbbdcd1`, `4dbf3bf`, `15984e8`, `f08ec17`, `11940fe`, `44c9ac5`, `7fe13ce`, `c3f5129` (buddy-check fixes and plan edits); `8c58704`, `6bc5b2a`, `9e245a2` (e2e); `6a3f7cb`, `717da53` (docs); `418e6f9`, `7887884` (final-review minors) | [`plans/2026-11-20-wiretap-m6-sheets-gameplay.md`](plans/2026-11-20-wiretap-m6-sheets-gameplay.md); as-built notes below; `open_sheet`, `close_sheet`, `roll`, `draw_table`, `execute_macro` in `src/bridge/scripts/`; 15 tools, 8,149 B of definitions |
 | M21 Document backups | Done | 2026-11-21 | `253257f`, `3914297` (design and plan); `393ac25`, `302d9f9`, `517fb81`, `723a3ad`, `76b9ad8`, `9a6f979`, `a8b78d1`, `9c30bb4`, `e4c2085`, `b61251f`, `cd2967a`, `d5b3960`, `da9bd16`, `fa9e809` (features and fixes); `80403c5`, `79f94ac`, `8f820be`, `f9bc54a` (tests); merges `1881516`, `8570e4f`, `18fc7b1`, `f5409a4`, `ec5a77e`, `8433951`, `176d540`, `eb570e0`, `b70cbc1`, `640f155`; `docs: close M21; progress, README and skills` | [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md), [`plans/2026-11-21-wiretap-m21-backups.md`](plans/2026-11-21-wiretap-m21-backups.md); as-built notes below; `backup_documents`, `list_backups`, `restore_backup`, `delete_backup` in `server/backupTools.ts`; 19 tools, 10,426 B of definitions |
 | M18 Compendium pack tools | Done | 2026-11-21 | `10ffd14`, `75ef915` (design and plan); `a7ce589`, `b4f9f24`, `214426b`, `3b6787b`, `d372696`, `72c6af2`, `b41ab2e` (features and fix); `a48ffd2`, `869a36d`, `989582d`, `e15d83b`, `1361027` (tests); merges `c9773e5`, `ae02d1c`, `f239556`, `5d8da73`, `853581a`, `f47640c`, `9cbf590`, `bab19f8`, `02bda56`, `86aaa0e`, `bf0b67e`; `7c3bbb6`, `343465e` and the final-review docs commit (docs) | [`specs/2026-11-21-wiretap-pack-tools-design.md`](specs/2026-11-21-wiretap-pack-tools-design.md), [`plans/2026-11-21-wiretap-m18-pack-tools.md`](plans/2026-11-21-wiretap-m18-pack-tools.md); as-built notes below; `create_pack`, `delete_pack` in `src/bridge/scripts/`; the `allowPackDeletion` gate; 21 tools, 11,330 B of definitions |
-| M15a Copy by uuid and content versions | Done | 2026-11-21 to 2026-11-22 | `f883eb8`, `d42de9f` (design and plan); `bbea2d4`, `2c58019`, `6a9fcd2`, `1bed934`, `64c9b78`, `f88bb0c`, `db6e6a2`, `d5d897b`, `786c5a6` (features and fixes); `9595303`, `b54fb70`, `0abefeb`, `c7a7e58`, `c5de351`, `f549e95`, `0ae7ff5` (tests); `144ca8a`, `cb2adf2`, `31643e4`, `6eec27c`, `d27bf23` and `docs: close M15a; progress, README and skills` (docs) | [`plans/2026-11-21-wiretap-m15a-design.md`](plans/2026-11-21-wiretap-m15a-design.md), [`plans/2026-11-21-wiretap-m15a-plan.md`](plans/2026-11-21-wiretap-m15a-plan.md); as-built notes below; `fromUuids` on `create_documents`, `version` and `ifChanged` on `get_document`, the copy, actor and change-only recipes in `skills/wiretap/SKILL.md`; D35; 21 tools, 11,393 B of definitions |
+| M15a Copy by uuid and content versions | Done | 2026-11-21 to 2026-11-22 | `f883eb8`, `d42de9f` (design and plan); `bbea2d4`, `2c58019`, `6a9fcd2`, `1bed934`, `64c9b78`, `f88bb0c`, `db6e6a2`, `d5d897b`, `786c5a6` (features and fixes); `9595303`, `b54fb70`, `0abefeb`, `c7a7e58`, `c5de351`, `f549e95`, `0ae7ff5`, `2865459` (tests); `144ca8a`, `cb2adf2`, `31643e4`, `6eec27c`, `d27bf23` and `docs: close M15a; progress, README and skills` (docs); `c102166`, `9a23dc6`, `d38825c` and `docs: M15a final-review progress` (final-review fixes) | [`plans/2026-11-21-wiretap-m15a-design.md`](plans/2026-11-21-wiretap-m15a-design.md), [`plans/2026-11-21-wiretap-m15a-plan.md`](plans/2026-11-21-wiretap-m15a-plan.md); as-built notes below; `fromUuids` on `create_documents`, `version` and `ifChanged` on `get_document`, the copy, actor and change-only recipes in `skills/wiretap/SKILL.md`; D35; 21 tools, 11,393 B of definitions |
 
-Current suite (MEASURED 2026-11-22, `npm test` at the M15a close): 133 test files, 2957 tests passed, 1 failed, 2
-skipped (2960); the failure is the `SuperviseServer.test.js` timeout logged in `OPEN_BUGS.md` (the test passes alone;
-the last fully green run, after `786c5a6`, was 2958 passed and 2 skipped). Headless
+Current suite (MEASURED 2026-11-22, `npm test` after the M15a final-review fixes): 133 test files, 2960 tests passed,
+2 skipped (2962); `OPEN_BUGS.md` holds none. Headless
 e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless
 `WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs, the M21 specs `backupTools.spec.js` and `gates.spec.js`, and the
-M18 spec `packTools.spec.js` and the M15a specs `readTools.spec.js` and `copyTools.spec.js` were run on their own (see
+M18 spec `packTools.spec.js` and the M15a specs `readTools.spec.js`, `copyTools.spec.js` and `writeTools.spec.js` were
+run on their own (see
 M6, M21, M18 and M15a below). A full e2e run after M6 has not been
 made.
 
@@ -665,7 +665,9 @@ on `get_document` with `contentHash.js`, the copy, actor-build and change-only r
   two-item embedded copy acked in 245 B (bound 4,000 B) with rows in `fromUuids` order; embedded copies, a plain GM
   create and a world copy of a pack Item all stored `{ default: 0, <GM id>: 3 }`; the world copy stored `folder: null`,
   `sort: 0` and `_stats.compendiumSource` equal to the pack document's uuid. Census 0 and gates restored after each run.
-  `tests/e2e/writeTools.spec.js` was not re-run after `batch` began sending client-chosen ids.
+  `tests/e2e/writeTools.spec.js` ran after `batch` began sending client-chosen ids: 25 passed (3.0 min); after the
+  final-review fixes, which add the batch row-order assertion (interleaved Actor, embedded Item, world Item and Actor
+  creates; row i names entry i and its uuid stores that name), 25 passed (2.1 min), census 0 and gates restored.
 - `skills/wiretap/SKILL.md` is 82 lines; its cap in `tests/unit/shippedSkill.test.js` is 82 (raised from 75 to fit the
   recipes; the limit is agent-set).
 - Unit test limits raised with a measured reason in each comment: `tests/unit/backups.test.js` "stops reading headers
@@ -676,8 +678,8 @@ on `get_document` with `contentHash.js`, the copy, actor-build and change-only r
 - Bugs found and fixed in M15a (each in `CLOSED_BUGS.md`): the stale `ifModifiedSince` read; an Adventure with an empty
   `macros` set refused without `allowMacroExecution`; `create_documents` rows out of input order; `batch` created rows
   out of entry order; the copy header's wrong ownership text; a keyed `keepId` retry refused as an overwrite; the
-  `contextBudget.test.js` and `searchDocuments.test.js` full-run timeouts. Open at the close: the
-  `SuperviseServer.test.js` full-run timeout (`OPEN_BUGS.md`).
+  `contextBudget.test.js`, `searchDocuments.test.js` and `SuperviseServer.test.js` full-run timeouts (the last fixed
+  in `2865459`). None is open.
 - Decisions (the owner's own rulings are marked; the rest are designer's or controller's calls):
   - One builder for every target kind (world, pack, embedded): `toCompendium(null, ...)`, then every `ownership`,
     `_id` (unless `keepId`), `sort` and `folder` deleted. Rejected: `fromCompendium`, which keeps `folder`, re-adds a
