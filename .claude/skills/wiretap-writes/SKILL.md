@@ -45,7 +45,7 @@ scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B ra
 |---|---|
 | `src/bridge/scripts/writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments` and the planners `prepareCreate`, `prepareUpdates`, `prepareDeletes` that `batch` and `replace_document` reuse (`prepareCreate` / `runCreate` also serve the backup restore); the guard calls, validation (`failuresOf`), `refuseTakenIds`, `refuseUnsafeData` |
 | `src/bridge/scripts/createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | Handlers of the phase A scripts (`updateDocuments.js` groups patch entries by uuid) |
-| `src/bridge/scripts/writeArgs.js`, `writeAck.js` | Argument helpers (`parseDataObjects`, `parseJson`, `checkDataBytes`, `createId`: the id a create is sent with, for `runCreate` and the idempotency record) and ack shaping |
+| `src/bridge/scripts/writeArgs.js`, `writeAck.js` | Argument helpers (`parseDataObjects`, `parseJson`, `checkDataBytes`, `createId`: the id a create is sent with, for `runCreate`, `batch` and the idempotency record) and ack shaping |
 | `src/bridge/scripts/writeCopy.js` | `copyDataFromUuids({ documentName, fromUuids, keepId })`: the create data of `create_documents`'s `fromUuids` (below); writes nothing |
 | `src/bridge/scripts/writeReplace.js`, `replaceDocument.js` | `replace_document` and its handler; `prepareReplace` / `runReplace` and restore mode, `stripWiretapFlags`, `droppedEmbedded`, the carry of `flags.wiretap` |
 | `src/bridge/scripts/writeBatch.js`, `writeBatchSettle.js`, `batch.js` | `batch`: planning, `modifyBatch`, settle and repair |
@@ -155,21 +155,15 @@ references/strict-arguments.md before changing either validator, `strictNested` 
 `prepareCreate`, `prepareUpdates`, `prepareDeletes` (one `checkDataBytes` total over creates and updates), so each
 passes `guardWrite`, validation and `actAs` before anything is sent. Order: creates, updates, deletes; no reference to a
 document an earlier operation creates; `checkConflicts` refuses update/delete on one document. `buildOperations`
-builds updates as `{ ...changes, _id }`.
+builds updates as `{ ...changes, _id }` and sends every created document with a `createId` id under `keepId: true`
+(Foundry answers a create in `createNewId` order, see `runCreate`); `acknowledge` matches each group's answer by id.
+Row order: `groupCreates` (`batch.js`) sends one create per class and parent in first-use order and returns `rowOrder`,
+so created row i is create entry i (dry run too); updated rows one per uuid in first-patch order; deleted rows as given.
 
-Sent with `foundry.documents.modifyBatch`. Behaviour READ in the 14.364 tree (`server-backend.mjs`, batch handler `#r`;
-the 14.369 tree names it `#a`: cite behaviour, not the name): the client drops cancelled entries and no-op updates
-(an operation with nothing left is not sent); the server validates all first and writes nothing on a validation error
-but still returns dry-run echoes of the passing requests (the client treats them as real: ghost creates, phantom
-deletes); it then applies one by one and stops at the first failure, NO rollback. Errors surface only as notifications.
-
-`settle` matches results to operations by document id, the parent of the result (`SettleEntry.parent`, kept because
-Foundry deletes `operation.parent` while sending) and, for a create, ids no other sent operation touches (states
-applied, unchanged, partial, cancelled, failed, echo);
-`confirmAfterFailure` asks the server (`database.get` with `_id` equality per id; `$in` returns nothing, MEASURED),
-removes ghost creates and restores phantom deletes; `incomplete` throws `WRITE_NOT_APPLIED` ("N of M operations
-applied, X unchanged, Y partly cancelled by a hook, Z cancelled by a hook, W failed, V not written; the batch is not
-atomic", <= 256 B). Unchanged or cancelled updates ack `changed: []`; in an embedded update group with several entries, an entry Foundry dropped (unchanged or hook-cancelled) simply has no paths in the ack and the batch raises no error, an update is never `partial` (tested in `writeBatchStrict.test.js`). Compendium pack operations cannot be re-checked.
+Sent with one `foundry.documents.modifyBatch` call; NOT atomic (the server stops at the first failure, no rollback).
+`settle` matches results to operations, `confirmAfterFailure` repairs ghost creates and phantom deletes, `incomplete`
+throws `WRITE_NOT_APPLIED`. Read references/batch-settle.md (what Foundry does with a batch, the states, the repair, the
+error text) before changing `writeBatchSettle.js` or how operations are matched.
 
 ## actAs (`writeActAs.js`)
 

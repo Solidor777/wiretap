@@ -159,3 +159,24 @@
   measured and read. No code changed. Embedded copies' stored ownership is not measured (Inferred: the server runs the
   same `_preCreate` for them).
 
+## batch created rows did not follow the entries
+
+- **Was:** `batch` sent its creates without ids (`keepId` false) and listed the `created` rows in the order Foundry
+  answered each create operation (`acknowledge` in `src/bridge/scripts/writeBatch.js` mapped
+  `states[index].documents`). READ in the 14.364 tree (`dist/database/backend/server-backend.mjs`, minified): the
+  batch handler runs each operation through `modifyDocument`, which reaches `_createDocuments`, and that answers
+  documents whose ids the server generates in the order its `createNewId` lookups finish. On top of that,
+  `groupCreates` (`src/bridge/scripts/batch.js`) merges the entries into one create per class and parent in first-use
+  order, so `[Actor A, Item B, Actor C]` came back `A, C, B`. Found in M15a; not measured live.
+- **Fix:** `buildOperations` sends every created document with an id from `createId` (`writeArgs.js`) under
+  `keepId: true`, as `runCreate` does, and `acknowledge` matches each group's answer by id, so each group's rows follow
+  its data. `groupCreates` also returns `rowOrder`, the place of each entry's row among the group-by-group rows, and
+  `batchHandler` puts the `created` rows back in entry order, dry run included. The grouping, the operations sent
+  (beyond the ids and `keepId`) and the row shape are unchanged; updated rows stay one per uuid in first-patch order
+  and deleted rows in the order given.
+- **Verified:** `tests/unit/writeBatch.test.js` "batch: created rows follow the order of the entries", with
+  `world.createOrder.reverse` (the mocked `modifyBatch` now answers creates in reverse too): one group of three creates
+  and the mixed `[Actor A, Item B, Actor C]` through `batchHandler` (dry run and real). Before the fix both failed
+  (`[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]` and `[ 'MOCK_A', 'MOCK_C', 'MOCK_B' ]`); after it they pass. Not re-measured on
+  the live world here.
+

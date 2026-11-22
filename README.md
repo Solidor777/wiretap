@@ -236,8 +236,10 @@ method `405`.
   operation first and writes nothing when one fails; it then applies them one by one and stops at the first failure, so
   a batch is NOT atomic and the earlier operations stay applied. Operations Foundry drops (an update that changes nothing,
   or one a hook cancels) report `changed: []`; a shortfall is `WRITE_NOT_APPLIED` with how many operations were applied,
-  unchanged, cancelled, failed or not written. Every operation passes the same write guard as the single tools, `_id` is
-  never a writable path, and the ack of a 50-document batch is at most 4,000 bytes. `create_documents` accepts
+  unchanged, cancelled, failed or not written. The rows follow the entries: created row i is create entry i, an updated
+  row per uuid comes in the order of its first patch, and deleted rows come in the order given. Every operation passes
+  the same write guard as the single tools, `_id` is never a writable path, and the ack of a 50-document batch is at
+  most 4,000 bytes. `create_documents` accepts
   `idempotencyKey` (1 to 64 of `A-Z a-z 0-9 . _ : -`): the key is stored as the module flag `flags.wiretap.idem` on each
   created document, a repeat of the same request within one day returns the first call's rows and creates nothing, and
   the same key with other data (or after one of its documents was deleted) is `IDEMPOTENCY_CONFLICT`. For a copy the

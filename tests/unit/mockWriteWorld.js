@@ -302,9 +302,10 @@ export function installWriteWorld(fn, options = {}) {
       createNames: new Set(),
    };
    /**
-    * The order in which a create call returns its documents. `reverse` returns them in the reverse of the request's
-    * order: Foundry's server pushes each created document after awaiting a fresh id, so the order it answers in is not
-    * the request's (`dist/database/backend/server-backend.mjs` `_createDocuments`).
+    * The order in which a create call, or a create operation of `modifyBatch`, returns its documents. `reverse`
+    * returns them in the reverse of the request's order: Foundry's server pushes each created document after awaiting
+    * a fresh id, so the order it answers in is not the request's (`dist/database/backend/server-backend.mjs`
+    * `_createDocuments`, which a batch create also reaches).
     * @type {{ reverse: boolean }}
     */
    const createOrder = { reverse: false };
@@ -851,7 +852,7 @@ export function installWriteWorld(fn, options = {}) {
     */
    function perform(operation, real) {
       if (operation.action === 'create') {
-         return operation.data.map((item) => {
+         return answerOrder(operation.data.map((item) => {
             const data = {
                ...cleanFor(operation.documentName, item),
                _id: operation.keepId && item._id ? item._id : nextId(),
@@ -862,7 +863,7 @@ export function installWriteWorld(fn, options = {}) {
                   pack: operation.pack,
                   ghost: !real,
                });
-         });
+         }));
       }
       if (operation.action === 'update') {
          return operation.updates.map((update) => {

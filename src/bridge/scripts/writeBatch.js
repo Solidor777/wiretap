@@ -22,6 +22,7 @@ import { getBudget } from '$shared/budgets.js';
 import { cleanForLog } from '$shared/logText.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { resolveActAs } from '~/bridge/scripts/writeActAs.js';
+import { createId } from '~/bridge/scripts/writeArgs.js';
 import { confirmAfterFailure, incomplete, isComplete, settle } from '~/bridge/scripts/writeBatchSettle.js';
 import {
    deletionRows,
@@ -48,6 +49,7 @@ import {
  * @property {object | null} parent - The parent document of an embedded operation, or null. Foundry deletes it from
  * the operation while sending.
  * @property {object} operation - The operation object handed to `modifyBatch`.
+ * @property {string[]} [ids] - The id each document of a create operation is sent with, in data order.
  * @property {import('~/bridge/scripts/writes.js').UpdatePlan} [plan] - The update plan, for an update operation.
  * @property {string} [collection] - The embedded collection name of an embedded update, if it is one.
  */
@@ -101,6 +103,11 @@ function checkConflicts(plans, deleted) {
 
 /**
  * Build the operations of a prepared batch, in the order creates, updates, deletes.
+ *
+ * Every created document is sent with an id under `keepId: true` (`createId`: the kept `_id` under `keepId`, else a
+ * fresh id), as `runCreate` does: the server answers a create in the order its `createNewId` lookups finish
+ * (`dist/database/backend/server-backend.mjs` `_createDocuments`, which the batch handler reaches through
+ * `modifyDocument`), so only the ids link the answer to the data.
  * @param {import('~/bridge/scripts/writes.js').CreatePlan[]} creates - The create plans.
  * @param {import('~/bridge/scripts/writes.js').UpdatePlan[]} updates - The update plans.
  * @param {object[]} deleted - The documents to delete.
@@ -110,15 +117,21 @@ export function buildOperations(creates, updates, deleted) {
    /** @type {BatchOperation[]} The operations built so far, in send order. */
    const operations = [];
    for (const plan of creates) {
+      /** @type {Record<string, unknown>[]} The data to send, each with the id its document is created with. */
+      const data = plan.payload.map((item) => ({
+         ...item,
+         _id: createId(item, plan.keepId),
+      }));
       operations.push({
          kind: 'create',
          expected: plan.payload.length,
          parent: plan.target.parent ?? null,
+         ids: data.map((item) => item._id),
          operation: {
             action: 'create',
             documentName: plan.documentName,
-            data: plan.payload,
-            keepId: plan.keepId,
+            data,
+            keepId: true,
             ...(plan.target.parent ? { parent: plan.target.parent } : {}),
             ...(plan.target.pack === null ? {} : { pack: plan.target.pack }),
          },
@@ -195,7 +208,12 @@ function acknowledge(operations, states, deleted) {
    const applied = new Map();
    for (const [index, entry] of operations.entries()) {
       if (entry.kind === 'create') {
-         created.push(...states[index].documents.map((document) => rowOf(document, false)));
+         /** @type {Map<string, object>} The created documents by id, in whatever order Foundry answered. */
+         const byId = new Map(states[index].documents.map((document) => [
+            document.id,
+            document,
+         ]));
+         created.push(...entry.ids.map((id) => rowOf(byId.get(id), false)));
       } else if (entry.kind === 'update') {
          if (!applied.has(entry.plan)) {
             applied.set(entry.plan, new Set());
@@ -233,6 +251,8 @@ function acknowledge(operations, states, deleted) {
  * Run creates, updates and deletes as one batch. See the file header for what Foundry guarantees.
  * @param {BatchParams} params - The operations.
  * @returns {Promise<{ created: object[], updated: object[], deleted: object[], dryRun?: true }>} The rows by kind.
+ * The created rows come create entry by create entry, each entry's documents in data order, whatever order Foundry
+ * answers in; one updated row per update entry, in the order given; one deleted row per uuid, in the order given.
  * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED`, `DELETE_REFUSED`,
  * `ACT_AS_DENIED` or `WRITE_NOT_APPLIED`.
  */
