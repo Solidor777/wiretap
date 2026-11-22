@@ -71,3 +71,5 @@ Foundry validation and the second `guardWrite` on the cleaned data run after the
   pack copies, the exactly-one-of rule, every refusal writing nothing, a closed gate refused as for `data`, a placed
   source with every gate closed, `dryRun`, idempotency replay after an edit and conflict, `flags.wiretap` with and
   without a key, `keepId` and a taken `_id`, read-back, both Adventure macro cases, the definition bounds.
+- `tests/integration/copyTools.test.js`: the real shipped scripts behind a fake GM through the sidecar and the SDK
+  client: a 100 KB copy whose body never reaches the agent, the two-call actor build, a missing source.

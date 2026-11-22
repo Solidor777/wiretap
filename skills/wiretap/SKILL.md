@@ -1,6 +1,6 @@
 ---
 name: wiretap
-description: Use when working with the live Foundry VTT world through the Wiretap MCP server (tools named mcp__wiretap__*), for example reading, creating, updating, replacing or deleting documents, backing up or restoring documents, opening or closing sheets, rolling dice or drawing from a table, running a macro, creating or deleting a compendium pack, or reading a large stored result.
+description: Use when working with the live Foundry VTT world through the Wiretap MCP server (tools named mcp__wiretap__*), for example reading, creating, updating, replacing or deleting documents, copying documents by uuid, backing up or restoring documents, opening or closing sheets, rolling dice or drawing from a table, running a macro, creating or deleting a compendium pack, or reading a large stored result.
 ---
 # Wiretap: Foundry VTT tools
 Wiretap acts on the live Foundry world through MCP tools that work via a connected GM's browser. With none connected, a
@@ -20,6 +20,13 @@ document (up to 50), for example `["{\"name\":\"Bob\",\"type\":\"npc\"}"]`. Add 
 Item under an Actor), `pack` for a compendium, `keepId` to keep each `_id`. The ack is `{uuid, name, type}` per
 document; `paths` adds those paths of each. Pass `idempotencyKey` (up to 64 letters, digits, `._:-`) so a retry after a
 timeout returns the first ack; the same key with other data is `IDEMPOTENCY_CONFLICT`.
+- **Copy documents.** `mcp__wiretap__create_documents` with `fromUuids` (up to 50 world, embedded or compendium
+documents of class `documentName`) instead of `data`, plus `pack` or `parentUuid` as for `data`: one call; the source
+body never enters your context. A copy gets a new `_id` (unless `keepId`), no `folder`, `sort`, `ownership` or
+`flags.wiretap`; a `User` cannot be copied; rename or adjust it with `update_documents`. **Build an actor** in two
+calls: the Actor with its own items and effects inline in `data`, then `documentName: "Item"`, `parentUuid` the new
+actor, `fromUuids` the compendium items. **Re-read only on change:** keep the `version` of a `get_document` result and
+pass it as `ifChanged`.
 - **Update documents.** `mcp__wiretap__update_documents` takes `updates`, one patch per entry: `uuid`, `path`, `value`
 (JSON text, so a string is `"\"x\""`) and `op`: `set` merges (default), `replace` swaps the whole value, `delete`
 removes the field (no value). Entries with one uuid form one update; embedded documents use `items.<_id>.system.x` (ids
@@ -35,8 +42,8 @@ atomic: Foundry checks all first, stops at the first failure and keeps what it d
 operations applied". `actAs` (a user id) on any write only checks that user's permission first (`ACT_AS_DENIED`).
 - **Compendium packs.** `mcp__wiretap__create_pack` (`label`, `type` a document type like `Actor`, optional `name`)
 makes an empty world pack; needs `allowCompendiumWrites`. `mcp__wiretap__delete_pack` (`id` is `world.<name>`) removes
-an unlocked world pack and every document in it for good; needs `allowPackDeletion`; marked so Claude Code (per its docs;
-untested here) prompts the human on every call. `dryRun` on both works with every gate closed (delete's
+an unlocked world pack and every document in it for good; needs `allowPackDeletion`; marked so Claude Code (per its
+docs; untested here) prompts the human on every call. `dryRun` on both works with every gate closed (delete's
 lists the count). Locked: `PACK_LOCKED` (the GM unlocks it); absent: `PACK_NOT_FOUND`; system, module packs refused.
 - **Backups.** Before a bulk update (about 10+ documents), any `replace_document`, delete or `delete_pack`, or a
 document-changing `execute_macro`, make or offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded one

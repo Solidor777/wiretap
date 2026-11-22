@@ -144,7 +144,9 @@ Covers the four read scripts (list_document_types, get_document, search_document
 to make or offer `backup_documents` before a bulk update, a replace, a delete or a document-changing macro, and to
 restore only when the user asks; its opening says `list_backups` and `delete_backup` work without a GM; its Compendium
 packs line names both pack tools, their gates and that Claude Code asks before every `delete_pack`) and must stay
-≤ 75 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test; it is 74 now).
+≤ 82 lines (`tests/unit/shippedSkill.test.js`; the context-budget test checks only its tool names; it is 81 now). Its
+Copy documents recipe covers `fromUuids`, the two-call actor build (inline items, then compendium items by uuid) and
+the change-only re-read (`version` passed as `ifChanged`).
 
 ## Backup export (`canonical.js`)
 

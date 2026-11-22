@@ -126,7 +126,8 @@ export function createHarness() {
        * Connect a fake GM client and identify it.
        * @param {object} [options] - Settings.
        * @param {string} [options.kind] - The endpoint kind.
-       * @param {(request: object) => object} [options.answer] - Builds the ack of an invocation.
+       * @param {(request: object) => object | Promise<object>} [options.answer] - Builds the ack of an invocation;
+       * the listener awaits it, so an answer may run real script handlers.
        * @param {boolean} [options.dom] - Whether the endpoint identifies as DOM-capable.
        * @returns {Promise<{ socket: ReturnType<typeof ioClient>, invokes: object[], register: Function,
        * registerRaw: Function, pushGates: Function }>} The client, its received invocations and emit helpers:
@@ -138,9 +139,9 @@ export function createHarness() {
          gms.push(socket);
          /** @type {object[]} The invocations this client received. */
          const invokes = [];
-         socket.on(BRIDGE_INVOKE, (request, ack) => {
+         socket.on(BRIDGE_INVOKE, async (request, ack) => {
             invokes.push(request);
-            ack(answer(request));
+            ack(await answer(request));
          });
          await new Promise((resolve) => socket.on('connect', resolve));
          await socket.emitWithAck(BRIDGE_IDENTIFY, {
