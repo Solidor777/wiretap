@@ -201,6 +201,33 @@ function cleanFor(documentName, data) {
 }
 
 /**
+ * Reduce the `ownership` of a document and of every embedded document (any object inside an array, as the mock's
+ * `_clearFieldsRecursively` reaches them) to `{ default }`, or drop it when it has no numeric `default`, in place, as
+ * the `clearOwnership` step of `ClientDocument#toCompendium` does (`client/documents/abstract/client-document.mjs`).
+ * @param {Record<string, unknown>} data - The data of a document.
+ * @returns {void}
+ */
+function reduceOwnership(data) {
+   if (Object.hasOwn(data, 'ownership')) {
+      /** @type {unknown} The default level, if any. */
+      const level = data.ownership?.default;
+      delete data.ownership;
+      if (typeof level === 'number') {
+         data.ownership = { default: level };
+      }
+   }
+   for (const value of Object.values(data)) {
+      if (Array.isArray(value)) {
+         for (const member of value) {
+            if (typeof member === 'object' && member !== null) {
+               reduceOwnership(member);
+            }
+         }
+      }
+   }
+}
+
+/**
  * Apply expanded changes to a source object the way a Foundry update does: a plain object merges, a forced
  * replacement assigns its value as a whole and a forced deletion removes the key.
  * @param {Record<string, unknown>} target - The source object, changed in place.
@@ -562,8 +589,48 @@ export function installWriteWorld(fn, options = {}) {
             return source;
          }
 
-         toCompendium() {
-            return structuredClone(this._source);
+         /**
+          * Export the data for a compendium with the option defaults of Foundry's `ClientDocument#toCompendium`
+          * (`client/documents/abstract/client-document.mjs`): `_id` dropped unless `keepId`, `sort` dropped, `folder`
+          * kept, the three `_stats` source keys dropped, and every `ownership` reduced to `{ default }`, embedded
+          * documents included.
+          * @param {object | null} pack - The target pack; unused, as in Foundry's base method.
+          * @param {object} [options] - The export options.
+          * @param {boolean} [options.keepId] - Keep `_id`.
+          * @param {boolean} [options.clearSort] - Drop `sort`.
+          * @param {boolean} [options.clearFolder] - Drop `folder`.
+          * @param {boolean} [options.clearSource] - Drop `_stats.compendiumSource`, `duplicateSource` and
+          * `exportSource`.
+          * @param {boolean} [options.clearOwnership] - Reduce every `ownership` to its `default` level.
+          * @returns {Record<string, unknown>} The exported copy.
+          */
+         toCompendium(pack, {
+            keepId = false,
+            clearSort = true,
+            clearFolder = false,
+            clearSource = true,
+            clearOwnership = true,
+         } = {}) {
+            /** @type {Record<string, unknown>} The copy of the data, embedded documents included. */
+            const data = this.toObject();
+            if (!keepId) {
+               delete data._id;
+            }
+            if (clearSort) {
+               delete data.sort;
+            }
+            if (clearFolder) {
+               delete data.folder;
+            }
+            if (clearSource && typeof data._stats === 'object' && data._stats !== null) {
+               delete data._stats.compendiumSource;
+               delete data._stats.duplicateSource;
+               delete data._stats.exportSource;
+            }
+            if (clearOwnership) {
+               reduceOwnership(data);
+            }
+            return data;
          }
       }
       return MockDoc;
