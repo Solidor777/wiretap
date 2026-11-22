@@ -294,6 +294,9 @@ export class TypedSchemaField extends ObjectField {
    }
 }
 
+/** An array of unique elements, which Foundry stores as a Set and exports as an array. */
+export class SetField extends ArrayField {}
+
 /** A schema bound to a data model class. */
 export class DataModelSchemaField extends SchemaField {
    /**
@@ -373,6 +376,7 @@ export const FIELD_CLASSES = {
    ObjectField,
    SchemaField,
    ArrayField,
+   SetField,
    TypedObjectField,
    TypedSchemaField,
    DataModelSchemaField,
@@ -435,10 +439,11 @@ export function buildSchema(documentName, classes, children) {
       fields.command = new DataField();
    }
    if (documentName === 'Adventure') {
-      // Foundry's `macros` and `scenes` are SetFields of data models (`common/documents/adventure.mjs`); an array of
-      // the same element stands in for each set.
-      fields.macros = new ArrayField(new EmbeddedDataField(classes.Macro));
-      fields.scenes = new ArrayField(new EmbeddedDataField(classes.Scene));
+      // Three of Foundry's content sets, each a SetField of embedded data models (`common/documents/adventure.mjs`
+      // :41-50); they are outside the document `hierarchy`.
+      fields.actors = new SetField(new EmbeddedDataField(classes.Actor));
+      fields.macros = new SetField(new EmbeddedDataField(classes.Macro));
+      fields.scenes = new SetField(new EmbeddedDataField(classes.Scene));
    }
    if (documentName === 'RegionBehavior') {
       /** @type {SchemaField} The system model of the `executeScript` type, which holds the script it runs. */

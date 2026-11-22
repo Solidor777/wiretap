@@ -83,6 +83,26 @@ function addSource(kind, data) {
 }
 
 /**
+ * List the dotted path of every `ownership` key at any depth of some data, array members included.
+ * @param {unknown} value - The data to search.
+ * @param {string} [path] - The path of `value` itself.
+ * @returns {string[]} The paths of the `ownership` keys found.
+ */
+function ownershipPaths(value, path = '') {
+   if (typeof value !== 'object' || value === null) {
+      return [];
+   }
+   return Object.entries(value).flatMap(([key, child]) => {
+      /** @type {string} The path of this child. */
+      const childPath = path === '' ? key : `${path}.${key}`;
+      return [
+         ...(key === 'ownership' ? [childPath] : []),
+         ...ownershipPaths(child, childPath),
+      ];
+   });
+}
+
+/**
  * Run `copyDataFromUuids` and return what it threw.
  * @param {object} params - The parameters.
  * @returns {Promise<Error>} The error.
@@ -195,6 +215,57 @@ describe('copyDataFromUuids', () => {
       expect(copy.items).toHaveLength(1);
       expect(Object.hasOwn(copy.items[0], 'ownership')).toBe(false);
       expect(copy.items[0].sort).toBe(7);
+   });
+
+   it('clears the ownership of every Adventure content entry and of the embedded documents inside one', async () => {
+      /** @type {object} The Adventure, whose content entries carry ownership as Foundry's exporter writes it. */
+      const adventure = addPacked('Adventure', {
+         name: 'MOCK_adventure',
+         ownership: { default: 0 },
+         actors: [
+            {
+               _id: 'MOCKACTOR0000001',
+               name: 'MOCK_actor',
+               type: 'npc',
+               ownership: { default: 0 },
+               items: [
+                  {
+                     _id: 'MOCKITEM00000001',
+                     name: 'MOCK_item',
+                     type: 'gear',
+                     ownership: {
+                        default: 0,
+                        MOCKUSER00000001: 3,
+                     },
+                  },
+               ],
+            },
+         ],
+         macros: [
+            {
+               _id: 'MOCKMACRO0000001',
+               name: 'MOCK_macro',
+               type: 'chat',
+               ownership: { default: 2 },
+            },
+         ],
+         scenes: [
+            {
+               _id: 'MOCKSCENE0000001',
+               name: 'MOCK_scene',
+               ownership: { default: 0 },
+            },
+         ],
+      });
+      /** @type {Record<string, unknown>[]} The copies. */
+      const [copy] = await copyDataFromUuids({
+         documentName: 'Adventure',
+         fromUuids: [adventure.uuid],
+      });
+      expect(ownershipPaths(copy)).toEqual([]);
+      expect(copy.actors[0].items[0].name).toBe('MOCK_item');
+      expect(copy.macros[0].name).toBe('MOCK_macro');
+      expect(copy.scenes[0].name).toBe('MOCK_scene');
    });
 
    it('sets _stats.compendiumSource to the source uuid for a pack source only', async () => {

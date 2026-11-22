@@ -3,24 +3,32 @@
  * the agent. The result is plain data for `prepareCreate`, which judges it like any other create data; this module
  * writes nothing.
  *
- * Foundry has three copy paths, read in the v14 tree (`C:\FoundryVTT\V14\dev\foundry\`):
- *
- * - `ClientDocument#toCompendium(pack, { clearSort = true, clearFolder = false, clearFlags = false, clearSource =
- * true, clearOwnership = true, clearState = true, keepId = false })` (`client/documents/abstract/client-document.mjs`
- * :1113-1134) starts from `toObject()` (embedded documents included), deletes `_id` unless `keepId`, the top-level
+ * Foundry's copy paths, read in the v14 tree (`C:\FoundryVTT\V14\dev\foundry\`), are built on one method,
+ * `ClientDocument#toCompendium(pack, { clearSort = true, clearFolder = false, clearFlags = false, clearSource = true,
+ * clearOwnership = true, clearState = true, keepId = false })` (`client/documents/abstract/client-document.mjs`
+ * :1113-1134). It starts from `toObject()` (embedded documents included), deletes `_id` unless `keepId`, the top-level
  * `sort` when `clearSort`, `folder` when `clearFolder` and `active` when `clearState`. With `clearSource` it deletes
  * `_stats.compendiumSource`, `duplicateSource` and `exportSource`, and with `clearOwnership` it deletes `author`, of the
  * document and of every embedded document (`Document._clearFieldsRecursively`, `common/abstract/document.mjs`
- * :1311-1330, which follows `hierarchy`). With `clearOwnership` it also replaces the `ownership` of every such
+ * :1311-1330, which follows `hierarchy` only). With `clearOwnership` it also replaces the `ownership` of every such
  * document with `{ default }`, or drops it when it has no numeric `default`: the key stays (:1125-1132).
- * - A pack import of a world document calls `document.toCompendium(pack, options)`, with `clearOwnership` defaulting to
- * true for a world pack (`client/documents/collections/compendium-collection.mjs:469-474`); `folder` is kept.
- * - A world import calls `WorldCollection#fromCompendium(document, { clearFolder = false, clearState = true, clearSort
- * = true, clearOwnership = true, keepId = false })` (`client/documents/abstract/world-collection.mjs:109-137`). It
- * keeps `folder`, sets `_stats.compendiumSource` to the source uuid only for a Document with a `pack` (:115), clears
- * `ownership` of the document and of every embedded document (:123-127), and then always adds a top-level `ownership`
- * of `{ default: NONE, [game.user.id]: OWNER }` (:134-135). It exists only on the world collections.
+ *
+ * - A pack import of a world or pack document returns `document.toCompendium(pack, options)`, with `clearOwnership`
+ * defaulting to true for a world pack (`client/documents/collections/compendium-collection.mjs:469-474`); `folder` is
+ * kept, and `clearSource` leaves the copy no `_stats.compendiumSource`.
+ * - A world import runs `WorldCollection#fromCompendium(document, { clearFolder = false, clearState = true, clearSort
+ * = true, clearOwnership = true, keepId = false })` (`client/documents/abstract/world-collection.mjs:109-137`) on
+ * `toObject()` rather than `toCompendium`, with the same kind of steps. It keeps `folder`, sets
+ * `_stats.compendiumSource` to the source uuid only for a Document with a `pack` (:115), and with `clearOwnership`
+ * deletes the `ownership` of the document and of every embedded document (:123-127). It then sets a top-level
+ * `ownership` of `{ default: NONE }` only when the data had an `ownership` key (:124, :126), and always grants the
+ * importing user OWNER in that top-level key (:134-135). It exists only on the world collections.
  * - An embedded create takes the data as given; neither method runs.
+ *
+ * An Adventure keeps its contents in SetFields of embedded data models (`actors`, `items`, `scenes`, `macros` and
+ * the rest, `common/documents/adventure.mjs:41-50`), which are outside its `hierarchy`, so neither walk above enters
+ * them; Foundry's adventure exporter writes each content entry through `toCompendium` with `clearOwnership`
+ * (`client/applications/sheets/adventure-exporter.mjs:316-324`), so a stored entry carries `ownership: { default }`.
  *
  * The subclass overrides change state only, never `_id`, `folder`, `sort` or `ownership`: `ActiveEffect` sets `origin`
  * and `start` to null (`client/documents/active-effect.mjs:481-488`), `Playlist` stops the playlist and its sounds and
@@ -38,13 +46,15 @@
  *
  * This module builds one copy for every target kind (world, pack, embedded): `toCompendium` with `clearSort`,
  * `clearFolder`, `clearOwnership`, `clearSource` and `clearState`, then every `ownership` deleted, of the document and
- * of each embedded document, by the same `_clearFieldsRecursively` walk `fromCompendium` uses. An `ownership` key
+ * of each embedded document, by the same `_clearFieldsRecursively` walk `fromCompendium` uses, and for an Adventure
+ * also of each content entry and its embedded documents, by the walk of the entry's own class. An `ownership` key
  * anywhere in create data needs the `allowOwnershipWrites` gate, so a copy carries none, and the copy gets the
- * ownership a create with no `ownership` gets: Foundry's world import differs here only in granting the importing user
- * an explicit OWNER level. `_id` (unless `keepId`), `sort` and `folder` are deleted again so the result does not depend
+ * ownership a create with no `ownership` gets: Foundry's world import differs here in granting the importing user an
+ * explicit OWNER level. `_id` (unless `keepId`), `sort` and `folder` are deleted again so the result does not depend
  * on which options a subclass honours; an embedded document has no `folder`, so that deletion is a no-op there.
- * `_stats.compendiumSource` is set to the source uuid for a source inside a pack, as `fromCompendium` sets it. Every
- * `flags.wiretap` record is removed, so a copy never carries an idempotency record.
+ * `_stats.compendiumSource` is set to the source uuid for a source inside a pack, as `fromCompendium` sets it, whatever
+ * the target: a copy into a pack carries it too, where Foundry's own pack import leaves none. Every `flags.wiretap`
+ * record is removed, so a copy never carries an idempotency record.
  *
  * The copy is built from the raw document, not from the redacted read export, so secret-named keys are copied
  * unchanged as Foundry's own import copies them; every read of the copy is redacted. A source a read refuses outright
@@ -129,6 +139,29 @@ async function resolveSource(uuid, index, documentName) {
 }
 
 /**
+ * Delete every `ownership` key of a copy: of the document and its hierarchy, and for an Adventure, of each entry of
+ * each content set and of that entry's hierarchy. Each entry is cleared by the `_clearFieldsRecursively` of its own
+ * class, the class `BaseAdventure.contentFields` names for its set (`common/documents/adventure.mjs:69-75`), since the
+ * content sets are SetFields outside the Adventure's `hierarchy` (:41-50) and the Adventure's own walk does not
+ * enter them.
+ * @param {object} documentClass - The class of the copied document: its `documentName`, its static
+ * `_clearFieldsRecursively` and, for an Adventure, its `contentFields`.
+ * @param {Record<string, unknown>} data - The exported data, changed in place.
+ * @returns {void}
+ */
+function clearOwnership(documentClass, data) {
+   documentClass._clearFieldsRecursively(data, ['ownership']);
+   if (documentClass.documentName !== 'Adventure') {
+      return;
+   }
+   for (const [name, entryClass] of Object.entries(documentClass.contentFields)) {
+      for (const entry of data[name]) {
+         entryClass._clearFieldsRecursively(entry, ['ownership']);
+      }
+   }
+}
+
+/**
  * Build the create data of one copy from its source.
  * @param {object} source - The live source document.
  * @param {boolean} keepId - Keep the `_id` of the source.
@@ -140,7 +173,7 @@ function copyOf(source, keepId) {
       ...COPY_OPTIONS,
       keepId,
    });
-   source.constructor._clearFieldsRecursively(data, ['ownership']);
+   clearOwnership(source.constructor, data);
    if (!keepId) {
       delete data._id;
    }

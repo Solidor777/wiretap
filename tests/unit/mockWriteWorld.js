@@ -201,29 +201,21 @@ function cleanFor(documentName, data) {
 }
 
 /**
- * Reduce the `ownership` of a document and of every embedded document (any object inside an array, as the mock's
- * `_clearFieldsRecursively` reaches them) to `{ default }`, or drop it when it has no numeric `default`, in place, as
- * the `clearOwnership` step of `ClientDocument#toCompendium` does (`client/documents/abstract/client-document.mjs`).
- * @param {Record<string, unknown>} data - The data of a document.
+ * Reduce the `ownership` of one document's data to `{ default }`, or drop it when it has no numeric `default`, in
+ * place: the callback the `clearOwnership` step of `ClientDocument#toCompendium` hands to `_clearFieldsRecursively`
+ * (`client/documents/abstract/client-document.mjs:1125-1132`), which calls it once per document of the hierarchy.
+ * @param {Record<string, unknown>} data - The data of one document.
  * @returns {void}
  */
 function reduceOwnership(data) {
-   if (Object.hasOwn(data, 'ownership')) {
-      /** @type {unknown} The default level, if any. */
-      const level = data.ownership?.default;
-      delete data.ownership;
-      if (typeof level === 'number') {
-         data.ownership = { default: level };
-      }
+   if (!Object.hasOwn(data, 'ownership')) {
+      return;
    }
-   for (const value of Object.values(data)) {
-      if (Array.isArray(value)) {
-         for (const member of value) {
-            if (typeof member === 'object' && member !== null) {
-               reduceOwnership(member);
-            }
-         }
-      }
+   /** @type {unknown} The default level, if any. */
+   const level = data.ownership?.default;
+   delete data.ownership;
+   if (typeof level === 'number') {
+      data.ownership = { default: level };
    }
 }
 
@@ -362,17 +354,33 @@ export function installWriteWorld(fn, options = {}) {
 
          static cleanData = fn((data) => cleanFor(documentName, data));
 
-         static _clearFieldsRecursively(data, fields) {
+         /**
+          * Clear fields of a document's data and of its embedded documents, following `hierarchy` only, as Foundry's
+          * `Document._clearFieldsRecursively` does (`common/abstract/document.mjs:1311-1330`): an array outside the
+          * hierarchy, such as an Adventure's content sets, is not entered, and a tombstone is skipped.
+          * @param {Record<string, unknown>} data - The data of one document, changed in place.
+          * @param {string[]} fields - The top-level field names to clear.
+          * @param {object} [options] - How to clear.
+          * @param {(data: Record<string, unknown>, field: string) => void} [options.callback] - Clears one field of one
+          * document instead of deleting it.
+          * @returns {void}
+          */
+         static _clearFieldsRecursively(data, fields, options = {}) {
             for (const field of fields) {
-               delete data[field];
+               if (typeof options.callback === 'function') {
+                  options.callback(data, field);
+               } else {
+                  delete data[field];
+               }
             }
-            for (const value of Object.values(data)) {
-               if (Array.isArray(value)) {
-                  for (const member of value) {
-                     if (typeof member === 'object' && member !== null) {
-                        MockDoc._clearFieldsRecursively(member, fields);
-                     }
-                  }
+            for (const [collection, field] of Object.entries(MockDoc.hierarchy)) {
+               /** @type {unknown} The stored members of the collection, if any. */
+               const members = data[collection];
+               if (!Array.isArray(members)) {
+                  continue;
+               }
+               for (const member of members.filter((candidate) => !candidate._tombstone)) {
+                  field.model._clearFieldsRecursively(member, fields, options);
                }
             }
          }
@@ -592,8 +600,8 @@ export function installWriteWorld(fn, options = {}) {
          /**
           * Export the data for a compendium with the option defaults of Foundry's `ClientDocument#toCompendium`
           * (`client/documents/abstract/client-document.mjs`): `_id` dropped unless `keepId`, `sort` dropped, `folder`
-          * kept, the three `_stats` source keys dropped, and every `ownership` reduced to `{ default }`, embedded
-          * documents included.
+          * kept, the three `_stats` source keys dropped, and the `ownership` of the document and of each document of
+          * its hierarchy reduced to `{ default }`.
           * @param {object | null} pack - The target pack; unused, as in Foundry's base method.
           * @param {object} [options] - The export options.
           * @param {boolean} [options.keepId] - Keep `_id`.
@@ -628,7 +636,7 @@ export function installWriteWorld(fn, options = {}) {
                delete data._stats.exportSource;
             }
             if (clearOwnership) {
-               reduceOwnership(data);
+               MockDoc._clearFieldsRecursively(data, ['ownership'], { callback: reduceOwnership });
             }
             return data;
          }
@@ -672,6 +680,23 @@ export function installWriteWorld(fn, options = {}) {
       );
    }
    classes.Actor.metadata.embedded = embedded;
+   Object.defineProperty(classes.Adventure, 'contentFields', {
+      /**
+       * The content sets of an Adventure by field name, each with the class of its entries, as Foundry's
+       * `BaseAdventure.contentFields` lists every SetField of the schema (`common/documents/adventure.mjs:69-75`).
+       * @returns {Record<string, Function>} The entry class of each content set.
+       */
+      get() {
+         return Object.fromEntries(
+            Object.entries(classes.Adventure.schema.fields)
+               .filter(([, field]) => field instanceof FIELD_CLASSES.SetField)
+               .map(([name, field]) => [
+                  name,
+                  field.element.model,
+               ]),
+         );
+      },
+   });
    globalThis.CONST = {
       BASE_DOCUMENT_TYPE: 'base',
       ALL_DOCUMENT_TYPES: [...names],
