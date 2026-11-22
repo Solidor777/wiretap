@@ -3,10 +3,11 @@
  * the agent. The result is plain data for `prepareCreate`, which judges it like any other create data; this module
  * writes nothing.
  *
- * Foundry's copy paths, read in the v14 tree (`C:\FoundryVTT\V14\dev\foundry\`), are built on one method,
- * `ClientDocument#toCompendium(pack, { clearSort = true, clearFolder = false, clearFlags = false, clearSource = true,
- * clearOwnership = true, clearState = true, keepId = false })` (`client/documents/abstract/client-document.mjs`
- * :1113-1134). It starts from `toObject()` (embedded documents included), deletes `_id` unless `keepId`, the top-level
+ * Foundry has three copy paths, read in the v14 tree (`C:\FoundryVTT\V14\dev\foundry\`), listed below; the pack import
+ * and this module's copy are built on `ClientDocument#toCompendium(pack, { clearSort = true, clearFolder = false,
+ * clearFlags = false, clearSource = true, clearOwnership = true, clearState = true, keepId = false })`
+ * (`client/documents/abstract/client-document.mjs` :1113-1134). It starts from `toObject()` (embedded documents
+ * included), deletes `_id` unless `keepId`, the top-level
  * `sort` when `clearSort`, `folder` when `clearFolder` and `active` when `clearState`. With `clearSource` it deletes
  * `_stats.compendiumSource`, `duplicateSource` and `exportSource`, and with `clearOwnership` it deletes `author`, of the
  * document and of every embedded document (`Document._clearFieldsRecursively`, `common/abstract/document.mjs`

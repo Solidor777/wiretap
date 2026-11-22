@@ -84,6 +84,8 @@ const FAILURE_TEXT_MAX_BYTES = 160;
  * @property {boolean} [readback] - Add the canonical export of each created document as `exported`.
  * @property {string} [idempotencyKey] - A key that makes a repeated call return the first call's documents.
  * @property {string} [actAs] - The id of a user whose permission to create is checked in advance (advisory).
+ * @property {unknown} [requestData] - The request as the caller gave it, hashed for `idempotencyKey` in place of
+ * `data` when `data` was built from it (a copy's `{ fromUuids }`), so a source edited between two calls is no conflict.
  */
 
 /**
@@ -424,6 +426,7 @@ export function rowOf(document, dryRun) {
  * @param {string} [params.pack] - The id of the compendium pack when the documents are created in a pack.
  * @param {boolean} [params.keepId] - Keep the `_id` of each data object.
  * @param {string} [params.idempotencyKey] - The key that makes a repeated call return the first call's documents.
+ * @param {unknown} [params.requestData] - What the idempotency hash reads in place of `data`, when given.
  * @param {object | null} [params.actAsUser] - The user whose permission is checked in advance, if any.
  * @param {string} [params.prefix] - The path prefix of reported failures, for example `creates[1]`.
  * @returns {Promise<CreatePlan>} The plan to run.
@@ -437,6 +440,7 @@ export async function prepareCreate({
    pack,
    keepId = false,
    idempotencyKey,
+   requestData,
    actAsUser = null,
    prefix = '',
 }) {
@@ -479,7 +483,7 @@ export async function prepareCreate({
             documentName,
             parentUuid ?? null,
             keepId,
-            data,
+            requestData ?? data,
          ],
          data,
          keepId,
@@ -645,6 +649,7 @@ async function createChecked({
    readback = false,
    idempotencyKey,
    actAs,
+   requestData,
 }) {
    /** @type {CreatePlan} The checked plan. */
    const plan = await prepareCreate({
@@ -654,6 +659,7 @@ async function createChecked({
       pack,
       keepId,
       idempotencyKey,
+      requestData,
       actAsUser: resolveActAs(actAs),
    });
    if (plan.replay !== null) {
