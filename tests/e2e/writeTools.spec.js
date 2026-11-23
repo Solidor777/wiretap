@@ -923,25 +923,61 @@ test.describe('wiretap core write tools', () => {
          ),
       );
       const swordId = idOf(sword.uuid);
+      const stamp = Date.now();
+      // Creates of two world classes interleaved with an embedded create: Foundry answers each create group in the
+      // order its id lookups finish, so the rows prove that created row i is create entry i.
+      /** @type {{ documentName: string, name: string, parentUuid?: string }[]} The create entries, in order. */
+      const createEntries = [
+         {
+            documentName: 'Actor',
+            name: `${E2E_PREFIX}OrderA ${stamp}`,
+         },
+         {
+            documentName: 'Item',
+            name: `${E2E_PREFIX}Shield`,
+            parentUuid: owner.uuid,
+         },
+         {
+            documentName: 'Item',
+            name: `${E2E_PREFIX}OrderB ${stamp}`,
+         },
+         {
+            documentName: 'Actor',
+            name: `${E2E_PREFIX}OrderC ${stamp}`,
+         },
+      ];
       const result = await callJson('batch', {
-         creates: [
-            {
-               documentName: 'Item',
-               data: JSON.stringify({
-                  name: `${E2E_PREFIX}Shield`,
-                  type: itemType,
-               }),
-               parentUuid: owner.uuid,
-            },
-         ],
+         creates: createEntries.map((entry) => ({
+            documentName: entry.documentName,
+            data: JSON.stringify({
+               name: entry.name,
+               type: entry.documentName === 'Actor' ? actorType : itemType,
+            }),
+            ...(entry.parentUuid === undefined ? {} : { parentUuid: entry.parentUuid }),
+         })),
          updates: [
             patch(owner.uuid, `items.${swordId}.name`, `${E2E_PREFIX}Sword renamed`),
             patch(owner.uuid, `items.${swordId}.flags.wiretapE2e`, { c: 3 }, 'replace'),
             patch(owner.uuid, 'flags.wiretapE2e', undefined, 'delete'),
          ],
       });
-      expect(result.created).toHaveLength(1);
-      expect(result.created[0].uuid).toMatch(new RegExp(`^${owner.uuid}\\.Item\\.`));
+      // Every world document the batch created is recorded before any assertion, by the class its uuid names.
+      for (const row of result.created) {
+         if (!row.uuid.startsWith(`${owner.uuid}.`)) {
+            await record(page, row.uuid.split('.')[0], row.uuid);
+         }
+      }
+      expect(result.created.map((row) => row.name)).toEqual(createEntries.map((entry) => entry.name));
+      expect(
+         await page.evaluate(
+            (uuids) => Promise.all(uuids.map((uuid) => fromUuid(uuid).then((live) => live?.name ?? null))),
+            result.created.map((row) => row.uuid),
+         ),
+      ).toEqual(createEntries.map((entry) => entry.name));
+      expect(result.created[0].uuid).toMatch(/^Actor\./);
+      expect(result.created[1].uuid).toMatch(new RegExp(`^${owner.uuid}\\.Item\\.`));
+      expect(result.created[2].uuid).toMatch(/^Item\./);
+      expect(result.created[3].uuid).toMatch(/^Actor\./);
       expect(result.updated).toEqual([
          {
             uuid: owner.uuid,

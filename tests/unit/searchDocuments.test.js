@@ -804,12 +804,19 @@ describe('search_documents work bounds', () => {
    });
 
    it('stops after the scan cap, reports cut and scanned, and a cursor resumes to cover every document', async () => {
-      const all = shortActors(4500);
-      installWorld({ documents: all }, vi.fn);
+      /** @type {number} Candidates one call examines. */
       const scanMax = getBudget('SEARCH_SCAN_MAX').value;
+      /** @type {number} The largest page, so the drain makes as few calls as it can. */
+      const limit = getBudget('SEARCH_MAX_LIMIT').value;
+      // One page more than the scan cap is the least that makes the first call stop at the cap. Every call orders the
+      // whole collection, so the drain's cost grows with the collection times the calls.
+      /** @type {number} How many actors the world holds. */
+      const count = scanMax + limit;
+      const all = shortActors(count);
+      installWorld({ documents: all }, vi.fn);
       const first = await search({
          documentName: 'Actor',
-         limit: 80,
+         limit,
       });
       expect(first.cut).toBe(true);
       expect(first.scanned).toBe(scanMax);
@@ -818,11 +825,11 @@ describe('search_documents work bounds', () => {
       expect(exportCount(all)).toBe(0);
       const drained = await drain({
          documentName: 'Actor',
-         limit: 80,
+         limit,
       });
       expect(drained.cuts).toBeGreaterThan(0);
-      expect(new Set(drained.uuids).size).toBe(4500);
-      expect(drained.uuids).toHaveLength(4500);
+      expect(new Set(drained.uuids).size).toBe(count);
+      expect(drained.uuids).toHaveLength(count);
    });
 
    it('stops after the export cap, reports cut and resumes to find every match', async () => {

@@ -104,3 +104,198 @@
   directories have the `<13-digit timestamp>-<pid>-<counter>` form. The collision itself depends on pid reuse and was
   not reproduced on demand, so the fix is verified by construction, not by reproducing the failure.
 
+## An Adventure with an empty `macros` set needed `allowMacroExecution`
+
+- **Was:** `guardWrite` asked for `allowMacroExecution` on any Adventure create whose data held a `macros` key, even
+  an empty one: `writesField` of `src/bridge/scripts/writeGuard.js` tested only that the key exists, so `macros: []`
+  counted as writing macro code. Foundry defaults the set to `[]` (`common/data/fields.mjs` 2289-2297, 2329-2333;
+  READ), so an Adventure's `toObject()` always holds the key (INFERRED, not measured live) and every `fromUuids` copy
+  of an Adventure, and any `data` create that included `macros: []`, was refused while the gate was closed. Found in
+  M15a.
+- **Fix:** `writesAdventureMacros` in `writeGuard.js` counts a `macros` key only when its value, an update operator
+  unwrapped, is not an empty array; a dotted key into the set and a deletion still count. An Adventure whose `macros`
+  hold a macro, by create, update `set` or update `replace`, is still refused while the gate is closed.
+- **Verified:** `tests/unit/macroCommandGate.test.js` "create of an Adventure whose macros list is empty needs no
+  macro gate", "update of an Adventure's macros to an empty list with op set / replace needs no macro gate" and
+  "update of an Adventure's macros with op replace and a macro is denied while the gate is closed";
+  `tests/unit/writeCopyCreate.test.js` "copies an Adventure whose macros set is empty with every gate but the
+  compendium gate closed". Before the fix every case but the denial failed with `Gate allowMacroExecution is closed`.
+
+## `create_documents` rows came back out of input order
+
+- **Was:** a `parentUuid` copy of `fromUuids: [A, B]` acked rows `[B, A]` in one of two live runs of
+  `tests/e2e/copyTools.spec.js` (MEASURED; the other run gave `[A, B]`). `runCreate` of `src/bridge/scripts/writes.js`
+  mapped the documents in the order Foundry answered, while its JSDoc promised data order. READ in the 14.364 tree:
+  the client keeps the server's order (`client/data/client-backend.mjs` 53-65 and 158-169); the server's
+  `_createDocuments` (`dist/database/backend/server-backend.mjs`, minified, offsets 4537-6250) builds each document
+  inside `Promise.all(data.map(async ...))` and pushes it only after `await createNewId()`, a database lookup
+  (`sublevel-database.mjs`, offset 203: `randomID(16)` until `!await this.has(id)`), so documents whose ids the server
+  generates come back in the order those lookups finish. With `keepId` and an `_id` there is no await before the push.
+  World, embedded and pack creates take that path (`common/abstract/document.mjs` 606-610 and 863-869 send all three
+  to `DatabaseBackend#create`), for `data` and `fromUuids` alike; idempotent creates and the backup restore, which send
+  ids under `keepId`, were not affected (INFERRED from the same code).
+- **Fix:** `runCreate` sends every document with an id under `keepId: true`: the kept `_id` when the call has `keepId`,
+  else a fresh `foundry.utils.randomID()` in place of any `_id` the data holds (the server ignores that `_id` without
+  `keepId`, so the caller-facing meaning of `keepId` is unchanged). It then matches the created documents to the data
+  by id, so row i is data i whatever order Foundry answers in. `refuseTakenIds` and the ack shape are unchanged.
+- **Verified:** `tests/unit/writeCreate.test.js` "createDocuments: rows follow the order of the data" (world,
+  embedded, pack and keepId creates with `world.createOrder.reverse`, which makes the mocked server answer in reverse,
+  and a data `_id` replaced without keepId). Before the fix all five failed (the order cases with
+  `[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]`); after it they pass. On the live world (MEASURED, three runs of
+  `tests/e2e/copyTools.spec.js` after the fix, 2 passed each) the `parentUuid` copy's rows followed `fromUuids` every
+  time.
+
+## The copy header described a create's ownership wrongly
+
+- **Was:** the header of `src/bridge/scripts/writeCopy.js` said a create whose data holds no `ownership` gets only the
+  schema initial `{ default: NONE }`, and that a copy differs there from Foundry's world import, which grants the
+  importing user OWNER; `references/copies.md` of the `wiretap-writes` skill did not say what that ownership is. On the
+  live titan world (14.364) a world Item the GM created from data with no `ownership`, and a world copy made by
+  `fromUuids` from a pack document, both store `{ default: 0, <GM user id>: 3 }` (MEASURED by
+  `tests/e2e/copyTools.spec.js`, its log lines). READ: the Foundry server's `_preCreate`
+  (`dist/database/backend/server-document.mjs`, minified, offset 16411) sets `ownership.<creating user id>` to OWNER
+  when the document has an `ownership` value that does not name the user. The copy carries no `ownership` key, so it
+  gets what a plain create gets and no gate was affected; only the text was wrong.
+- **Fix:** the `writeCopy.js` header states the server's OWNER grant with that citation and that a copy, like a plain
+  create, ends up with the ownership Foundry's world import grants; `references/copies.md` states the stored value,
+  measured and read. No code changed. Embedded copies' stored ownership is not measured (Inferred: the server runs the
+  same `_preCreate` for them).
+
+## batch created rows did not follow the entries
+
+- **Was:** `batch` sent its creates without ids (`keepId` false) and listed the `created` rows in the order Foundry
+  answered each create operation (`acknowledge` in `src/bridge/scripts/writeBatch.js` mapped
+  `states[index].documents`). READ in the 14.364 tree (`dist/database/backend/server-backend.mjs`, minified): the
+  batch handler runs each operation through `modifyDocument`, which reaches `_createDocuments`, and that answers
+  documents whose ids the server generates in the order its `createNewId` lookups finish. On top of that,
+  `groupCreates` (`src/bridge/scripts/batch.js`) merges the entries into one create per class and parent in first-use
+  order, so `[Actor A, Item B, Actor C]` came back `A, C, B`. Found in M15a; not measured live.
+- **Fix:** `buildOperations` sends every created document with an id from `createId` (`writeArgs.js`) under
+  `keepId: true`, as `runCreate` does, and `acknowledge` matches each group's answer by id, so each group's rows follow
+  its data. `groupCreates` also returns `rowOrder`, the place of each entry's row among the group-by-group rows, and
+  `batchHandler` puts the `created` rows back in entry order, dry run included. The grouping, the operations sent
+  (beyond the ids and `keepId`) and the row shape are unchanged; updated rows stay one per uuid in first-patch order
+  and deleted rows in the order given.
+- **Verified:** `tests/unit/writeBatch.test.js` "batch: created rows follow the order of the entries", with
+  `world.createOrder.reverse` (the mocked `modifyBatch` now answers creates in reverse too): one group of three creates
+  and the mixed `[Actor A, Item B, Actor C]` through `batchHandler` (dry run and real). Before the fix both failed
+  (`[ 'MOCK_2', 'MOCK_1', 'MOCK_0' ]` and `[ 'MOCK_A', 'MOCK_C', 'MOCK_B' ]`); after it they pass. Not re-measured on
+  the live world here.
+
+## contextBudget.test.js timed out inside a default-worker npm test
+
+- **Was:** a default-worker `npm test` failed now and then in `tests/unit/contextBudget.test.js` with "Test timed out
+  in 5000ms" and passed on a rerun; the file passed alone. Captured in `debug/dumps/m15a-npmtest-1.txt` for "accepts a
+  skills directory whose tool mentions all exist and none when the directory is absent"; reproduced once more, in a
+  full run that also timed out "keeps the listed production tools and their fixtures inside every budget". Found in
+  M15a.
+- **Cause (MEASURED with vitest JSON durations and per-phase timing written to `debug/dumps/`):** every report of
+  `collectReport` ran every fixture of every tool, and the `list_backups` fixture
+  (`tests/unit/contextBudgetHarness.js`) made 50 real backups (an MCP call, two Socket.IO pieces and a file write
+  each) and then read 50 headers. One report took 0.24 to 0.42 s alone and 0.9 to 4.5 s in a full run; the 50-backup
+  fixture was 72 to 74% of the fixture time of the file's reports, alone and in full runs. In a full run, steps that touch the disk slowed far more than plain tool calls: a
+  backup's median went from 2.5 to 24 ms and the 50-header list call from 35 ms to 2.7 s, while a plain tool call's
+  median went from 1.5 to 2.0 ms. The skills test runs two reports, and the file's first tests run while the other
+  workers are busiest, so they reached 3.2 to 4.8 s. Excluded: harness start, including the port reservation (31 to
+  602 ms per start), the skills directory read (0.2 to 91 ms), timers and the tool-list debounce (none on the report
+  path; `nextToolListChange` is not used by the failing test), and the plain tool calls through the fake GM (1.5 to
+  2.0 ms median). Unverified: why disk steps slow so much (real-time antivirus scanning is on for this machine; its
+  exclusions were not readable).
+- **Fix:** the `list_backups` fixture makes 17 backups, one more than the 16 rows that fit in
+  `BACKUP_LIST_MAX_BYTES`, and fails unless the listing is cut. The result is the same 1,971 bytes it was with 50.
+  `collectReport` takes `runFixtures` (true, false, or the names of the tools whose fixtures run). The test file's
+  `reportWith` and `reportOn` run none unless asked: the production-budget test runs all, and the four registry tests
+  and "fails a fixture result over its budget" run only their own tools. The production-budget test, the one test that
+  runs every fixture (40 tool calls, 20 backup files written and 18 headers read), has a 10 s limit, with the
+  measured 1.7 to 4.2 s full-run time in a comment.
+- **Verified:** a new test, "checks that every tool has a fixture without running any when fixtures are not run",
+  failed before `runFixtures` existed and passes now. After the fix the file takes 2.3 s alone and 10.0 to 11.6 s in a
+  full run (it took 21 to 23 s before). The skills test takes 0.6 s or less in a full run. Three default-worker
+  `npm test` runs passed: 2956 passed and 2 skipped in each (`debug/dumps/flaky-ctx-npmtest-{1,2,3}.txt`).
+
+## searchDocuments.test.js scan-cap test timed out inside a default-worker npm test
+
+- **Was:** a default-worker `npm test` failed in `tests/unit/searchDocuments.test.js` ("search_documents work bounds >
+  stops after the scan cap, reports cut and scanned, and a cursor resumes to cover every document") with "Test timed
+  out in 5000ms" in 2 of 5 full runs (`debug/dumps/m15a-npmtest-2..6.txt`). Found in M15a.
+- **Cause (MEASURED with vitest JSON durations and temporary timing written to `debug/dumps/`):** needless work in
+  the test. It built 4,500 actors and drained them 80 rows a call: 57 calls, each of which orders the whole
+  collection with a yield every 25 documents, 13,790 yields in all. The test took 306 to 1,168 ms alone and 2,165 to
+  5,198 ms in six full runs, the same on `main` (743, 306, 341 ms alone; 5,198 failed, 4,380 and 3,701 ms in full runs)
+  as on this branch (1,168, 336, 310 ms; 2,165, 3,624 and 4,116 ms), so the M15a content version is not the cost:
+  `search.js` and `searchDocuments.js` are unchanged since `main` and call neither `shape.compact` nor
+  `contentVersion`. In full runs the same drain took 2.0 to 3.0 s, against 0.25 s alone.
+- **Fix:** the test holds `SEARCH_SCAN_MAX` + `SEARCH_MAX_LIMIT` actors (2,100: one page more than the scan cap, the
+  least that makes the first call stop at the cap) and drains them at `SEARCH_MAX_LIMIT` rows a call: 21 calls and
+  2,684 yields. Its assertions are unchanged. The drain takes 0.05 s alone and 0.49 to 0.51 s in full runs; the test
+  takes 86 ms alone. In the same work, two backup tests measured near their limits got a limit with the measured
+  reason in a comment: "stops reading headers after 1000" (`tests/unit/backups.test.js`, 11 to 31 s in full runs, one
+  on `main` failed at 31 s against its 30 s limit; now 60 s) and "refuses more than 10000 documents and more than 64000000
+  bytes" (`tests/unit/exportBackup.test.js`, up to 5.1 s in a full run; now 15 s). Their fixtures are the least
+  that reach each cap.
+- **Verified:** three default-worker `npm test` runs passed: 2956 passed and 2 skipped in each
+  (`debug/dumps/flaky-search-npmtest-{1,2,3}.txt`).
+
+## A keyed keepId retry of create_documents was refused as an overwrite
+
+- **Was:** a `create_documents` retry with `keepId: true`, an explicit `_id` (in `data`, or the kept source id of a
+  `fromUuids` copy) and the same `idempotencyKey` was refused with `ARGS_INVALID` "keepId: <Class> '<id>' already
+  exists and would be overwritten" instead of replaying the first call's rows, as the tool description and the skill
+  say repeats do. MEASURED with `npx vitest run tests/unit/writeKeepId.test.js tests/unit/writeCopyCreate.test.js -t
+  "replays a keyed keepId"`: both second calls threw that `ARGS_INVALID` from `refuseTakenIds` (world Actor
+  `MOCKFREEID000003`; embedded Item `MOCKITEM00000002` copied under another actor). Found in M15a.
+- **Cause:** `prepareCreate` (`src/bridge/scripts/writes.js`) ran `refuseTakenIds` before `applyIdempotency` looked
+  the key up, so the documents the first call created made the retry look like an overwrite.
+- **Fix:** `refuseTakenIds` runs after the key lookup. A keyed retry whose key and request hash match stored records
+  returns the replay first; a call with no matching record (no key, or a key with no record yet) still meets
+  `refuseTakenIds` before any write. `refuseUnsafeData`, target resolution and the first `guardWrite` still run before
+  the lookup. The record, the hash and the ack are unchanged.
+- **Verified:** the two tests "replays a keyed keepId retry whose ids the first call took, and writes once"
+  (`tests/unit/writeKeepId.test.js`) and "replays a keyed keepId copy retry whose kept source id the first call took
+  under the parent" (`tests/unit/writeCopyCreate.test.js`) failed before the fix and pass now; "refuses on a dry run
+  too, and under an idempotency key" (a taken id with a key and no record) still passes. `npm test`: 133 files, 2958
+  passed and 2 skipped.
+
+## `get_document` with `ifModifiedSince` missed embedded changes
+
+- **Was:** `get_document` with `ifModifiedSince` returned `{unchanged:true}` for a parent document whose embedded
+  document had changed, and the compact view's `modified` field had the same blind spot. `getDocument.js` compared only
+  the parent's `_stats.modifiedTime`, and Foundry 14.364 leaves that stamp unchanged when an embedded Item is updated
+  (MEASURED on the live titan world: actor `before` = `after` = 1795310889255, item 1795310889307). Found before M15a;
+  fixed in M15a.
+- **Measured in M15a:** `tests/e2e/readTools.spec.js` records whether the parent's `_stats.modifiedTime` moves for an
+  embedded Item update, an embedded ActiveEffect create and the delete of that ActiveEffect; on the live world it moved
+  for none of the three (`{"update":false,"create":false,"delete":false}`, the same in two runs). A timestamp check
+  cannot see any embedded change, and a delete leaves no timestamp behind at all.
+- **Fix:** `ifModifiedSince` and `modified` are gone. `get_document` computes a content `version` (`contentVersion` of
+  `src/bridge/scripts/contentHash.js`: cyrb53 over the export with every object's keys sorted, 14 hex digits) of the
+  whole export the read returns, embedded collections and `_stats` included and redacted values excluded; the compact,
+  `paths` and `fields` results carry it, and `ifChanged` equal to it returns `{unchanged:true}`.
+- **Verified:** `tests/unit/getDocument.test.js` "changes the version when an embedded item is updated, created or
+  deleted" and the rest of its `get_document version and ifChanged` block; `tests/e2e/readTools.spec.js` "ifChanged on
+  a parent sees an embedded update, an embedded create and an embedded delete" (6 passed on the live world), where each
+  step's control read with the old version answers `{unchanged:true}` before the change and not after it.
+
+## `getAncestors` test timed out in full `npm test` runs
+
+- **Was:** `tests/unit/SuperviseServer.test.js` "process helpers > getAncestors starts with the real parent process"
+  passed alone but went past the default 5,000 ms limit in default-worker `npm test` runs: twice in M15a (5,622 ms at
+  the M15a close, `debug/dumps/m15a-close-npmtest.txt`) and once more while it was being measured (5,414 ms,
+  `debug/dumps/flaky-supervise-default-1.txt`).
+- **Cause (measured):** CPU contention slowing the start of a real PowerShell. `getAncestors`
+  (`scripts/lib/superviseServer.mjs:132-174`) runs one `powershell -NoProfile -NonInteractive -Command` through
+  `execFileSync`, with two `Get-CimInstance Win32_Process` queries for one level, and has no wait or retry. With nothing
+  else running the call took 0.8 to 1.5 s (an empty PowerShell 0.3 to 0.65 s, the first query 0.42 to 0.54 s, the
+  second 0.22 to 0.30 s). Under CPU load alone (48 busy loops on 24 logical CPUs, no file activity) it took 1.4 to
+  5.8 s, while the two queries stayed at 0.2 to 0.8 s: the PowerShell start grows, not the queries. A default run uses
+  23 workers (vitest `availableParallelism() - 1`) and kept the CPU at 87 to 96 % on average, on a machine where other
+  processes already used 60 to 98 %.
+- **Excluded:** a wait or retry in the product (none in `getAncestors`); repeated spawns (one PowerShell per test); a
+  slow CIM query (the queries did not grow under load); antivirus as the main cause (pure CPU load with no new files
+  reproduces the slowdown; a per-start scan is in every measurement and cannot be removed without admin rights, so
+  its share is not measured).
+- **Fix:** the test keeps the real PowerShell (it checks the real parent process) and has a 15,000 ms limit, about two
+  and a half times the worst measurement, with the measured reason in a comment. No product code changed.
+- **Verified:** three default-worker `npm test` runs passed (133 files, 2958 passed, 2 skipped each; the test took
+  1,732, 1,990 and 1,544 ms; `debug/dumps/flaky-supervise-fixed-{1,2,3}.txt`). Measurements are in
+  `.superpowers/sdd/2026-11-21-wiretap-m15a-plan/flaky-supervise-report.md`.

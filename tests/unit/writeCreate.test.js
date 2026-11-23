@@ -54,11 +54,13 @@ describe('createDocuments: world documents', () => {
       });
       expect(world.classes.Actor.createDocuments).toHaveBeenCalledTimes(1);
       const [sent, operation] = world.classes.Actor.createDocuments.mock.calls[0];
+      // Each document is sent with a fresh id under keepId, so the created documents can be matched to the data.
       expect(sent).toEqual([{
          name: 'MOCK_actor',
-         type: 'npc'
+         type: 'npc',
+         _id: expect.stringMatching(/^[A-Za-z0-9]{16}$/),
       }]);
-      expect(operation).toMatchObject({ keepId: false });
+      expect(operation).toMatchObject({ keepId: true });
       expect(rows).toEqual([
          {
             uuid: expect.stringMatching(/^Actor\./),
@@ -766,5 +768,101 @@ describe('createDocuments: documents a hook cancelled', () => {
       });
       expect(error.code).toBe('WRITE_NOT_APPLIED');
       expect(error.message).toContain('0 of 1');
+   });
+});
+
+describe('createDocuments: rows follow the order of the data', () => {
+   /** @type {Record<string, unknown>[]} Three documents, each named by its index. */
+   const three = [
+      { name: 'MOCK_0' },
+      { name: 'MOCK_1' },
+      { name: 'MOCK_2' },
+   ];
+
+   /**
+    * Check that row i names data i, and that the document its uuid names is the one data i built.
+    * @param {{ uuid: string, name: string }[]} rows - The rows `createDocuments` returned.
+    * @param {(uuid: string) => { name?: string } | undefined} lookup - Finds the created document of a uuid.
+    * @returns {void}
+    */
+   function expectInputOrder(rows, lookup) {
+      expect(rows.map((row) => row.name)).toEqual([
+         'MOCK_0',
+         'MOCK_1',
+         'MOCK_2',
+      ]);
+      for (const [index, row] of rows.entries()) {
+         expect(lookup(row.uuid)?.name).toBe(`MOCK_${index}`);
+      }
+   }
+
+   it('keeps the data order of a world create when Foundry answers in another order', async () => {
+      world.createOrder.reverse = true;
+      /** @type {{ uuid: string, name: string }[]} What createDocuments acknowledged. */
+      const rows = await createDocuments({
+         documentName: 'Actor',
+         data: structuredClone(three),
+      });
+      expectInputOrder(rows, (uuid) => world.byUuid.get(uuid));
+   });
+
+   it('keeps the data order of an embedded create when Foundry answers in another order', async () => {
+      const actor = world.add('Actor', { name: 'MOCK_parent' });
+      world.createOrder.reverse = true;
+      /** @type {{ uuid: string, name: string }[]} What createDocuments acknowledged. */
+      const rows = await createDocuments({
+         documentName: 'Item',
+         data: structuredClone(three),
+         parentUuid: actor.uuid,
+      });
+      expectInputOrder(rows, (uuid) => actor.items.get(uuid.split('.').at(-1)));
+   });
+
+   it('keeps the data order of a pack create when Foundry answers in another order', async () => {
+      world = installWriteWorld(vi.fn, { packs: { 'world.items': { documentName: 'Item' } } });
+      globalThis.game.settings.get = (module, key) => gates[key];
+      gates.allowCompendiumWrites = true;
+      world.createOrder.reverse = true;
+      /** @type {{ uuid: string, name: string }[]} What createDocuments acknowledged. */
+      const rows = await createDocuments({
+         documentName: 'Item',
+         data: structuredClone(three),
+         pack: 'world.items',
+      });
+      /** @type {object[]} The documents the mocked server answered with. */
+      const answered = await world.classes.Item.createDocuments.mock.results[0].value;
+      expectInputOrder(rows, (uuid) => answered.find((document) => document.uuid === uuid));
+   });
+
+   it('keeps the data order of a keepId create, and creates each document with its kept id', async () => {
+      world.createOrder.reverse = true;
+      /** @type {Record<string, unknown>[]} The data with ids to keep. */
+      const data = three.map((item, index) => ({
+         ...item,
+         _id: `MOCKKEEP${String(index).padStart(8, '0')}`,
+      }));
+      /** @type {{ uuid: string, name: string }[]} What createDocuments acknowledged. */
+      const rows = await createDocuments({
+         documentName: 'Actor',
+         data,
+         keepId: true,
+      });
+      expectInputOrder(rows, (uuid) => world.byUuid.get(uuid));
+      expect(rows.map((row) => row.uuid)).toEqual(data.map((item) => `Actor.${item._id}`));
+   });
+
+   it('gives a document a fresh id in place of an _id its data holds without keepId', async () => {
+      /** @type {{ uuid: string }[]} What createDocuments acknowledged. */
+      const rows = await createDocuments({
+         documentName: 'Actor',
+         data: [{
+            _id: 'MOCKIGNOREDID000',
+            name: 'MOCK_0'
+         }],
+      });
+      const [sent] = world.classes.Actor.createDocuments.mock.calls[0];
+      expect(sent[0]._id).toMatch(/^[A-Za-z0-9]{16}$/);
+      expect(sent[0]._id).not.toBe('MOCKIGNOREDID000');
+      expect(rows[0].uuid).toBe(`Actor.${sent[0]._id}`);
    });
 });

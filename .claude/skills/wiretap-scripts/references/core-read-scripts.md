@@ -4,7 +4,7 @@ Part of the wiretap-scripts skill; read it before changing list_document_types, 
 
 ## Core read scripts
 
-Both are `mutates: false`, `requires: 'api'`, no gate. Definitions are in `definitions.js` (listed 243 B and 682 B,
+Both are `mutates: false`, `requires: 'api'`, no gate. Definitions are in `definitions.js` (listed 243 B and 720 B,
 MEASURED by `tests/measure/measureContext.mjs`).
 
 - `list_document_types` (no arguments, `result.budgetBytes` = `DOCUMENT_TYPES_MAX_BYTES` 3000): `scriptCore.documentTypes()`
@@ -12,13 +12,20 @@ MEASURED by `tests/measure/measureContext.mjs`).
   left out; classes with no subtype are not in `subtypes`). While over the budget the longest subtype list is dropped and
   its class named in `omitted`.
 - `get_document` (`result.budgetBytes` 16000): `uuid`, or `documentName` + `id` with `parentUuid` (embedded) or `pack`;
-  `mode` `compact` (default) or `full`; `fields` and `paths` (≤ 20 each); `derived`; `ifModifiedSince`; `maxBytes`
-  (integer 128..16000, declared only so the enforcer receives it; the handler ignores it). `paths`, `fields` and
-  `mode: 'full'` exclude each other, `derived` needs `paths` or `fields` (`ARGS_INVALID`). Order: combination check →
-  `ctx.core.readDocument` → `ifModifiedSince` (`{ unchanged: true }` when the export's `_stats.modifiedTime` is a finite
-  number `<=` the argument; never for an unreadable document) → `paths` (`{ values, missing }`) / `fields`
-  (`{ fields, missing }`) / full (the export) / compact with `keyPathsFor(game.system.id, documentName, type)`. A shape
-  refusal `<code>: <message>` is rethrown as a `ScriptError` with that code (`PATH_*`).
+  `mode` `compact` (default) or `full`; `fields` and `paths` (≤ 20 each); `derived`; `ifChanged` (string, ≤ 32
+  characters); `maxBytes` (integer 128..16000, declared only so the enforcer receives it; the handler ignores it).
+  `paths`, `fields` and `mode: 'full'` exclude each other, `derived` needs `paths` or `fields` (`ARGS_INVALID`). An
+  undeclared argument (`ifModifiedSince` included) is `ARGS_INVALID` (`additionalProperties: false`). Order:
+  combination check → `ctx.core.readDocument(reference, { derived })` → the version, computed only when `ifChanged` is
+  given or `mode` is not `full`: `contentVersion(data)` of `contentHash.js` (cyrb53, 14 lowercase hex digits, over the
+  export's JSON with every plain object's keys sorted; arrays keep their order), from the export the read returned (the
+  prepared export when `derived` is true, so a derived version matches only a derived read; no second read) →
+  `ifChanged` equal to it: `ctx.shape.ack({ unchanged: true })` in every mode (never for an unreadable document: the
+  read refuses first) → `paths` (`{ values, missing, version }`) / `fields` (`{ fields, missing, version }`) / full
+  (the export, no `version`) / compact with `keyPathsFor(game.system.id, documentName, type)` and `version`. The
+  version covers everything the export holds (embedded collections and `_stats` included) and nothing the exclusions
+  drop, so an edit of a secret-named value leaves it unchanged. A shape refusal `<code>: <message>` is rethrown as a
+  `ScriptError` with that code (`PATH_*`).
 - `canonical.js` `exportDocument`: `toCompendium(null, { clearSource: false, keepId: true, clearSort: false,
   clearOwnership: false })` (or `toObject(false)` when derived), JSON round trip (a `Set` becomes an array), the
   exclusions, `uuid` added; never throws (`DOC_EXCLUDED`, `DOC_UNREADABLE`). Exclusions: a `Setting` whose `key` is not

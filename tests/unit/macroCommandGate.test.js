@@ -367,6 +367,131 @@ describe('writing Macro code needs allowMacroExecution', () => {
       expectMacroDenial(error);
    });
 
+   it('create of an Adventure whose macros list is empty needs no macro gate', async () => {
+      // An Adventure lives only in a compendium pack, so the compendium gate is the one gate open.
+      gates.allowCompendiumWrites = true;
+      expect(
+         await outcome(() => createDocuments({
+            documentName: 'Adventure',
+            pack: ADVENTURE_PACK,
+            data: [{
+               name: 'MOCK_adventure',
+               macros: [],
+            }],
+         })),
+      ).toBeNull();
+      expect(world.calls).toContain('Adventure.createDocuments');
+   });
+
+   it.each([
+      'set',
+      'replace',
+   ])('update of an Adventure\'s macros to an empty list with op %s needs no macro gate', async (op) => {
+      gates.allowCompendiumWrites = true;
+      // An op replace on the macros set reaches embedded data, so it also needs the replace and delete gates.
+      gates.allowReplace = op === 'replace';
+      gates.allowDelete = op === 'replace';
+      /** @type {object} A live Adventure inside the pack. */
+      const adventure = world.add(
+         'Adventure',
+         {
+            name: 'MOCK_adventure',
+            macros: [],
+         },
+         { pack: ADVENTURE_PACK },
+      );
+      expect(
+         await outcome(() => updateDocuments({
+            updates: [{
+               uuid: adventure.uuid,
+               patches: [patchOf('macros', [], op)],
+            }],
+         })),
+      ).toBeNull();
+      expect(adventure.update).toHaveBeenCalledTimes(1);
+   });
+
+   it('update of an Adventure\'s macros with op replace and a macro is denied while the gate is closed', async () => {
+      gates.allowCompendiumWrites = true;
+      gates.allowReplace = true;
+      gates.allowDelete = true;
+      /** @type {object} A live Adventure inside the pack. */
+      const adventure = world.add(
+         'Adventure',
+         {
+            name: 'MOCK_adventure',
+            macros: [],
+         },
+         { pack: ADVENTURE_PACK },
+      );
+      const error = await outcome(() => updateDocuments({
+         updates: [{
+            uuid: adventure.uuid,
+            patches: [patchOf(
+               'macros',
+               [{
+                  name: 'MOCK_M',
+                  command: 'x',
+               }],
+               'replace',
+            )],
+         }],
+      }));
+      expectMacroDenial(error);
+      expect(adventure.update).not.toHaveBeenCalled();
+   });
+
+   it('update of an Adventure deleting its macros is denied while the gate is closed', async () => {
+      gates.allowCompendiumWrites = true;
+      // An op delete on the macros set reaches embedded data, so it also needs the delete gate.
+      gates.allowDelete = true;
+      /** @type {object} A live Adventure inside the pack. */
+      const adventure = world.add(
+         'Adventure',
+         {
+            name: 'MOCK_adventure',
+            macros: [],
+         },
+         { pack: ADVENTURE_PACK },
+      );
+      const error = await outcome(() => updateDocuments({
+         updates: [{
+            uuid: adventure.uuid,
+            patches: [{
+               path: 'macros',
+               op: 'delete',
+            }],
+         }],
+      }));
+      expectMacroDenial(error);
+      expect(adventure.update).not.toHaveBeenCalled();
+   });
+
+   it('update of an Adventure at a dotted path into its macros is denied while the gate is closed', async () => {
+      // The raw patch key is dotted and the cleaned change expands it into a `macros` object; both count as macros.
+      gates.allowCompendiumWrites = true;
+      /** @type {object} A live Adventure inside the pack. */
+      const adventure = world.add(
+         'Adventure',
+         {
+            name: 'MOCK_adventure',
+            macros: [],
+         },
+         { pack: ADVENTURE_PACK },
+      );
+      const error = await outcome(() => updateDocuments({
+         updates: [{
+            uuid: adventure.uuid,
+            patches: [{
+               path: 'macros.0.command',
+               value: 'x',
+            }],
+         }],
+      }));
+      expectMacroDenial(error);
+      expect(adventure.update).not.toHaveBeenCalled();
+   });
+
    it('update of an Adventure\'s macros is denied while the gate is closed', async () => {
       gates.allowCompendiumWrites = true;
       /** @type {object} A live Adventure inside the pack. */

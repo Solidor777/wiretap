@@ -201,6 +201,25 @@ function cleanFor(documentName, data) {
 }
 
 /**
+ * Reduce the `ownership` of one document's data to `{ default }`, or drop it when it has no numeric `default`, in
+ * place: the callback the `clearOwnership` step of `ClientDocument#toCompendium` hands to `_clearFieldsRecursively`
+ * (`client/documents/abstract/client-document.mjs:1125-1132`), which calls it once per document of the hierarchy.
+ * @param {Record<string, unknown>} data - The data of one document.
+ * @returns {void}
+ */
+function reduceOwnership(data) {
+   if (!Object.hasOwn(data, 'ownership')) {
+      return;
+   }
+   /** @type {unknown} The default level, if any. */
+   const level = data.ownership?.default;
+   delete data.ownership;
+   if (typeof level === 'number') {
+      data.ownership = { default: level };
+   }
+}
+
+/**
  * Apply expanded changes to a source object the way a Foundry update does: a plain object merges, a forced
  * replacement assigns its value as a whole and a forced deletion removes the key.
  * @param {Record<string, unknown>} target - The source object, changed in place.
@@ -259,7 +278,7 @@ function markedFailures(changes) {
  * @param {Record<string, { documentName: string, locked?: boolean, folders?: Map<string, object> }>} [options.packs] -
  * The packs by id.
  * @param {Record<string, string[]>} [options.documentTypes] - The subtypes of each class (`game.documentTypes`).
- * @returns {object} The world: `classes`, `byUuid`, `add`, `calls` and `cancel`.
+ * @returns {object} The world: `classes`, `byUuid`, `add`, `calls`, `cancel` and `createOrder`.
  */
 export function installWriteWorld(fn, options = {}) {
    /** @type {Record<string, string>} Embedded collections: document name to collection name. */
@@ -282,6 +301,20 @@ export function installWriteWorld(fn, options = {}) {
       deleteIds: new Set(),
       createNames: new Set(),
    };
+   /**
+    * The order in which a create call, or a create operation of `modifyBatch`, returns its documents. `reverse`
+    * returns them in the reverse of the request's order: Foundry's server pushes each created document after awaiting
+    * a fresh id, so the order it answers in is not the request's (`dist/database/backend/server-backend.mjs`
+    * `_createDocuments`, which a batch create also reaches).
+    * @type {{ reverse: boolean }}
+    */
+   const createOrder = { reverse: false };
+   /**
+    * Return created documents in the order `createOrder` asks for.
+    * @param {object[]} documents - The created documents, in the request's order.
+    * @returns {object[]} The documents as the mocked server answers them.
+    */
+   const answerOrder = (documents) => (createOrder.reverse ? documents.toReversed() : documents);
    /** @type {Map<string, object>} The documents the server holds, by uuid; a client-only ghost is not among them. */
    const server = new Map();
    /** @type {string[]} The order in which write calls happened, as `<Class>.<call>`. */
@@ -335,17 +368,33 @@ export function installWriteWorld(fn, options = {}) {
 
          static cleanData = fn((data) => cleanFor(documentName, data));
 
-         static _clearFieldsRecursively(data, fields) {
+         /**
+          * Clear fields of a document's data and of its embedded documents, following `hierarchy` only, as Foundry's
+          * `Document._clearFieldsRecursively` does (`common/abstract/document.mjs:1311-1330`): an array outside the
+          * hierarchy, such as an Adventure's content sets, is not entered, and a tombstone is skipped.
+          * @param {Record<string, unknown>} data - The data of one document, changed in place.
+          * @param {string[]} fields - The top-level field names to clear.
+          * @param {object} [options] - How to clear.
+          * @param {(data: Record<string, unknown>, field: string) => void} [options.callback] - Clears one field of one
+          * document instead of deleting it.
+          * @returns {void}
+          */
+         static _clearFieldsRecursively(data, fields, options = {}) {
             for (const field of fields) {
-               delete data[field];
+               if (typeof options.callback === 'function') {
+                  options.callback(data, field);
+               } else {
+                  delete data[field];
+               }
             }
-            for (const value of Object.values(data)) {
-               if (Array.isArray(value)) {
-                  for (const member of value) {
-                     if (typeof member === 'object' && member !== null) {
-                        MockDoc._clearFieldsRecursively(member, fields);
-                     }
-                  }
+            for (const [collection, field] of Object.entries(MockDoc.hierarchy)) {
+               /** @type {unknown} The stored members of the collection, if any. */
+               const members = data[collection];
+               if (!Array.isArray(members)) {
+                  continue;
+               }
+               for (const member of members.filter((candidate) => !candidate._tombstone)) {
+                  field.model._clearFieldsRecursively(member, fields, options);
                }
             }
          }
@@ -398,16 +447,16 @@ export function installWriteWorld(fn, options = {}) {
             }
             data = data.filter((item) => !cancel.createNames.has(item.name));
             if (operation.parent) {
-               return data.map((item) => operation.parent.attach(documentName, item, operation));
+               return answerOrder(data.map((item) => operation.parent.attach(documentName, item, operation)));
             }
-            return data.map((item) => {
+            return answerOrder(data.map((item) => {
                /** @type {Record<string, unknown>} The data as the backend cleans it. */
                const cleaned = cleanFor(documentName, item);
                return new MockDoc({
                   ...cleaned,
                   _id: operation.keepId ? item._id : nextId()
                }, operation);
-            });
+            }));
          });
 
          static deleteDocuments = fn(async (ids, operation = {}) => {
@@ -484,7 +533,7 @@ export function installWriteWorld(fn, options = {}) {
                if (cancel.cancelCreate) {
                   return [];
                }
-               return data.map((item) => this.attach(name, item, operation));
+               return answerOrder(data.map((item) => this.attach(name, item, operation)));
             });
             this.updateEmbeddedDocuments = fn(async (name, updates) => {
                calls.push(`${documentName}.updateEmbeddedDocuments`);
@@ -562,8 +611,48 @@ export function installWriteWorld(fn, options = {}) {
             return source;
          }
 
-         toCompendium() {
-            return structuredClone(this._source);
+         /**
+          * Export the data for a compendium with the option defaults of Foundry's `ClientDocument#toCompendium`
+          * (`client/documents/abstract/client-document.mjs`): `_id` dropped unless `keepId`, `sort` dropped, `folder`
+          * kept, the three `_stats` source keys dropped, and the `ownership` of the document and of each document of
+          * its hierarchy reduced to `{ default }`.
+          * @param {object | null} pack - The target pack; unused, as in Foundry's base method.
+          * @param {object} [options] - The export options.
+          * @param {boolean} [options.keepId] - Keep `_id`.
+          * @param {boolean} [options.clearSort] - Drop `sort`.
+          * @param {boolean} [options.clearFolder] - Drop `folder`.
+          * @param {boolean} [options.clearSource] - Drop `_stats.compendiumSource`, `duplicateSource` and
+          * `exportSource`.
+          * @param {boolean} [options.clearOwnership] - Reduce every `ownership` to its `default` level.
+          * @returns {Record<string, unknown>} The exported copy.
+          */
+         toCompendium(pack, {
+            keepId = false,
+            clearSort = true,
+            clearFolder = false,
+            clearSource = true,
+            clearOwnership = true,
+         } = {}) {
+            /** @type {Record<string, unknown>} The copy of the data, embedded documents included. */
+            const data = this.toObject();
+            if (!keepId) {
+               delete data._id;
+            }
+            if (clearSort) {
+               delete data.sort;
+            }
+            if (clearFolder) {
+               delete data.folder;
+            }
+            if (clearSource && typeof data._stats === 'object' && data._stats !== null) {
+               delete data._stats.compendiumSource;
+               delete data._stats.duplicateSource;
+               delete data._stats.exportSource;
+            }
+            if (clearOwnership) {
+               MockDoc._clearFieldsRecursively(data, ['ownership'], { callback: reduceOwnership });
+            }
+            return data;
          }
       }
       return MockDoc;
@@ -605,6 +694,23 @@ export function installWriteWorld(fn, options = {}) {
       );
    }
    classes.Actor.metadata.embedded = embedded;
+   Object.defineProperty(classes.Adventure, 'contentFields', {
+      /**
+       * The content sets of an Adventure by field name, each with the class of its entries, as Foundry's
+       * `BaseAdventure.contentFields` lists every SetField of the schema (`common/documents/adventure.mjs:69-75`).
+       * @returns {Record<string, Function>} The entry class of each content set.
+       */
+      get() {
+         return Object.fromEntries(
+            Object.entries(classes.Adventure.schema.fields)
+               .filter(([, field]) => field instanceof FIELD_CLASSES.SetField)
+               .map(([name, field]) => [
+                  name,
+                  field.element.model,
+               ]),
+         );
+      },
+   });
    globalThis.CONST = {
       BASE_DOCUMENT_TYPE: 'base',
       ALL_DOCUMENT_TYPES: [...names],
@@ -746,7 +852,7 @@ export function installWriteWorld(fn, options = {}) {
     */
    function perform(operation, real) {
       if (operation.action === 'create') {
-         return operation.data.map((item) => {
+         return answerOrder(operation.data.map((item) => {
             const data = {
                ...cleanFor(operation.documentName, item),
                _id: operation.keepId && item._id ? item._id : nextId(),
@@ -757,7 +863,7 @@ export function installWriteWorld(fn, options = {}) {
                   pack: operation.pack,
                   ghost: !real,
                });
-         });
+         }));
       }
       if (operation.action === 'update') {
          return operation.updates.map((update) => {
@@ -872,6 +978,7 @@ export function installWriteWorld(fn, options = {}) {
       classes,
       byUuid,
       cancel,
+      createOrder,
       calls,
       batch,
       server,

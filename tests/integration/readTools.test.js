@@ -134,7 +134,7 @@ describe('the core read tools over the bridge', () => {
          arguments: {
             uuid: 'Actor.MOCKACTOR0000001',
             paths: ['system.hp'],
-            ifModifiedSince: 12,
+            ifChanged: 'abc',
          },
       });
       expect(JSON.parse(textOf(result))).toEqual(view);
@@ -144,9 +144,29 @@ describe('the core read tools over the bridge', () => {
          arguments: {
             uuid: 'Actor.MOCKACTOR0000001',
             paths: ['system.hp'],
-            ifModifiedSince: 12,
+            ifChanged: 'abc',
          },
       });
+   });
+
+   it('refuses ifModifiedSince before the client is called', async () => {
+      harness = createHarness();
+      await harness.start();
+      const gm = await harness.connectGm();
+      await gm.register(shippedScripts());
+      /** @type {{ client: import('@modelcontextprotocol/sdk/client/index.js').Client }} The connected MCP client. */
+      const { client } = await harness.connectClient();
+      const refused = await client
+         .callTool({
+            name: 'get_document',
+            arguments: {
+               uuid: 'Actor.MOCKACTOR0000001',
+               ifModifiedSince: 12,
+            },
+         })
+         .catch((error) => error);
+      expect(refused.isError).toBe(true);
+      expect(gm.invokes).toHaveLength(0);
    });
 
    it('refuses a bad argument before the client is called', async () => {

@@ -185,4 +185,10 @@
       (four concurrent vitest runs on 24 cores) they expire. Make them wait on the event itself, or decide that the
       overload case is out of scope.
 
+- [ ] `diff_since` mode 2 (the paths of one document changed since a stored snapshot; not built, docs/PLAN.md D35):
+      about 8k tokens saved per edit cycle against a full re-read, about 0.7k against a compact re-read, for one more
+      call. `foundry.utils.diffObject` returns a differing array whole, so it needs a keyed diff in the section 2.8
+      path grammar. Mode 1 (documents changed since a time) is not planned: it cannot report deletions and its clock
+      basis (`_stats.modifiedTime`) is unverified
+
 - [ ] Settings menu beyond serverUrl/terminalCommand, keybindings, fonts, compendium packs

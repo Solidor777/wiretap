@@ -173,7 +173,12 @@ describe('process helpers', () => {
       expect(await isPortInUse('127.0.0.1', port), 'released port').toBe(false);
    });
 
-   it('getAncestors starts with the real parent process', () => {
+   // The test must start a real PowerShell, which runs two Win32_Process CIM queries, to check the real parent.
+   // Measured on Windows: 0.8 to 1.5 s with nothing else running, 0.9 to 3.2 s inside a default-worker `npm test`,
+   // 5.4 to 5.6 s in loaded full runs, and up to 5.8 s under CPU load alone (48 busy loops on 24 logical CPUs).
+   // The CIM queries stay at 0.2 to 0.8 s; the PowerShell start is what slows down. The limit is about two and a half
+   // times the worst measurement.
+   it('getAncestors starts with the real parent process', { timeout: 15000 }, () => {
       const ancestors = getAncestors(process.pid, 1);
       expect(ancestors[0]?.pid, 'nearest ancestor is process.ppid').toBe(process.ppid);
    });

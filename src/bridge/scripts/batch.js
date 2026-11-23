@@ -9,17 +9,26 @@ import { ackBatch } from '~/bridge/scripts/writeAck.js';
 import { groupPatches } from '~/bridge/scripts/updateDocuments.js';
 
 /**
+ * @typedef {object} CreateGroup
+ * @property {string} documentName - The class created.
+ * @property {Record<string, unknown>[]} data - The data of each document, in entry order.
+ * @property {string} [parentUuid] - The uuid of the parent of embedded documents.
+ */
+
+/**
  * Group the flat create entries (one document each) by class and parent, in first-use order, parsing each data text.
  * The caller bounds the size of the texts.
  * @param {Array<{ documentName?: string, data?: string, parentUuid?: string }>} entries - The validated entries.
- * @returns {Array<{ documentName: string, data: Record<string, unknown>[], parentUuid?: string }>} One create per
- * class and parent.
+ * @returns {{ groups: CreateGroup[], rowOrder: number[] }} One create per class and parent, and for each entry the
+ * position of its row among the created rows, which come group by group, each group in data order.
  * @throws {ScriptError} `ARGS_INVALID` for an entry without `documentName` and `data`, or with data that is not a
  * JSON object.
  */
 function groupCreates(entries) {
-   /** @type {Map<string, { documentName: string, data: Record<string, unknown>[], parentUuid?: string }>} Groups. */
+   /** @type {Map<string, CreateGroup>} The groups by class and parent. */
    const groups = new Map();
+   /** @type {Array<{ group: CreateGroup, position: number }>} The group of each entry and its place in the group. */
+   const places = [];
    for (const [index, entry] of entries.entries()) {
       if (typeof entry.documentName !== 'string' || typeof entry.data !== 'string') {
          throw new ScriptError('ARGS_INVALID', `creates[${index}] needs documentName and data.`);
@@ -33,13 +42,32 @@ function groupCreates(entries) {
             ...(entry.parentUuid === undefined ? {} : { parentUuid: entry.parentUuid }),
          });
       }
-      groups.get(key).data.push(parseDataObject(entry.data, `creates[${index}].data`));
+      /** @type {CreateGroup} The group of this entry. */
+      const group = groups.get(key);
+      places.push({
+         group,
+         position: group.data.length,
+      });
+      group.data.push(parseDataObject(entry.data, `creates[${index}].data`));
    }
-   return [...groups.values()];
+   /** @type {Map<CreateGroup, number>} The position of each group's first row among the created rows. */
+   const offsets = new Map();
+   /** @type {number} The rows of the groups before the next one. */
+   let offset = 0;
+   for (const group of groups.values()) {
+      offsets.set(group, offset);
+      offset += group.data.length;
+   }
+   return {
+      groups: [...groups.values()],
+      rowOrder: places.map(({ group, position }) => offsets.get(group) + position),
+   };
 }
 
 /**
- * Run the batch and acknowledge it.
+ * Run the batch and acknowledge it. The entries are sent grouped (one create per class and parent), but the rows
+ * follow the entries: created row i is create entry i, one updated row per uuid in the order of its first update
+ * entry, and one deleted row per uuid in the order given. A dry run's rows follow the same order.
  * @param {Record<string, unknown>} args - The validated arguments.
  * @param {import('~/bridge/scripts/ctx.js').ScriptContext} ctx - The call context.
  * @returns {Promise<Record<string, unknown>>} `{ created, updated, deleted }` rows (`dryRun: true` on a dry run),
@@ -57,13 +85,18 @@ export async function batchHandler(args, ctx) {
       ...creates.map((entry) => entry.data ?? ''),
       ...updates.map((entry) => entry.value ?? ''),
    ]);
-   /** @type {Awaited<ReturnType<typeof ctx.core.batchDocuments>>} The rows by kind. */
+   /** @type {ReturnType<typeof groupCreates>} The create groups and the entry order of their rows. */
+   const grouped = groupCreates(creates);
+   /** @type {Awaited<ReturnType<typeof ctx.core.batchDocuments>>} The rows by kind, created rows group by group. */
    const result = await ctx.core.batchDocuments({
-      creates: groupCreates(creates),
+      creates: grouped.groups,
       updates: groupPatches(updates),
       deletes: args.deletes ?? [],
       dryRun: args.dryRun === true,
       actAs: args.actAs,
    });
-   return ackBatch(result);
+   return ackBatch({
+      ...result,
+      created: grouped.rowOrder.map((row) => result.created[row]),
+   });
 }

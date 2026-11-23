@@ -1,0 +1,14 @@
+# e2e specs of the read, write and copy tools
+
+What each live-world spec under `tests/e2e/` asserts. The specs of the gameplay, pack and backup tools are described in
+`wiretap-gameplay`, `wiretap-packs` and `wiretap-backups`.
+
+| Spec | What it asserts |
+|---|---|
+| `searchSchema` | `search_documents` and `describe_schema` on the live titan world: paging a created prefix, the wiretap Setting and User password exclusions, the `describe_schema` exclusions, an index-only compendium search, every class and subtype described <= 8000 B |
+| `readTools` | The core read tools on the live titan world: a created and recorded actor with embedded items and an effect, every type and subtype present read at <= 2,000 B, exclusions and the secret redaction with real Setting documents and flags, embedded and compendium reads |
+| `everyType` | Creates a recorded `Wiretap E2E ` document of every class and subtype that can be created, embedded ones under recorded parents, and reads each at <= 2,000 B; 98 documents in 32 of 34 classes on titan; the two classes it does not create are listed with their reason, and folder types with no world collection are derived and logged |
+| `keyFields.measure` | Skipped unless `WIRETAP_MEASURE_KEYFIELDS=1`; writes the key-field candidates and the reviewed lists to `debug/dumps/`, never touches the world |
+| `writeTools` | The core write tools on the live titan world with `writeHelpers.js`: an Actor with an embedded Item and ActiveEffect created, an embedded path updated, a delete dry run then the real delete, 50 created and 50 deleted within 4,000 B, 30 invalid documents in one error of at most 512 B, User and Setting writes denied while their gates are closed, a User password refused with the gate open, every `wiretap.*` Setting write refused with `allowSettingWrites` open |
+| `scripts` | Real e2e sidecar plus an SDK MCP client: `create_documents` is listed beside `read_handle` and creates an Actor that the test records, verifies in the world and tears down, with `censusPrefixed` empty after every test; invalid arguments create nothing; the e2e-only `e2e_gated` script registered through `_probe.scripts.registerE2e()` is denied while `allowMacroExecution` is closed and runs once it is open |
+| `copyTools` | `create_documents` with `fromUuids` on the live world: two recorded world Items, one with an idempotency record, copied onto a recorded Actor, rows in `fromUuids` order, ack <= 4,000 B, new ids, no `flags.wiretap`, sources unchanged, the `ARGS_INVALID` refusals and a dry run; a recorded world Item copied into a recorded throwaway world pack and back, the world copy stored with `folder` null, `sort` 0, `ownership` `{ default: 0, <GM id>: 3 }` as a plain GM create stores it (the server's `_preCreate` adds the creator as OWNER), and `_stats.compendiumSource` equal to the pack document's uuid; see `wiretap-writes` |

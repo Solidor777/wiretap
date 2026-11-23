@@ -135,14 +135,18 @@ method `405`.
   and the subtypes of each (at most 3,000 bytes; the longest subtype lists are left out and named in `omitted` when
   they do not fit). `get_document` reads a world, embedded (`parentUuid`) or compendium (`pack`) document by `uuid`, or
   by `documentName` and `id`. The default result is a compact view of at most 2,000 bytes: `uuid`, `name`, `type`,
-  `modified` (the document's `_stats.modifiedTime`), up to 24 `system` leaves and `[id, name, type]` rows of the
-  embedded documents (40 rows at most, with each collection's total). The leaves come from a reviewed per-subtype list
-  for the `titan` system (`src/bridge/scripts/keyFields.json`) and from a default key-name pattern for any other. `fields`
-  returns a nested projection, `paths` (20 at most) returns slices such as `system.resource` or `items.*.name` keyed by
-  `_id` with the unresolved paths in `missing`, `derived: true` reads the prepared data for those two, `mode: "full"`
-  returns the whole export (`toCompendium` with ids, sort and ownership kept, plus `uuid`), `ifModifiedSince` returns
-  `{"unchanged":true}` when the document is not newer, and `maxBytes` (128 to 16,000) raises the inline limit; a result
-  over the limit is a handle. A client acks a result up to 900,000 bytes. What is never returned: the password fields
+  `version`, up to 24 `system` leaves and `[id, name, type]` rows of the embedded documents (40 rows at most, with each
+  collection's total). The leaves come from a reviewed per-subtype list for the `titan` system
+  (`src/bridge/scripts/keyFields.json`) and from a default key-name pattern for any other. `fields` returns a nested
+  projection, `paths` (20 at most) returns slices such as `system.resource` or `items.*.name` keyed by `_id` with the
+  unresolved paths in `missing`, `derived: true` reads the prepared data for those two, and both results carry
+  `version` too. `mode: "full"` returns the whole export (`toCompendium` with ids, sort and ownership kept, plus
+  `uuid`) without a `version`. The `version` is a short content hash (14 hex digits) of everything the agent can read
+  of the document, embedded documents included, so any readable change changes it; an edit of a secret-named value,
+  which is never returned, does not. `ifChanged` set to the current version returns `{"unchanged":true}` in every mode.
+  A `derived: true` read hashes the prepared values, so its version is compared by another `derived: true` read.
+  `maxBytes` (128 to 16,000) raises the inline limit; a result over the limit is a handle. A client acks a result up
+  to 900,000 bytes. What is never returned: the password fields
   of a `User` (removed from every export; a path to one is listed in `missing`), a `Setting` in the `wiretap.`
   namespace, the core settings that hold credentials (`core.rtcWorldSettings`, the WebRTC TURN user and password) and a
   `Setting` whose key names a secret (each refused with `DOC_EXCLUDED`), and every key named like a secret
@@ -180,9 +184,20 @@ method `405`.
   Foundry's document calls (`createDocuments`, `createEmbeddedDocuments`, `update`, `updateEmbeddedDocuments`,
   `deleteDocuments`, `deleteEmbeddedDocuments`), so system and module pre-write logic and hooks run as for a write made
   in the UI. The argument-schema subset has no free-form object, so structured input travels as JSON text.
-  `create_documents` takes `documentName` and `data` (1 to 50 JSON object texts, at most 200,000 bytes in all) and
-  optionally `parentUuid` (embedded documents), `pack` (a compendium), `keepId`, `dryRun` and `paths`; it returns one
-  `{uuid, name, type}` per document (4,000 bytes at most, 256 per document). `update_documents` takes `updates`, one
+  `create_documents` takes `documentName` and exactly one of `data` (1 to 50 JSON object texts, at most 200,000 bytes
+  in all) and `fromUuids` (1 to 50 uuids of world, embedded or compendium documents of that class to copy; both or
+  neither is `ARGS_INVALID`), and optionally `parentUuid` (embedded documents), `pack` (a compendium), `keepId`,
+  `dryRun` and `paths`; it returns one `{uuid, name, type}` per document, in the order of `data` or `fromUuids`
+  (4,000 bytes at most, 256 per document). A
+  copy is built in the Foundry client from the source document, so the source body never reaches the agent, and it
+  meets every gate, write guard, validation, `actAs` and `dryRun` check that a `data` create of the same content would.
+  A copy carries no ownership of its source at any depth, and Foundry makes the creating user its OWNER, as for any
+  create. It has a new `_id` unless `keepId`, and no `folder`, `sort` or `flags.wiretap`; a copy of a compendium
+  document sets `_stats.compendiumSource` to the source uuid. Secret-named values of the source are
+  copied as Foundry's own import copies them, and every read of the copy stays redacted. A `User` cannot be copied
+  (`ARGS_INVALID`), a missing source is `DOC_NOT_FOUND`, and a source a read refuses gets the read's code (for example
+  `DOC_EXCLUDED`). A copy has no 200,000-byte bound, which covers the `data` an agent sends; the cap of 50 `fromUuids`
+  is its bound. `update_documents` takes `updates`, one
   patch per entry (`uuid`, `path`, `value` as JSON text, `op` of `set`, `replace` or `delete`), `dryRun` and `paths`;
   entries with one uuid form that document's update, paths such as `items.<_id>.system.x` are grouped into one
   `updateEmbeddedDocuments` call per collection, `replace` and `delete` become Foundry's `_replace` and `_del`
@@ -222,11 +237,18 @@ method `405`.
   operation first and writes nothing when one fails; it then applies them one by one and stops at the first failure, so
   a batch is NOT atomic and the earlier operations stay applied. Operations Foundry drops (an update that changes nothing,
   or one a hook cancels) report `changed: []`; a shortfall is `WRITE_NOT_APPLIED` with how many operations were applied,
-  unchanged, cancelled, failed or not written. Every operation passes the same write guard as the single tools, `_id` is
-  never a writable path, and the ack of a 50-document batch is at most 4,000 bytes. `create_documents` accepts
+  unchanged, cancelled, failed or not written. The rows follow the entries: created row i is create entry i, an updated
+  row per uuid comes in the order of its first patch, and deleted rows come in the order given. Every operation passes
+  the same write guard as the single tools, `_id` is never a writable path, and the ack of a 50-document batch is at
+  most 4,000 bytes. `create_documents` accepts
   `idempotencyKey` (1 to 64 of `A-Z a-z 0-9 . _ : -`): the key is stored as the module flag `flags.wiretap.idem` on each
   created document, a repeat of the same request within one day returns the first call's rows and creates nothing, and
-  the same key with other data (or after one of its documents was deleted) is `IDEMPOTENCY_CONFLICT`. A collection of
+  the same key with other data (or after one of its documents was deleted) is `IDEMPOTENCY_CONFLICT`. For a copy the
+  request hash covers `fromUuids` as given, not the source content, so a retry after a source was edited returns the
+  first call's rows; a keyed retry replays only while every source still resolves and passes the checks that run before
+  the replay lookup (resolution, the read refusals and the write guard), else it returns that refusal and writes
+  nothing. With `keepId`, the taken-id check runs after the lookup, so a keyed retry whose ids its first call took
+  replays. A collection of
   more than 20,000 documents is refused with `IDEMPOTENCY_UNAVAILABLE`. The whole `flags.wiretap` scope, and any write
   that would erase `flags`, is refused (`GATE_DENIED`). `actAs` (a user id) on every write tool is best-effort and
   advisory: after the gates have been judged, Foundry is asked whether that user could make the same change

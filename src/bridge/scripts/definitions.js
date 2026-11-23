@@ -66,7 +66,10 @@ export const getDocumentDefinition = {
             items: { type: 'string' },
          },
          derived: { type: 'boolean' },
-         ifModifiedSince: { type: 'number' },
+         ifChanged: {
+            type: 'string',
+            maxLength: 32,
+         },
          maxBytes: {
             type: 'integer',
             minimum: 128,
@@ -164,16 +167,15 @@ export const describeSchemaDefinition = {
 
 /**
  * The `create_documents` definition. `data` carries one JSON object text per document because the argument-schema
- * subset has no free-form object. Gates are judged per category inside the write operation, so the script declares
- * none.
+ * subset has no free-form object; `fromUuids` names source documents to copy instead, and the handler requires
+ * exactly one of the two. Gates are judged per category inside the write operation, so the script declares none.
  * @type {import('$shared/scripts.js').ScriptDefinition}
  */
 export const createDocumentsDefinition = {
    name: 'create_documents',
    version: '1.0.0',
    description:
-      'Create Foundry documents. data: one JSON object text each. parentUuid or pack for embedded or pack. ' +
-      'idempotencyKey: a repeat returns the first call.',
+      'Create from data (JSON text each) or fromUuids (copies), in parentUuid or pack. idempotencyKey: repeats replay.',
    inputSchema: {
       type: 'object',
       properties: {
@@ -184,6 +186,15 @@ export const createDocumentsDefinition = {
             items: {
                type: 'string',
                maxLength: SCHEMA_BOUND_MAX,
+            },
+         },
+         fromUuids: {
+            type: 'array',
+            minItems: 1,
+            maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
+            items: {
+               type: 'string',
+               maxLength: 256,
             },
          },
          parentUuid: { type: 'string' },
@@ -204,10 +215,7 @@ export const createDocumentsDefinition = {
             },
          },
       },
-      required: [
-         'documentName',
-         'data',
-      ],
+      required: ['documentName'],
       additionalProperties: false,
    },
    result: { budgetBytes: getBudget('ACK_BATCH_MAX_BYTES').value },

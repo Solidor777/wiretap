@@ -26,6 +26,7 @@ import { OPERATOR_VALUE_MESSAGE, UNSAFE_SEGMENTS, findUnsafeValue, groupWrites }
 import { cleanForLog } from '$shared/logText.js';
 import { exportDocument, resolveDocument } from '~/bridge/scripts/canonical.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
+import { createId } from '~/bridge/scripts/writeArgs.js';
 import { applyIdempotency, withKeyLock } from '~/bridge/scripts/writeIdempotency.js';
 import { checkActAs, resolveActAs } from '~/bridge/scripts/writeActAs.js';
 import { FLAGS_KEY } from '$shared/writeKeys.js';
@@ -84,6 +85,8 @@ const FAILURE_TEXT_MAX_BYTES = 160;
  * @property {boolean} [readback] - Add the canonical export of each created document as `exported`.
  * @property {string} [idempotencyKey] - A key that makes a repeated call return the first call's documents.
  * @property {string} [actAs] - The id of a user whose permission to create is checked in advance (advisory).
+ * @property {unknown} [requestData] - The request as the caller gave it, hashed for `idempotencyKey` in place of
+ * `data` when `data` was built from it (a copy's `{ fromUuids }`), so a source edited between two calls is no conflict.
  */
 
 /**
@@ -341,9 +344,11 @@ async function resolveCreateTarget(documentName, parentUuid, pack) {
 }
 
 /**
- * Refuse `keepId` data whose `_id` is already taken in the collection it would land in. MEASURED on Foundry 14.364:
- * the server does not refuse a repeated `_id`, it overwrites the stored document (world and embedded), while the
- * client keeps its old copy, so the world and the client disagree afterwards.
+ * Refuse `keepId` data whose `_id` is already taken in the collection it would land in, with one early `ARGS_INVALID`.
+ * Foundry 14.364's server `_createDocuments` (`dist/database/backend/server-backend.mjs`) throws "The _id [..] already
+ * exists within the parent collection" for a taken embedded id and has no such check for a top-level document; for a
+ * world document it overwrites the stored document (MEASURED) while the client keeps its old copy, so the world and
+ * the client disagree afterwards.
  * @param {string} documentName - The class created.
  * @param {Awaited<ReturnType<typeof resolveCreateTarget>>} target - Where the documents land.
  * @param {Record<string, unknown>[]} data - The data of each document.
@@ -424,6 +429,7 @@ export function rowOf(document, dryRun) {
  * @param {string} [params.pack] - The id of the compendium pack when the documents are created in a pack.
  * @param {boolean} [params.keepId] - Keep the `_id` of each data object.
  * @param {string} [params.idempotencyKey] - The key that makes a repeated call return the first call's documents.
+ * @param {unknown} [params.requestData] - What the idempotency hash reads in place of `data`, when given.
  * @param {object | null} [params.actAsUser] - The user whose permission is checked in advance, if any.
  * @param {string} [params.prefix] - The path prefix of reported failures, for example `creates[1]`.
  * @returns {Promise<CreatePlan>} The plan to run.
@@ -437,6 +443,7 @@ export async function prepareCreate({
    pack,
    keepId = false,
    idempotencyKey,
+   requestData,
    actAsUser = null,
    prefix = '',
 }) {
@@ -452,9 +459,6 @@ export async function prepareCreate({
       ...(documentName === 'Setting' ? { settingTargets: data.map((item) => settingKeyOf(item.key)) } : {}),
       inPack: target.inPack,
    });
-   if (keepId) {
-      await refuseTakenIds(documentName, target, data);
-   }
    /** @type {Record<string, unknown>[]} The data with the idempotency record added. */
    let records = data;
    /** @type {boolean} Whether the documents are created with the ids the idempotency records name. */
@@ -479,7 +483,7 @@ export async function prepareCreate({
             documentName,
             parentUuid ?? null,
             keepId,
-            data,
+            requestData ?? data,
          ],
          data,
          keepId,
@@ -505,6 +509,11 @@ export async function prepareCreate({
       }
       records = idempotent.records;
       keptIds = true;
+   }
+   // The taken-id check follows the key lookup: a keyed retry finds the ids its first call took and replays above,
+   // while a call with no matching record is still refused here before any write.
+   if (keepId) {
+      await refuseTakenIds(documentName, target, data);
    }
    /** @type {Function} The configured document class. */
    const documentClass = CONFIG[documentName].documentClass;
@@ -574,28 +583,46 @@ export async function prepareCreate({
 
 /**
  * Write a prepared creation through the Foundry document APIs.
+ *
+ * Foundry answers a create in an order of its own: the server's `_createDocuments`
+ * (`dist/database/backend/server-backend.mjs`) builds each document inside `Promise.all`, pushing it only after
+ * `await createNewId()` (`sublevel-database.mjs`, a database lookup) resolves, so documents whose ids the server
+ * generates come back in the order those lookups finish. World, embedded and pack creates all take that path. Every
+ * document is therefore sent with an id: the kept `_id` under `keepId`, otherwise a fresh `foundry.utils.randomID()`
+ * in place of any `_id` the data holds, which is what the server would do (it ignores that `_id` without `keepId`).
+ * The created documents are then matched to the data by id.
  * @param {CreatePlan} plan - A plan from `prepareCreate` with no replay.
  * @param {boolean} [readback] - Add the canonical export of each created document as `exported`.
- * @returns {Promise<CreatedRow[]>} One row per created document, in the order of the data.
+ * @returns {Promise<CreatedRow[]>} One row per document, row i for data i, whatever order Foundry answers in.
  * @throws {ScriptError} `WRITE_NOT_APPLIED` when Foundry created fewer documents than asked.
  */
 export async function runCreate(plan, readback = false) {
    /** @type {Function} The configured document class. */
    const documentClass = CONFIG[plan.documentName].documentClass;
-   /** @type {{ uuid: string }[]} The documents that were created. */
+   /** @type {Record<string, unknown>[]} The data to send, each with the id its document is created with. */
+   const payload = plan.payload.map((item) => ({
+      ...item,
+      _id: createId(item, plan.keepId),
+   }));
+   /** @type {{ id: string, uuid: string }[]} The documents that were created, in the order Foundry answered. */
    const created = plan.target.parent
-      ? await plan.target.parent.createEmbeddedDocuments(plan.documentName, plan.payload, { keepId: plan.keepId })
-      : await documentClass.createDocuments(plan.payload, {
-         keepId: plan.keepId,
+      ? await plan.target.parent.createEmbeddedDocuments(plan.documentName, payload, { keepId: true })
+      : await documentClass.createDocuments(payload, {
+         keepId: true,
          ...(plan.target.pack === null ? {} : { pack: plan.target.pack }),
       });
-   if (created.length !== plan.payload.length) {
+   if (created.length !== payload.length) {
       throw new ScriptError(
          'WRITE_NOT_APPLIED',
-         `${created.length} of ${plan.payload.length} documents were created; a hook or the system cancelled the rest.`,
+         `${created.length} of ${payload.length} documents were created; a hook or the system cancelled the rest.`,
       );
    }
-   return created.map((document) => {
+   /** @type {Map<string, { id: string, uuid: string }>} The created documents by id. */
+   const byId = new Map(created.map((document) => [
+      document.id,
+      document,
+   ]));
+   return payload.map((item) => byId.get(item._id)).map((document) => {
       /** @type {CreatedRow} The acknowledgement of this document. */
       const row = rowOf(document, false);
       if (readback) {
@@ -645,6 +672,7 @@ async function createChecked({
    readback = false,
    idempotencyKey,
    actAs,
+   requestData,
 }) {
    /** @type {CreatePlan} The checked plan. */
    const plan = await prepareCreate({
@@ -654,6 +682,7 @@ async function createChecked({
       pack,
       keepId,
       idempotencyKey,
+      requestData,
       actAsUser: resolveActAs(actAs),
    });
    if (plan.replay !== null) {

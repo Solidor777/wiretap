@@ -56,6 +56,7 @@ the names in `RESERVED_SCRIPT_NAMES`) is a script. Scripts call ops
 | `core.js` | `scriptCore` (frozen): `createDocuments(params)`, `updateDocuments(params)`, `deleteDocuments(params)`, `documentTypes()`, `readDocument(reference, { derived? })`, `searchDocuments(params)`, `describeSchema(params)`; `ERROR_MESSAGE_MAX_BYTES` (256) |
 | `shape.js` | `shape` (frozen): `compact`, `project`, `paths`, `ack` |
 | `canonical.js` | `exportDocument(document, { derived? })` (the canonical export, the exclusions and the secret redaction), `exportForBackup(document)` (below), `unreadable(document)`, `resolveDocument(reference)`, `WIRETAP_SETTING_PREFIX`, `USER_EXCLUDED_FIELDS`, `SECRET_CORE_SETTINGS`, `SECRET_KEY`, `SECRET_SETTING_KEY`, `REDACT_MAX_DEPTH`, `REDACT_MAX_NODES` |
+| `contentHash.js` | `hashText(text)` (cyrb53, 14 lowercase hex digits), `stableStringify(value)` (`JSON.stringify` with every plain object's keys sorted by code unit, an own `__proto__` key kept), `contentVersion(value)` (`hashText(stableStringify(value))`); used by `requestHash` of `writeIdempotency.js` (over `[documentName, parentUuid, keepId, data]`, or `{ fromUuids }` in place of `data` for a copy) and the `get_document` version |
 | `keyFields.js`, `keyFields.json` | `keyPathsFor(systemId, documentName, type)` over the reviewed per-subtype key-field lists (the `titan` system only) |
 | `search.js` | `searchDocuments(params, signal)`: candidates, canonical exclusions, filters, ordering, cursor, page bound, work caps; `FILTERS_MAX` |
 | `schemaWalk.js` | The field walker: `createWalkState`, `describeField`, `outlineFields`, `stepInto`; `SCHEMA_DEPTH_MAX` (3), `SCHEMA_NODES_MAX` (150), `OUTLINE_MAX` (80) |
@@ -64,7 +65,8 @@ the names in `RESERVED_SCRIPT_NAMES`) is a script. Scripts call ops
 | `writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments`, the planners `prepareCreate` / `prepareUpdates` / `prepareDeletes`, `DELETE_PREVIEW_ROWS_MAX`: the write operations behind `ctx.core` (phase B files `writeReplace.js`, `writeBatch.js`, `writeBatchSettle.js`, `writeActAs.js`, `writeIdempotency.js`, `replaceDocument.js`, `batch.js`: see `wiretap-writes`) |
 | `writeGuard.js`, `writeFields.js` | The write guard: see `wiretap-write-guard` |
 | `writeArgs.js`, `writeAck.js` | Argument helpers (`shapeRefusal`, `parseDataObjects`, `parseJson`, `checkDataBytes`, `checkReadbackPaths`) and ack shaping (`ackDocuments`, `ackUpdates`, `attachReadback`, `fitPreview`) |
-| `createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | The handlers of the write scripts (`updateDocuments.js` groups patch entries by uuid) |
+| `writeCopy.js` | `copyDataFromUuids({ documentName, fromUuids, keepId })`: create data copied from source documents by uuid, for `create_documents`'s `fromUuids` (see `wiretap-writes`) |
+| `createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | The handlers of the write scripts (`createDocuments.js` takes exactly one of `data` and `fromUuids`; `updateDocuments.js` groups patch entries by uuid) |
 | `listDocumentTypes.js`, `getDocument.js`, `searchDocuments.js`, `describeSchema.js` | The handlers of the read scripts (the last two only call `ctx.core`) |
 | `sheetDefinitions.js`, `diceDefinitions.js`, `macroDefinitions.js` | The per-family definitions of the gameplay scripts (`open_sheet`, `close_sheet`; `roll`, `draw_table`; `execute_macro`); relative imports only, like `definitions.js` |
 | `sheets.js`, `openSheet.js`, `closeSheet.js`, `roll.js`, `drawTable.js`, `executeMacro.js` | The gameplay script handlers and their shared sheet helpers: see `wiretap-gameplay` |
@@ -114,8 +116,8 @@ at most `SCHEMA_ARRAY_ITEMS_MAX` (1000) on both sides. The sidecar imports the l
 
 ## `ctx.shape` (`shape.js`)
 
-- `compact(doc, { keyPattern?, keyPaths?, embedded? })`: `uuid`, `name`, `type` (bounded), `modified` (the export's
-  `_stats.modifiedTime` when finite), `fields` (≤ 24 `system` scalar leaves: those named by `keyPaths` (dotted paths below
+- `compact(doc, { keyPattern?, keyPaths?, embedded?, version? })`: `uuid`, `name`, `type` (bounded), `version` (the
+  option, cut to 32 B, when it is a non-empty string; `get_document` passes its content version), `fields` (≤ 24 `system` scalar leaves: those named by `keyPaths` (dotted paths below
   `system`, in order, own properties only, unsafe segments skipped) when it is a list, else those whose key matches the
   pattern, depth ≤ 6, ≤ 2000 objects visited), `embedded.<collection>` = `{ total, rows: [id, name, type][] }`
   (≤ 8 collections with names shortened to 32 B, ≤ 40 tuples in all). The serialized view is held to
@@ -142,7 +144,9 @@ Covers the four read scripts (list_document_types, get_document, search_document
 to make or offer `backup_documents` before a bulk update, a replace, a delete or a document-changing macro, and to
 restore only when the user asks; its opening says `list_backups` and `delete_backup` work without a GM; its Compendium
 packs line names both pack tools, their gates and that Claude Code asks before every `delete_pack`) and must stay
-≤ 75 lines (`tests/unit/shippedSkill.test.js`, plus the context-budget test; it is 74 now).
+≤ 82 lines (`tests/unit/shippedSkill.test.js`; the context-budget test checks only its tool names; it is 82 now). Its
+Copy documents recipe covers `fromUuids`, the two-call actor build (inline items, then compendium items by uuid) and
+the change-only re-read (`version` passed as `ifChanged`).
 
 ## Backup export (`canonical.js`)
 
@@ -156,13 +160,17 @@ unreadable. Its caller and the restore that reads `secretPaths` are in `wiretap-
 
 ## Tests
 
-`schemaValidate`, `scriptRegistry`, `scriptShape` (MOCK_ fixtures with 120 embedded items; `modified` and `keyPaths`),
+`schemaValidate`, `scriptRegistry`, `scriptShape` (MOCK_ fixtures with 120 embedded items; `version` and `keyPaths`),
+`contentHash` (`hashText`, `stableStringify`, `contentVersion`, `requestHash` equal to `hashText` of the JSON),
 `callTool`, `scriptCore`, `canonical` and `getDocument` (mocked documents from `mockDocuments.js`: exclusions,
 password path in `missing`, compact bound over every list of `keyFields.json`, projection, `items.*.name`, derived,
-`ifModifiedSince`, argument combinations), `listDocumentTypes`, `searchDocuments` (paging, cursor stability, clamps, filters, exclusions, index use), `schemaWalk` (every field class with `mockFields.js`), `describeSchema`, `shippedSkill`, `OnceReady`, `foundryBridge.scripts` (registry push, ack handling, callTool acks) and
+`version` and `ifChanged` (embedded, `_stats`, reordered keys, secret-named values, derived), argument combinations), `listDocumentTypes`, `searchDocuments` (paging, cursor stability, clamps, filters, exclusions, index use), `schemaWalk` (every field class with `mockFields.js`), `describeSchema`, `shippedSkill`, `OnceReady`, `foundryBridge.scripts` (registry push, ack handling, callTool acks) and
 `foundryBridge.client` (write scripts through the bridge); `tests/integration/readTools.test.js` (both read scripts through the
-sidecar with a fake client). e2e: `tests/e2e/readTools.spec.js` (a created actor, then compact/paths/derived/`ifModifiedSince`/full
-handle and `maxBytes` 16000 on the created actor; every type and subtype present in the titan world read at ≤ 2,000 B;
+sidecar with a fake client). e2e: `tests/e2e/readTools.spec.js` (a created actor, then compact/paths/derived/full
+handle and `maxBytes` 16000 on the created actor, with its `version` (the same in compact and `paths` results, a
+different derived one, none in the full export) and `ifChanged` unchanged until a rename; a parent's `ifChanged` seeing
+an embedded item update, ActiveEffect create and ActiveEffect delete, which leave the parent's `_stats.modifiedTime`
+unmoved on the live world; every type and subtype present in the titan world read at ≤ 2,000 B;
 `wiretap.*` setting refused, real Settings with secret-named keys redacted, flags redacted, and User password paths in
 `missing` (after asserting the client holds the fields); embedded and compendium reads); `tests/e2e/everyType.spec.js`
 (creates, as recorded `Wiretap E2E ` documents, every class and subtype of the titan world except the classes and folder

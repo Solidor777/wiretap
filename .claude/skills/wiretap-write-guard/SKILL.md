@@ -54,7 +54,10 @@ A write that stores code which later runs needs `allowMacroExecution`, the gate 
     unwrapped by `DataFieldOperator.get`) is `script` on a target whose stored `_source.type` is not `script`. The type
     rule is change-only: re-saving a script Macro's type is allowed. A create's `type: 'script'` with no `command`
     stores the default empty command and is not gated.
-  - `Adventure`: any key writing `macros` (importing the adventure creates those Macros).
+  - `Adventure`: a key writing `macros` whose value, an operator unwrapped, is not an empty array
+    (`writesAdventureMacros`; importing the adventure creates those Macros). `macros: []`, by create, update `set` or
+    update `replace`, is not gated, so a `fromUuids` copy of an Adventure with no macros is not; a non-empty list, a
+    dotted key into the set and a deletion (null) are gated.
 - `writesRegionScript(intent)`: each create or replace value (with `CONFIG[documentName].documentClass`, no stored
   source) or each target's cleaned changes (with `target.document.constructor` and `_source`) is copied by
   `writtenData` (a `ForcedReplacement` becomes its value, a `ForcedDeletion` becomes null) and walked by
@@ -87,8 +90,10 @@ the executing client at call time and a `dryRun` preview needs none. What needs 
 - A path on a top-level collection or element (`items`, `items.<id>`) is `PATH_INVALID`. Nested ones are reachable and
   gated: `items.<id>.effects`, `tokens.<id>.delta`, `tokens.<id>.delta.items`, `system.<embedded model>`.
 - `create_documents` and `batch` creates never need these gates, but `keepId` is refused when the `_id` exists
-  (`refuseTakenIds`, `ARGS_INVALID`): MEASURED on 14.364, the server overwrites the stored document, world and embedded,
-  while the client keeps its old copy.
+  (`refuseTakenIds`, one early `ARGS_INVALID`). On 14.364 the server's `_createDocuments`
+  (`dist/database/backend/server-backend.mjs`, READ) throws "The _id [..] already exists within the parent collection"
+  for a taken embedded id and has no such check for a top-level document; a taken world id overwrites the stored
+  document (MEASURED) while the client keeps its old copy.
 
 `allowPackDeletion` (world-scope, restricted, default closed; `shared/gates.js`, `lang/en.json` "Risk gate: delete
 compendium packs") guards `delete_pack` only and is not read by `guardWrite`: `deletePackHandler` checks it itself

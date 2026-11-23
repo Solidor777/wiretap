@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { GATE_DENIED } from '$shared/protocol.js';
 import { getBudget } from '$shared/budgets.js';
 import { batchDocuments } from '~/bridge/scripts/writeBatch.js';
+import { batchHandler } from '~/bridge/scripts/batch.js';
 import { installWriteWorld } from './mockWriteWorld.js';
 
 /** @type {ReturnType<typeof installWriteWorld>} The mocked world. */
@@ -139,8 +140,11 @@ describe('batchDocuments: one modifyBatch call', () => {
          {
             name: 'MOCK_new',
             type: 'npc',
+            _id: expect.stringMatching(/^[A-Za-z0-9]{16}$/),
          },
       ]);
+      expect(operations[0].keepId).toBe(true);
+      expect(result.created[0].uuid).toBe(`Actor.${operations[0].data[0]._id}`);
       expect(operations[1].updates).toEqual([
          {
             _id: actor.id,
@@ -576,4 +580,85 @@ describe('batchDocuments: not atomic', () => {
       const error = await failure({ deletes: [other.uuid] });
       expect(error.code).toBe('WRITE_NOT_APPLIED');
    });
+});
+
+describe('batch: created rows follow the order of the entries', () => {
+   /** @type {string[]} The names created, in entry order. */
+   const names = [
+      'MOCK_0',
+      'MOCK_1',
+      'MOCK_2',
+   ];
+
+   it('answers one group of several creates in data order when Foundry answers in reverse', async () => {
+      world.createOrder.reverse = true;
+      const result = await batchDocuments({
+         creates: [
+            {
+               documentName: 'Actor',
+               data: names.map((name) => ({
+                  name,
+                  type: 'npc',
+               })),
+            },
+         ],
+      });
+      expect(result.created.map((row) => row.name)).toEqual(names);
+      expect(result.created.map((row) => world.byUuid.get(row.uuid)?.name)).toEqual(names);
+   });
+
+   it('answers mixed classes [Actor A, embedded P, Item B, Actor C, embedded Q] in entry order, also on a dry run',
+      async () => {
+         world.createOrder.reverse = true;
+         /** @type {object} The batch arguments: two actors and a world item, with two embedded items between them. */
+         const args = {
+            creates: [
+               {
+                  documentName: 'Actor',
+                  data: '{"name":"MOCK_A","type":"npc"}',
+               },
+               {
+                  documentName: 'Item',
+                  parentUuid: actor.uuid,
+                  data: '{"name":"MOCK_P","type":"weapon"}',
+               },
+               {
+                  documentName: 'Item',
+                  data: '{"name":"MOCK_B","type":"weapon"}',
+               },
+               {
+                  documentName: 'Actor',
+                  data: '{"name":"MOCK_C","type":"npc"}',
+               },
+               {
+                  documentName: 'Item',
+                  parentUuid: actor.uuid,
+                  data: '{"name":"MOCK_Q","type":"weapon"}',
+               },
+            ],
+         };
+         /** @type {object} A context whose core runs the real batch. */
+         const ctx = { core: { batchDocuments } };
+         /** @type {string[]} The names in entry order. */
+         const expected = [
+            'MOCK_A',
+            'MOCK_P',
+            'MOCK_B',
+            'MOCK_C',
+            'MOCK_Q',
+         ];
+         const preview = await batchHandler(
+            {
+               ...args,
+               dryRun: true,
+            },
+            ctx,
+         );
+         expect(preview.created.map((row) => row.name)).toEqual(expected);
+         const result = await batchHandler(args, ctx);
+         expect(result.created.map((row) => row.name)).toEqual(expected);
+         expect(result.created.map((row) => world.byUuid.get(row.uuid)?.name)).toEqual(expected);
+         expect(result.created[1].uuid.startsWith(`${actor.uuid}.Item.`)).toBe(true);
+         expect(result.created[4].uuid.startsWith(`${actor.uuid}.Item.`)).toBe(true);
+      });
 });

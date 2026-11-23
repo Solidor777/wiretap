@@ -190,3 +190,23 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   endpoint's declaration (`server/endpoints.ts`), and the flag is not in it. For `delete_pack` the flag is forced by
   name (`USER_INTERACTION_TOOLS`), so it cannot differ; it would matter only for a future prompted tool that is not on
   that list. Status: READ (`server/toolRegistry.ts`, `server/endpoints.ts`); unreachable today.
+
+- Title: An embedded change leaves the parent's modified time alone. Summary: on Foundry 14.364 an embedded Item
+  update, an embedded ActiveEffect create and that ActiveEffect's delete all leave the parent document's
+  `_stats.modifiedTime` where it was, so no timestamp on the parent tells whether its embedded documents changed, and a
+  delete leaves no timestamp anywhere. Anything that detects change by `_stats.modifiedTime` misses them; `get_document`
+  uses a content hash (`version`) instead. Status: MEASURED on the live world by `tests/e2e/readTools.spec.js` (its log
+  line `{"update":false,"create":false,"delete":false}`, two runs).
+
+- Title: Foundry's two import methods prepare a copy differently. Summary: `ClientDocument#toCompendium`
+  (`client/documents/abstract/client-document.mjs:1113-1134`) deletes `_id` (unless `keepId`) and the top-level `sort`,
+  keeps `folder` unless `clearFolder`, clears the three `_stats` source keys with `clearSource` (so Foundry's own pack
+  import leaves no `_stats.compendiumSource`), and with `clearOwnership` leaves an `ownership` of `{ default }` on the
+  document and on every embedded document. `WorldCollection#fromCompendium`
+  (`client/documents/abstract/world-collection.mjs:109-137`) exists only on world collections, keeps `folder` by
+  default, sets `_stats.compendiumSource` only for a source inside a pack, deletes embedded `ownership` and always ends
+  with a top-level `ownership` granting the importing user OWNER. Neither walk enters an Adventure's content sets, which
+  sit outside its `hierarchy`. A leftover `ownership` key would need `allowOwnershipWrites`, which is why `writeCopy.js`
+  uses one builder (`toCompendium`, then every `ownership` deleted) for every target. The stored document still gets the
+  creating user as OWNER from the server's `_preCreate` (`dist/database/backend/server-document.mjs`). Status: READ in
+  the v14 tree; the stored ownership MEASURED by `tests/e2e/copyTools.spec.js`.

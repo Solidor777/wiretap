@@ -233,7 +233,7 @@ function mockCompactView() {
       uuid: 'Actor.MOCKACTOR0000001',
       name: 'MOCK_ACTOR',
       type: 'player',
-      modified: 1760000000000,
+      version: 'a1b2c3d4e5f607',
       fields: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
          `system.mock.g${index}.value`,
          index,
@@ -420,6 +420,14 @@ function withFittedLabel(row) {
 }
 
 /**
+ * @type {number} The backups the `list_backups` fixture makes: one more than the 16 rows that fit in
+ * `BACKUP_LIST_MAX_BYTES`, so the listing is cut. Every row has the same length (same-length file names, one document,
+ * notes cut to `LIST_NOTE_MAX_BYTES`), so the cut result is the same 1,971 bytes as with more backups; each extra
+ * backup only adds a file write and a header read, the slowest steps of the report when every vitest worker is busy.
+ */
+const LIST_FIXTURE_BACKUPS = 17;
+
+/**
  * The representative-result fixtures, keyed by tool name. Every listed tool needs an entry; the data is synthetic.
  * @type {Record<string, FixtureCase[]>}
  */
@@ -433,13 +441,19 @@ export const FIXTURES = {
    ],
    list_backups: [
       {
-         label: 'fifty rows cut to the budget',
+         label: 'the most rows the budget holds, cut',
          budget: 'BACKUP_LIST_MAX_BYTES',
          run: async (context) => {
-            for (let index = 0; index < 50; index += 1) {
+            for (let index = 0; index < LIST_FIXTURE_BACKUPS; index += 1) {
                await makeBackup(context, `MOCK_NOTE_${String(index).padStart(2, '0')}_${'n'.repeat(187)}`);
             }
-            return callBackupTool(context.client, 'list_backups', { limit: 50 });
+            /** @type {{ content: { text: string }[] }} The listing of every backup made above. */
+            const result = await callBackupTool(context.client, 'list_backups', { limit: 50 });
+            // A listing that is not cut measures fewer rows than the budget holds, so it does not stand for the case.
+            if (JSON.parse(result.content[0].text).cut !== true) {
+               throw new Error(`list_backups kept every row of ${LIST_FIXTURE_BACKUPS} backups, so nothing was cut`);
+            }
+            return result;
          },
       },
    ],
@@ -667,7 +681,7 @@ export const FIXTURES = {
                name: 'get_document',
                arguments: {
                   uuid: 'Actor.MOCKACTOR0000001',
-                  ifModifiedSince: 1760000000000,
+                  ifChanged: 'a1b2c3d4e5f607',
                },
             });
          },
@@ -682,6 +696,7 @@ export const FIXTURES = {
                   index,
                ])),
                missing: [],
+               version: 'a1b2c3d4e5f607',
             }));
             return client.callTool({
                name: 'get_document',
@@ -1408,6 +1423,8 @@ function makeBreachRecorder(failures, warnings) {
  * @param {string[]} [options.helperTools] - Test-local tools that are measured per tool but do not count toward the
  * tool-count and total-size budgets. Every other listed tool counts, including extra tools a test registers to
  * exercise a budget.
+ * @param {boolean | string[]} [options.runFixtures] - Which fixtures to run and measure: true every one, false none,
+ * or the fixtures of the named tools only. A listed tool without a fixture is reported either way. Default true.
  * @returns {Promise<BudgetReport>} The measured breaches and sizes.
  */
 export async function collectReport({
@@ -1417,6 +1434,7 @@ export async function collectReport({
    fixtures,
    skillsRoot = DEFAULT_SKILLS_ROOT,
    helperTools = [HELPER_TOOL_NAME],
+   runFixtures = true,
 }) {
    /** @type {BudgetReport} The report being built. */
    const report = {
@@ -1474,6 +1492,9 @@ export async function collectReport({
       const cases = fixtures[tool.name];
       if (cases === undefined || cases.length === 0) {
          report.failures.push(`tool "${tool.name}": no representative-result fixture`);
+         continue;
+      }
+      if (runFixtures === false || (Array.isArray(runFixtures) && !runFixtures.includes(tool.name))) {
          continue;
       }
       for (const fixtureCase of cases) {

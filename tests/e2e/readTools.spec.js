@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { login } from './fixtures.js';
 import { createArguments, firstSubtype, idOf } from './writeHelpers.js';
 import { E2E_MCP_PORT } from './ports.js';
+import { e2eLog } from './log.js';
 import { startGateSidecar, stopSidecar } from './sidecar.js';
 import { recordGateSettings, restoreGateSettings } from './gates.js';
 import {
@@ -133,7 +134,7 @@ test.describe('wiretap core read tools', () => {
       assertSettled(settled);
    });
 
-   test('reads a created actor: compact, paths, derived, ifModifiedSince, full and handle', async ({ page }) => {
+   test('reads a created actor: compact, paths, derived, ifChanged, full and handle', async ({ page }) => {
       const uuid = await createRecordedActor(page);
       // Ten embedded items make the full export larger than the 8,000-byte default cap, and an effect adds 3 to a base
       // value so the prepared data differs from the stored data. All of them are removed with the recorded actor.
@@ -189,7 +190,7 @@ test.describe('wiretap core read tools', () => {
             'system.attribute.body.baseValue',
          ]),
       );
-      expect(typeof view.modified).toBe('number');
+      expect(view.version).toMatch(/^[0-9a-f]{14}$/);
 
       // Paths: a system slice and items.*.name keyed by _id.
       const slices = await readJson({
@@ -204,6 +205,7 @@ test.describe('wiretap core read tools', () => {
       expect(Object.values(slices.values['items.*.name'])).toHaveLength(10);
       expect(Object.keys(slices.values['items.*.name']).every((id) => ID_PATTERN.test(id))).toBe(true);
       expect(slices.missing).toEqual(['system.nope']);
+      expect(slices.version).toBe(view.version);
 
       // Derived: stored data without the flag, prepared data with it.
       const baseValue = ['system.attribute.body.baseValue'];
@@ -218,11 +220,20 @@ test.describe('wiretap core read tools', () => {
       });
       expect(stored.values[baseValue[0]]).toBe(prepared.stored);
       expect(derived.values[baseValue[0]]).toBe(prepared.prepared);
+      // The derived version hashes the prepared export, which the effect makes differ from the stored one.
+      expect(derived.version).not.toBe(stored.version);
+      const derivedUnchanged = await readJson({
+         uuid,
+         paths: baseValue,
+         derived: true,
+         ifChanged: derived.version,
+      });
+      expect(derivedUnchanged).toEqual({ unchanged: true });
 
-      // ifModifiedSince: unchanged until the document is updated.
+      // ifChanged: unchanged until the document is updated.
       const unchanged = await callText('get_document', {
          uuid,
-         ifModifiedSince: view.modified,
+         ifChanged: view.version,
       });
       expect(JSON.parse(unchanged.text)).toEqual({ unchanged: true });
       expect(unchanged.bytes).toBeLessThanOrEqual(256);
@@ -232,9 +243,10 @@ test.describe('wiretap core read tools', () => {
       );
       const changed = await readJson({
          uuid,
-         ifModifiedSince: view.modified,
+         ifChanged: view.version,
       });
-      expect(changed.modified).toBeGreaterThan(view.modified);
+      expect(changed.version).toEqual(expect.any(String));
+      expect(changed.version).not.toBe(view.version);
 
       // Full: over the default cap it is a handle that read_handle slices; with maxBytes 16000 it is inline.
       const full = await callText('get_document', {
@@ -264,7 +276,99 @@ test.describe('wiretap core read tools', () => {
       expect(exported._id).toBe(uuid.split('.').pop());
       expect(exported.items).toHaveLength(10);
       expect(exported.uuid).toBe(uuid);
+      expect(Object.hasOwn(exported, 'version')).toBe(false);
    });
+
+   test(
+      'ifChanged on a parent sees an embedded update, an embedded create and an embedded delete',
+      async ({ page }) => {
+         const uuid = await createRecordedActor(page);
+         // One embedded item, removed with the recorded actor.
+         const itemId = await page.evaluate(async (actorUuid) => {
+            const actor = await fromUuid(actorUuid);
+            const itemType = game.documentTypes.Item.find((type) => type !== CONST.BASE_DOCUMENT_TYPE);
+            const [item] = await actor.createEmbeddedDocuments('Item', [
+               {
+                  name: 'Wiretap E2E stamp item',
+                  type: itemType,
+               },
+            ]);
+            return item.id;
+         }, uuid);
+         // Evidence for the assertion messages, not an assertion.
+         /**
+          * Whether a step moved _stats.modifiedTime.
+          * @type {{ update?: boolean, create?: boolean, delete?: boolean }}
+          */
+         const stampMoved = {};
+         /**
+          * The id of the embedded effect the create step makes and the delete step removes.
+          * @type {string | undefined}
+          */
+         let effectId;
+
+         /**
+          * Run one embedded mutation in the page and assert that the parent's version sees it: a read with the version
+          * from before is unchanged until the mutation and changed after it.
+          * @param {'update' | 'create' | 'delete'} step - The mutation to run.
+          * @returns {Promise<void>}
+          */
+         async function expectVersionSees(step) {
+            const before = await readJson({ uuid });
+            const control = await readJson({
+               uuid,
+               ifChanged: before.version,
+            });
+            expect(control, `${step}: ${JSON.stringify(stampMoved)}`).toEqual({ unchanged: true });
+            const outcome = await page.evaluate(
+               async ({ actorUuid, kind, ids }) => {
+                  const actor = await fromUuid(actorUuid);
+                  const stamp = actor._stats.modifiedTime;
+                  /** @type {string | undefined} The id of an effect this step creates. */
+                  let created;
+                  if (kind === 'update') {
+                     await actor.items.get(ids.item).update({ name: 'Wiretap E2E stamp item renamed' });
+                  } else if (kind === 'create') {
+                     const [effect] = await actor.createEmbeddedDocuments('ActiveEffect', [
+                        {
+                           name: 'Wiretap E2E stamp effect',
+                           type: 'effect',
+                        },
+                     ]);
+                     created = effect.id;
+                  } else {
+                     await actor.deleteEmbeddedDocuments('ActiveEffect', [ids.effect]);
+                  }
+                  return {
+                     moved: actor._stats.modifiedTime !== stamp,
+                     created,
+                  };
+               },
+               {
+                  actorUuid: uuid,
+                  kind: step,
+                  ids: {
+                     item: itemId,
+                     effect: effectId,
+                  },
+               },
+            );
+            stampMoved[step] = outcome.moved;
+            effectId = outcome.created ?? effectId;
+            const after = await readJson({
+               uuid,
+               ifChanged: before.version,
+            });
+            expect(after, `${step}: ${JSON.stringify(stampMoved)}`).not.toEqual({ unchanged: true });
+            expect(after.version, `${step}: ${JSON.stringify(stampMoved)}`).not.toBe(before.version);
+         }
+
+         await expectVersionSees('update');
+         await expectVersionSees('create');
+         await expectVersionSees('delete');
+         e2eLog(`parent _stats.modifiedTime moved per embedded mutation: ${JSON.stringify(stampMoved)}`);
+      },
+   );
 
    test('enumerates every document type and reads one document of each type and subtype present', async ({ page }) => {
       await createRecordedActor(page);

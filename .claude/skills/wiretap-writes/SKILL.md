@@ -1,6 +1,6 @@
 ---
 name: wiretap-writes
-description: Wiretap create_documents, update_documents, delete_documents, replace_document, batch, advisory actAs, create_documents idempotencyKey, handle inputs, strict arguments and the _id / flags.wiretap guard rules (phase B of the core write tools); the Foundry semantics they mirror, their codes and tests. Use when reading or editing the write scripts, replace, batch, actAs, idempotency or handle-input code or their tests. The base write guard and operators are in wiretap-write-guard.
+description: Wiretap create_documents (data or fromUuids copies), update_documents, delete_documents, replace_document, batch, advisory actAs, create_documents idempotencyKey, handle inputs, strict arguments and the _id / flags.wiretap guard rules (phase B of the core write tools); the Foundry semantics they mirror, their codes and tests. Use when reading or editing the write scripts, replace, batch, actAs, idempotency or handle-input code or their tests. The base write guard and operators are in wiretap-write-guard.
 paths:
   - "src/bridge/scripts/writeReplace.js"
   - "src/bridge/scripts/writeBatch.js"
@@ -15,9 +15,12 @@ paths:
   - "src/bridge/scripts/deleteDocuments.js"
   - "src/bridge/scripts/writeArgs.js"
   - "src/bridge/scripts/writeAck.js"
+  - "src/bridge/scripts/writeCopy.js"
   - "tests/unit/write*.test.js"
+  - "tests/unit/writeCopy*.test.js"
   - "tests/unit/mockWriteWorld.js"
   - "tests/e2e/writeTools.spec.js"
+  - "tests/e2e/copyTools.spec.js"
   - "tests/e2e/writeHelpers.js"
   - "server/handleInput.ts"
   - "tests/unit/writeReplace*.test.js"
@@ -33,9 +36,10 @@ paths:
 
 # Wiretap phase B write tools
 
-Covers the phase A scripts (`create_documents`, `update_documents`, `delete_documents`) and the phase B tools; the guard is in `wiretap-write-guard`. Fourteen shipped
-scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B raw-definition limit, MEASURED by
-`tests/measure/measureContext.mjs`). Foundry version read and measured: 14.364 (`game.version`).
+Covers the phase A scripts (`create_documents`, `update_documents`, `delete_documents`) and the phase B tools; the
+guard is in `wiretap-write-guard`. Sixteen shipped scripts in all; `replace_document` lists at 562 B and `batch` at
+795 B (800 B raw-definition limit, MEASURED by `tests/measure/measureContext.mjs`). Foundry version read and measured:
+14.364 (`game.version`).
 
 ## Files
 
@@ -43,7 +47,8 @@ scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B ra
 |---|---|
 | `src/bridge/scripts/writes.js` | `createDocuments`, `updateDocuments`, `deleteDocuments` and the planners `prepareCreate`, `prepareUpdates`, `prepareDeletes` that `batch` and `replace_document` reuse (`prepareCreate` / `runCreate` also serve the backup restore); the guard calls, validation (`failuresOf`), `refuseTakenIds`, `refuseUnsafeData` |
 | `src/bridge/scripts/createDocuments.js`, `updateDocuments.js`, `deleteDocuments.js` | Handlers of the phase A scripts (`updateDocuments.js` groups patch entries by uuid) |
-| `src/bridge/scripts/writeArgs.js`, `writeAck.js` | Argument helpers (`parseDataObjects`, `parseJson`, `checkDataBytes`) and ack shaping |
+| `src/bridge/scripts/writeArgs.js`, `writeAck.js` | Argument helpers (`parseDataObjects`, `parseJson`, `checkDataBytes`, `createId`: the id a create is sent with, for `runCreate`, `batch` and the idempotency record) and ack shaping |
+| `src/bridge/scripts/writeCopy.js` | `copyDataFromUuids({ documentName, fromUuids, keepId })`: the create data of `create_documents`'s `fromUuids` (below); writes nothing |
 | `src/bridge/scripts/writeReplace.js`, `replaceDocument.js` | `replace_document` and its handler; `prepareReplace` / `runReplace` and restore mode, `stripWiretapFlags`, `droppedEmbedded`, the carry of `flags.wiretap` |
 | `src/bridge/scripts/writeBatch.js`, `writeBatchSettle.js`, `batch.js` | `batch`: planning, `modifyBatch`, settle and repair |
 | `src/bridge/scripts/writeActAs.js`, `writeIdempotency.js` | `actAs` check and the `create_documents` idempotency record |
@@ -54,17 +59,28 @@ scripts in all; `replace_document` lists at 562 B and `batch` at 795 B (800 B ra
 
 `create_documents`, `update_documents` and `delete_documents` (and the phase B tools, listed in `wiretap-writes`): `mutates: true`, `requires: 'api'`, no declared gate (one
 gate cannot cover them; the handlers enforce per category, see below), `result.budgetBytes` = `ACK_BATCH_MAX_BYTES`
-(4000). Listed 640 B, 709 B and 381 B (MEASURED by `tests/measure/measureContext.mjs`). Every argument is a flat
+(4000). Listed 794 B, 793 B and 436 B (MEASURED by `tests/measure/measureContext.mjs`). Every argument is a flat
 schema: the subset has no free-form object, so a data object or a patch value travels as JSON text (`parseDataObjects`,
 `parseJson` in `writeArgs.js`; the text is bounded by `SCHEMA_BOUND_MAX` per item and `WRITE_DATA_MAX_BYTES` (200,000)
 per call; a parse failure is `ARGS_INVALID` naming the index).
 
-- `create_documents({ documentName, data[1..50], parentUuid?, pack?, keepId?, dryRun?, paths? })`: `data` is one JSON
-  object text per document. `parentUuid` creates embedded documents (`createEmbeddedDocuments`); `pack` creates in a
+- `create_documents({ documentName, data[..50] | fromUuids[1..50], parentUuid?, pack?, keepId?, dryRun?, paths? })`:
+  `data` is one JSON object text per document; `fromUuids` (strings of at most 256 characters) names source documents
+  to copy instead. Exactly one of the two is given, else `ARGS_INVALID` "Give data or fromUuids, not both and not
+  neither." (checked in the handler: `required` is `['documentName']`; `handleArgs` stays `['data']`). The handler then
+  builds the data (`parseDataObjects`, or `copyDataFromUuids` with `keepId`), checks the read-back paths and calls
+  `ctx.core.createDocuments` as for `data`, so a copy meets every gate, guard, validation, `actAs`, `dryRun` and
+  `refuseTakenIds` check the same data would. A copy carries no `ownership`, `folder`, `sort` or `flags.wiretap`.
+  Read references/copies.md (how a copy is built, its refusals, gates, bounds, hash and retries) before changing
+  `writeCopy.js` or the `fromUuids` path.
+- `parentUuid` creates embedded documents (`createEmbeddedDocuments`); `pack` creates in a
   compendium (`documentClass.createDocuments(.., { pack })`); neither creates in the world. Result: one
   `{ uuid, name, type }` per document (a dry run has `uuid: null` and `dryRun: true`), shaped by `writeAck.js`
-  `ackDocuments`. `paths` adds a read-back of those paths per created document (`attachReadback`;
-  `checkReadbackPaths` bounds them).
+  `ackDocuments`. Row i is data i: Foundry's server answers a create in the order its `createNewId` lookups finish
+  (`dist/database/backend/server-backend.mjs` `_createDocuments`; world, embedded and pack alike), so `runCreate`
+  sends every document with an id under `keepId: true` (the kept `_id` with `keepId`, else a fresh
+  `foundry.utils.randomID()` in place of any `_id` in the data) and matches the answer to the data by id. `paths`
+  adds a read-back of those paths per created document (`attachReadback`; `checkReadbackPaths` bounds them).
 - `update_documents({ updates[1..200], dryRun?, paths? })`: each entry is one patch `{ uuid, path, value?, op? }`;
   entries with one `uuid` form that document's update. `value` is JSON text; `op` is `set` (default), `replace`
   (Foundry's `ForcedReplacement`) or `delete` (`ForcedDeletion`; takes no `value`); `op` is the only way to an operator
@@ -101,15 +117,8 @@ bridge (at most 10 failures, path and message bounded) and `formatBridgeError` p
 
 ## Strict arguments
 
-Definitions carry `additionalProperties: false` at the root; both validators REJECT an undeclared argument (client
-`shared/schemaValidate.js`, sidecar zod `.strict()` via `argumentSchema` in `server/toolRegistry.ts`); the client's
-`listedNode` emits that keyword so both sides measure the same bytes. A handler never sees an undeclared key inside an
-entry (the sidecar's zod parse and the client's validated copy both drop it), so `batch` sets the definition flag
-`strictNested: true`: every object below the root refuses an undeclared key on both validators, and the listed schema
-omits the nested `additionalProperties` (strict entries would list at 880 B, plus `required` 915 B, plus an `op` enum
-and `maxLength` about 70 B more, over 800 B). The flag is validated in `shared/scripts.js`, part of `schemaSignature`,
-and the sidecar's zod objects are `.strict()` with the JSON key overridden to `undefined`. Tests: `batchHandler.test.js`,
-`schemaValidate.test.js`, `schemaStrict.test.js`, `writeToolsB.test.js` ("undeclared keys in batch entries").
+Both validators reject an undeclared argument at the root, and `batch` (`strictNested: true`) also below it. Read
+references/strict-arguments.md before changing either validator, `strictNested` or a write tool's schema.
 
 ## replace_document (`writeReplace.js`, handler `replaceDocument.js`)
 
@@ -148,21 +157,15 @@ and the sidecar's zod objects are `.strict()` with the JSON key overridden to `u
 `prepareCreate`, `prepareUpdates`, `prepareDeletes` (one `checkDataBytes` total over creates and updates), so each
 passes `guardWrite`, validation and `actAs` before anything is sent. Order: creates, updates, deletes; no reference to a
 document an earlier operation creates; `checkConflicts` refuses update/delete on one document. `buildOperations`
-builds updates as `{ ...changes, _id }`.
+builds updates as `{ ...changes, _id }` and sends every created document with a `createId` id under `keepId: true`
+(Foundry answers a create in `createNewId` order, see `runCreate`); `acknowledge` matches each group's answer by id.
+Row order: `groupCreates` (`batch.js`) sends one create per class and parent in first-use order and returns `rowOrder`,
+so created row i is create entry i (dry run too); updated rows one per uuid in first-patch order; deleted rows as given.
 
-Sent with `foundry.documents.modifyBatch`. Behaviour READ in the 14.364 tree (`server-backend.mjs`, batch handler `#r`;
-the 14.369 tree names it `#a`: cite behaviour, not the name): the client drops cancelled entries and no-op updates
-(an operation with nothing left is not sent); the server validates all first and writes nothing on a validation error
-but still returns dry-run echoes of the passing requests (the client treats them as real: ghost creates, phantom
-deletes); it then applies one by one and stops at the first failure, NO rollback. Errors surface only as notifications.
-
-`settle` matches results to operations by document id, the parent of the result (`SettleEntry.parent`, kept because
-Foundry deletes `operation.parent` while sending) and, for a create, ids no other sent operation touches (states
-applied, unchanged, partial, cancelled, failed, echo);
-`confirmAfterFailure` asks the server (`database.get` with `_id` equality per id; `$in` returns nothing, MEASURED),
-removes ghost creates and restores phantom deletes; `incomplete` throws `WRITE_NOT_APPLIED` ("N of M operations
-applied, X unchanged, Y partly cancelled by a hook, Z cancelled by a hook, W failed, V not written; the batch is not
-atomic", <= 256 B). Unchanged or cancelled updates ack `changed: []`; in an embedded update group with several entries, an entry Foundry dropped (unchanged or hook-cancelled) simply has no paths in the ack and the batch raises no error, an update is never `partial` (tested in `writeBatchStrict.test.js`). Compendium pack operations cannot be re-checked.
+Sent with one `foundry.documents.modifyBatch` call; NOT atomic (the server stops at the first failure, no rollback).
+`settle` matches results to operations, `confirmAfterFailure` repairs ghost creates and phantom deletes, `incomplete`
+throws `WRITE_NOT_APPLIED`. Read references/batch-settle.md (what Foundry does with a batch, the states, the repair, the
+error text) before changing `writeBatchSettle.js` or how operations are matched.
 
 ## actAs (`writeActAs.js`)
 
@@ -178,9 +181,14 @@ client-chosen ids (`keepId`). A record counts only when `u` is this client's use
 records with the same hash replay (honouring `dryRun`, `actAs`, read-back); another hash is `IDEMPOTENCY_CONFLICT`
 ("different request"), an incomplete set (hook-cancelled or deleted document) is `IDEMPOTENCY_CONFLICT` naming "k of n
 documents" and the remedy (a new key); the missing documents are never created behind the caller's back. The lookup reads at most `IDEMPOTENCY_SCAN_MAX` (20,000) documents, beyond that
-`IDEMPOTENCY_UNAVAILABLE`. `withKeyLock` serializes calls per class, parent and key. Retention 24 h by
+`IDEMPOTENCY_UNAVAILABLE`. The hash reads `[documentName, parentUuid ?? null, keepId, requestData ?? data]`
+(`requestData`: a copy's `{ fromUuids }`). `withKeyLock` serializes calls per class, parent and key. Retention 24 h by
 `_stats.createdTime`. A class with no `flags` field (Setting) cannot carry the record: `prepareCreate` refuses an
-`idempotencyKey` there with `ARGS_INVALID`, as it does for a pack.
+`idempotencyKey` there with `ARGS_INVALID`, as it does for a pack. Order in `prepareCreate`: `refuseUnsafeData`, target,
+`guardWrite`, the key lookup, then (with `keepId`) `refuseTakenIds`, so a keyed `keepId` retry whose ids its first call
+took replays, and a call with no matching record still meets `refuseTakenIds` before any write. With `keepId`, a taken
+id under a key whose records carry another hash is `IDEMPOTENCY_CONFLICT`; a keyed call into a pack gets the pack's
+`ARGS_INVALID` text.
 
 ## Delete and replace gates, operators, guard rules
 
@@ -212,12 +220,13 @@ strict batch entries (800 B limit).
 
 Unit over `mockWriteWorld.js` (its `MockValidationError` reproduces the 14.364 behaviour of an empty
 `getAllFailures()`) and `mockFoundryData.js` (see `wiretap-write-guard`; models Foundry's operation preprocessing, `world.batch.failure = { index, phase }`,
-`world.cancel.{updateIds,deleteIds,createNames}`, `_id`-equality `database.get`, a server copy, `fromImport`,
-`canUserModify`): `writeCreate`, `writeUpdate`, `writeDelete`, `writeScripts`, `writeReplace*`, `writeBatch*`,
-`writeActAs`, `writeIdempotency*`, `writePhaseB`, `handleInput`, plus handle cases in `handles.test.js`. Integration `writeToolsB.test.js` (sidecar with a fake client,
+`world.cancel.{updateIds,deleteIds,createNames}`, `world.createOrder.reverse` (creates answered in reverse), `_id`-equality `database.get`, a server copy, `fromImport`,
+`canUserModify`): `writeCreate`, `writeCopy`, `writeCopyCreate` (references/copies.md), `writeUpdate`, `writeDelete`, `writeScripts`, `writeReplace*`, `writeBatch*`,
+`writeActAs`, `writeIdempotency*`, `writeKeepId`, `writePhaseB`, `batchHandler` (row order), `handleInput`, plus handle cases in `handles.test.js`. Integration `writeToolsB.test.js` (sidecar with a fake client,
 including handle inputs). e2e `tests/e2e/writeTools.spec.js` (live world, throwaway `Wiretap E2E ` documents):
 replace with a `preUpdateActor` hook and omitted-field reset, batches with unchanged / hook-cancelled middle operations,
-ghost / phantom repair, embedded and parentUuid batches, idempotent and concurrent creates, handle create / replace,
-`_id` and flags refusals, `actAs` denial with a throwaway player, the gates of a throwaway scene's token delta, and one
-test that records how Foundry treats every operator spelling (the representation table in
-`docs/POST_WORK_FINDINGS.md`).
+ghost / phantom repair, embedded and parentUuid batches (created row i is create entry i, and its uuid stores that
+entry's name, over interleaved Actor, embedded Item, world Item and Actor creates), idempotent and concurrent
+creates, handle create / replace, `_id` and flags refusals, `actAs` denial with a throwaway player, the gates of a
+throwaway scene's token delta, and one test that records how Foundry treats every operator spelling (the
+representation table in `docs/POST_WORK_FINDINGS.md`).

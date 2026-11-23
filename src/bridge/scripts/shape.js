@@ -10,6 +10,8 @@ import { truncateUtf8, utf8Bytes } from '$shared/utf8.js';
  * list, `keyPattern` is not used. A path that does not end at a scalar, or holds an unsafe segment, is skipped.
  * @property {string[]} [embedded] - The names of the embedded collections to list as tuples; defaults to every
  * top-level array whose first element is an object with a string `_id`.
+ * @property {string} [version] - The content version of the document, shown in the header between `type` and
+ * `fields` (cut to 32 bytes) when it is a non-empty string.
  */
 
 /**
@@ -69,6 +71,12 @@ const UUID_MAX_BYTES = 96;
  * @type {number}
  */
 const TYPE_MAX_BYTES = 32;
+
+/**
+ * Longest `version` in a compact view, in UTF-8 bytes.
+ * @type {number}
+ */
+const VERSION_MAX_BYTES = 32;
 
 /**
  * Most embedded collections one compact view lists; further collections are left out and the view is marked cut.
@@ -303,15 +311,16 @@ function tupleOf(element) {
 }
 
 /**
- * Build the compact view of a document export: `uuid`, `name`, `type`, the `modified` time of the export's `_stats`
- * when it holds one, the `system` leaves named by `keyPaths` or whose key matches a pattern (`fields`, at most 24),
+ * Build the compact view of a document export: `uuid`, `name`, `type`, the `version` option when it is a non-empty
+ * string, the `system` leaves named by `keyPaths` or whose key matches a pattern (`fields`, at most 24),
  * and the embedded documents as `[id, name, type]` tuples (`embedded`: at most 8 collections, their names shortened to
  * 32 bytes, at most 40 tuples in all, with the true `total` of each collection). Every string is bounded. While the
  * serialized view exceeds `COMPACT_VIEW_MAX_BYTES` it loses entries and `cut` is set: the larger of the leaves and the
  * tuples loses its last entry, then any remaining leaf, then a collection with no tuples left, then the header fields,
  * so the size bound holds for any data. Reads own properties only and never throws.
  * @param {unknown} doc - The canonical document export (plain data).
- * @param {CompactOptions} [options] - The leaf key paths or key pattern and the embedded collection names.
+ * @param {CompactOptions} [options] - The leaf key paths or key pattern, the embedded collection names and the
+ * version.
  * @returns {Record<string, unknown>} The compact view; `{}` when the input is not an object.
  */
 function compact(doc, options = {}) {
@@ -339,12 +348,8 @@ function compact(doc, options = {}) {
             header[key] = truncateUtf8(value, max);
          }
       }
-      /** @type {unknown} The document's `_stats`, from which the modified time is read. */
-      const stats = own(doc, '_stats');
-      /** @type {unknown} The last modification time in milliseconds, when the stats hold one. */
-      const modified = isRecord(stats) ? own(stats, 'modifiedTime') : undefined;
-      if (typeof modified === 'number' && Number.isFinite(modified)) {
-         header.modified = modified;
+      if (typeof options.version === 'string' && options.version !== '') {
+         header.version = truncateUtf8(options.version, VERSION_MAX_BYTES);
       }
       /** @type {Array<[string, string | number | boolean]>} The leaves, trimmed to fit. */
       const leaves = Array.isArray(options.keyPaths)
@@ -414,7 +419,7 @@ function compact(doc, options = {}) {
       let cut = skipped;
       /** @type {string[]} The header fields in the order they are dropped when nothing else is left to drop. */
       const headerDrop = [
-         'modified',
+         'version',
          'type',
          'name',
          'uuid',
