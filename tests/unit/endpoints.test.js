@@ -1721,6 +1721,17 @@ describe('router invokeTool', () => {
          expect(sent).toEqual([]);
       });
 
+      it('judges the module gate before the declared gate when both are closed, sending nothing', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', closedGateState());
+         const error = await router.invokeTool('my-mod__echo', {}, { listed }).catch((cause) => cause);
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowedPluginModules');
+         expect(error.message).not.toContain('allowDelete');
+         expect(sent).toEqual([]);
+      });
+
       it('runs a plugin tool when its module and its declared gate are both open', async () => {
          const listed = plugin();
          const { router, registry, sent } = setup([['a', 'agent', [listed]]]);

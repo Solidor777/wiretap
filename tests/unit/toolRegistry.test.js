@@ -610,7 +610,7 @@ describe('sanitizeRegistry: no count or total bound', () => {
       expect(lines).toEqual([]);
    });
 
-   it('accepts definitions whose listed sizes add up past ALL_DEFINITIONS_MAX_BYTES', () => {
+   it('accepts definitions whose listed sizes add up past 16,000 bytes', () => {
       /** @type {object} A schema whose listed definition is close to the definition budget. */
       const inputSchema = paddedSchema(790);
       const { outcome } = run(Array.from({ length: 29 }, (_, index) => entry({
@@ -620,7 +620,8 @@ describe('sanitizeRegistry: no count or total bound', () => {
       })));
       /** @type {number} The listed size of each definition. */
       const each = definitionBytes('padded_script_00', 'd'.repeat(20), compileSchema(inputSchema).listed);
-      expect(29 * each).toBeGreaterThan(getBudget('ALL_DEFINITIONS_MAX_BYTES').value);
+      // 16000 bytes: a total listed size of all definitions together that a total-size bound would refuse.
+      expect(29 * each).toBeGreaterThan(16000);
       expect(outcome.tools).toHaveLength(29);
    });
 

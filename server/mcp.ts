@@ -702,25 +702,32 @@ export function startMcpServer(
    /**
     * Make a session's registry tools equal to the wanted tools: remove the ones that are gone, replace the ones whose
     * definition changed and register the new ones. A tool named like a fixed tool is skipped; every other wanted tool
-    * is listed, however many there are. The server's own change notifications are withheld; the caller notifies once.
+    * is listed, however many there are. The wanted tools are looked up by name in a map, so one sync costs time linear
+    * in the held and wanted tools; every session re-syncs on each change the bridge announces. The server's own
+    * change notifications are withheld; the caller notifies once.
     * @param {McpSession} session - The session.
     * @param {RegistryTool[]} wanted - The tools of the endpoint the session routes to.
     * @returns {boolean} Whether the session's tool list changed.
     */
    function syncRegistryTools(session: McpSession, wanted: RegistryTool[]): boolean {
-      // The wanted tools that may be listed.
-      const listed: RegistryTool[] = wanted.filter((tool) => !fixedNames.has(tool.name));
+      // The wanted tools that may be listed, by name; the first tool of a name wins.
+      const listed: Map<string, RegistryTool> = new Map();
+      for (const tool of wanted) {
+         if (!fixedNames.has(tool.name) && !listed.has(tool.name)) {
+            listed.set(tool.name, tool);
+         }
+      }
       // Whether anything was added, replaced or removed.
       let changed: boolean = false;
       for (const [name, current] of [...session.registered]) {
-         const next: RegistryTool | undefined = listed.find((tool) => tool.name === name);
+         const next: RegistryTool | undefined = listed.get(name);
          if (next === undefined || next.signature !== current.signature) {
             current.handle.remove();
             session.registered.delete(name);
             changed = true;
          }
       }
-      for (const tool of listed) {
+      for (const tool of listed.values()) {
          if (session.registered.has(tool.name)) {
             continue;
          }
