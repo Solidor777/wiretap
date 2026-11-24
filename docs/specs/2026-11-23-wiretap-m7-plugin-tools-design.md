@@ -59,8 +59,8 @@ Three groups. The split was confirmed by the owner.
 
 | Group | Checks | Shipped tool | Plugin tool |
 |---|---|---|---|
-| Best practice | definition ≤ `DEFINITION_MAX_BYTES` (800 B); description ≤ 240 chars and the 160 target; name ≤ 64 chars; `result.budgetBytes` above `RESULT_HARD_CAP_MAX_BYTES`; schema complexity limits in `shared/schemaValidate.js` (`SCHEMA_DEPTH_MAX` 4, `SCHEMA_NODES_MAX` 64, `SCHEMA_PROPERTIES_MAX` 32, `SCHEMA_ENUM_MAX` 32, `SCHEMA_ENUM_VALUE_MAX_CHARS` 64, `SCHEMA_BOUND_MAX`, and the required array `maxItems` ≤ 1000) | Refused; CI fails | Accepted with a warning |
-| Needed to work | name format `<moduleId>__<tool>` from the allowed charset, no dots (D10); not reserved, not an `Object.prototype` member; unique; `moduleId` an active module; required fields present and typed (`version`, `description` non-empty with no control characters, `inputSchema`, `requires` `api`/`dom`, `mutates` boolean, `result.budgetBytes` a positive integer); schema keywords the converter supports (no `$ref`, combinators, `pattern`, `format`, `default`, `const`, unknown keywords); `handler` a function; `gate` a known gate | Refused | Refused, with a message saying what to change |
+| Best practice | definition ≤ `DEFINITION_MAX_BYTES` (800 B); description ≤ 240 chars and the 160 target; `result.budgetBytes` above `RESULT_HARD_CAP_MAX_BYTES`; schema complexity limits in `shared/schemaValidate.js` (`SCHEMA_DEPTH_MAX` 4, `SCHEMA_NODES_MAX` 64, `SCHEMA_PROPERTIES_MAX` 32, `SCHEMA_ENUM_MAX` 32, `SCHEMA_ENUM_VALUE_MAX_CHARS` 64, `SCHEMA_BOUND_MAX`, and the required array `maxItems` ≤ 1000) | Refused; CI fails | Accepted with a warning |
+| Needed to work | name format `<moduleId>__<tool>` from the allowed charset, no dots (D10), at most 50 characters (see "Settled points"); not reserved, not an `Object.prototype` member; unique; `moduleId` an active module; required fields present and typed (`version`, `description` non-empty with no control characters, `inputSchema`, `requires` `api`/`dom`, `mutates` boolean, `result.budgetBytes` a positive integer); schema keywords the converter supports (no `$ref`, combinators, `pattern`, `format`, `default`, `const`, unknown keywords); `handler` a function; `gate` a known gate | Refused | Refused, with a message saying what to change |
 | Server protection | Socket.IO `maxHttpBufferSize` (1,000,000 B) on the registry message; the registry push rate limit; handle store bounds; MCP body limit | Unchanged | Unchanged |
 
 Large results: a plugin result over the runtime hard cap becomes a `{handle, bytes, summary}` saved result, as for
@@ -108,9 +108,11 @@ reload.
 
 ## Settled points (from the builder check)
 
-- **Name length warns.** PLAN.md §2.6 records that 110-character tool names work in Claude Code (measured), so the
-  64-character guideline is a best practice, not a "needed to work" rule. The guide says long names cost context on
-  every session and gives the measured figure.
+- **Name length is needed to work (owner's decision, 2026-11-23).** Claude Code lists each tool as
+  `mcp__wiretap__<name>` (14 characters of prefix), and several Claude Code bug reports describe the Anthropic API
+  refusing tool names over 64 characters. So a plugin name `<moduleId>__<tool>` over 50 characters is refused, with a
+  message giving the limit and the reason. This replaces the older measurement in PLAN.md §2.6 that 110-character
+  names worked.
 - **Warnings already have a channel.** `validateScriptDefinition` returns `{ ok: true, definition, warnings }`; the
   plugin path adds its best-practice findings to `warnings`. The schema limits in `shared/schemaValidate.js`
   (`compileSchema`) and `server/toolRegistry.ts` (`jsonSchemaToZodShape`) refuse today; both gain the same

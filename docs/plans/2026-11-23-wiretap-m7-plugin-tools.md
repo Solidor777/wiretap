@@ -40,6 +40,13 @@ Execution method: parallel
   untrusted registry input), Task 4 (client gate re-enforcement and the push bound), Task 6 (the public API contract).
   Task 9 writes the shared world's module configuration and one folder outside the repo.
 
+## Buddy-check directives
+
+- Plan buddy check: declined (not offered separately; the owner chose task cross-checks).
+- Flagged tasks: 1, 2, 3, 4, 6 — buddy check (`wiretap-spec-reviewer` and `wiretap-code-reviewer` as the two seats)
+  replaces the group review for each, run alone on landing. Owner's decision, 2026-11-23.
+- Unflagged tasks showing risk signals: ask.
+
 ## Global Constraints
 
 Every task's requirements include each line below.
@@ -63,13 +70,13 @@ Every task's requirements include each line below.
 
   | Group | Checks | Shipped tool | Plugin tool |
   |---|---|---|---|
-  | Best practice | listed definition ≤ 800 B (`DEFINITION_MAX_BYTES`); description ≤ 240 chars and the 160 target; name ≤ 64 chars (`PLUGIN_TOOL_NAME_MAX_CHARS`); `result.budgetBytes` ≤ 16,000 (`RESULT_HARD_CAP_MAX_BYTES`); schema depth ≤ 4, nodes ≤ 64, properties ≤ 32, enum ≤ 32 values of ≤ 64 chars, bounds ≤ 100,000, every array declares `maxItems` ≤ 1000, schema-node descriptions ≤ 240 chars | Refused; CI fails | Accepted with a warning |
-  | Needed to work | name `<moduleId>__<tool>` of `[a-z0-9_-]`, no dots; not reserved, not an `Object.prototype` member; unique; `moduleId` an active module; `version` semver-like ≤ 32 chars; `description` non-empty with no control characters; `inputSchema` an object; `result.budgetBytes` a positive integer; `requires` `api` or `dom`; `mutates` boolean; `handler` a function; `gate` a known gate other than `allowedPluginModules`; `handleArgs`, `strictNested`, `requiresUserInteraction` well formed; schema keywords the converter supports (no `$ref`, combinators, `pattern`, `format`, `default`, `const`, unknown keywords); bounds non-negative integers; enums non-empty string lists; property names `[A-Za-z_][A-Za-z0-9_]{0,63}` not `Object.prototype` members; schema depth ≤ 32 (`SCHEMA_PLUGIN_DEPTH_MAX`, server protection) | Refused | Refused, with a message saying what to change |
+  | Best practice | listed definition ≤ 800 B (`DEFINITION_MAX_BYTES`); description ≤ 240 chars and the 160 target; `result.budgetBytes` ≤ 16,000 (`RESULT_HARD_CAP_MAX_BYTES`); schema depth ≤ 4, nodes ≤ 64, properties ≤ 32, enum ≤ 32 values of ≤ 64 chars, bounds ≤ 100,000, every array declares `maxItems` ≤ 1000, schema-node descriptions ≤ 240 chars | Refused; CI fails | Accepted with a warning |
+  | Needed to work | name `<moduleId>__<tool>` of `[a-z0-9_-]`, no dots, at most 50 characters (`PLUGIN_TOOL_NAME_MAX_CHARS` = 50, owner's decision: Claude Code lists each tool as `mcp__wiretap__<name>`, 14 characters of prefix, and the Anthropic API refuses tool names over 64 characters); not reserved, not an `Object.prototype` member; unique; `moduleId` an active module; `version` semver-like ≤ 32 chars; `description` non-empty with no control characters; `inputSchema` an object; `result.budgetBytes` a positive integer; `requires` `api` or `dom`; `mutates` boolean; `handler` a function; `gate` a known gate other than `allowedPluginModules`; `handleArgs`, `strictNested`, `requiresUserInteraction` well formed; schema keywords the converter supports (no `$ref`, combinators, `pattern`, `format`, `default`, `const`, unknown keywords); bounds non-negative integers; enums non-empty string lists; property names `[A-Za-z_][A-Za-z0-9_]{0,63}` not `Object.prototype` members; schema depth ≤ 32 (`SCHEMA_PLUGIN_DEPTH_MAX`, server protection) | Refused | Refused, with a message saying what to change |
   | Server protection | Socket.IO `maxHttpBufferSize` 1,000,000 B; registry push rate 2/s; handle store bounds; MCP body limit 1,048,576 B | Unchanged | Unchanged |
 
 - **Warning texts (exact).** `${n}` is the measured value; every limit is rendered from its constant, not a literal.
   Definition level, plugin route of `validateScriptDefinition` only:
-  - W1 `name is ${n} characters, over the 64-character guideline; every listed tool name costs context in every session`
+  - (W1 is not used: a plugin name over 50 characters is refused with R6.)
   - W2 `description is ${n} characters, over the 240-character guideline` (replaces W3 when both apply)
   - W3 `description is ${n} characters, over the 160-character target` (the existing text, both sources)
   - W4 `result.budgetBytes is ${n}, over the 16000-byte result cap; the cap applies`
@@ -100,6 +107,8 @@ Every task's requirements include each line below.
   - R4 (API) `registerTool takes one object: { moduleId, name, version, description, inputSchema, handler, mutates,
     requires }`
   - R5 (registry, both routes) `name "${name}" is already registered: choose another tool name`
+  - R6 (validator, plugin route) `name is ${n} characters; Claude Code lists it as mcp__wiretap__<name> and the API
+    accepts at most 64, so <moduleId>__<tool> may be at most 50 characters`
 - **Agents.** Implementers: `foundry-module-dev` for client `.js` under `src/` and `examples/`; `wiretap-coder` for
   `server/`, `shared/`, tests, `scripts/`, docs and skills. Reviewers: `wiretap-spec-reviewer` then
   `wiretap-code-reviewer`.
@@ -194,7 +203,7 @@ Inputs the design implies but does not spell out, most likely to bite first; eac
 
 | File | Task | Responsibility |
 |---|---|---|
-| `shared/scripts.js` | 1 | Plugin route of `validateScriptDefinition`: W1 to W4, R1, R2, `moduleId` kept, budget clamp |
+| `shared/scripts.js` | 1 | Plugin route of `validateScriptDefinition`: W2 to W4, R6, R1, R2, `moduleId` kept, budget clamp |
 | `shared/gates.js` | 1 | `allowedPluginModules` unlock text and typedef say "plugin tools" |
 | `shared/schemaValidate.js` | 2 | `compileSchema` `source` option, warnings S1 to S9, `SCHEMA_PLUGIN_DEPTH_MAX`, `SCHEMA_GUIDELINES`, `guidelineWarning`, `isWellFormedDescription` |
 | `server/toolRegistry.ts` | 2, 3 | Task 2: `jsonSchemaToZodShape` `source` parameter and warnings. Task 3: plugin route in `sanitizeTool`, `gates` list, no count, total or examine bound |
@@ -217,7 +226,7 @@ Inputs the design implies but does not spell out, most likely to bite first; eac
 
 | Task | Writes | Shared resources | Waits on | Review group | Review timing | Risky |
 |---|---|---|---|---|---|---|
-| T1 validator plugin route | `shared/scripts.js`, `shared/gates.js`, `tests/unit/scripts.test.js` | none | none | G1 shared rules | on landing | yes |
+| T1 validator plugin route | `shared/scripts.js`, `shared/gates.js`, `shared/budgets.js` (the one name entry), `tests/unit/scripts.test.js`, `tests/unit/budgets.test.js` | none | none | G1 shared rules | on landing | yes |
 | T2 schema plugin switch | `shared/schemaValidate.js`, `server/toolRegistry.ts` (converter only), `tests/unit/schemaValidate.test.js`, `tests/unit/schemaStrict.test.js` | none | none | G1 shared rules | on landing | yes |
 | T3 sidecar registry and routing | `server/toolRegistry.ts`, `server/endpoints.ts`, `server/mcp.ts`, `tests/unit/toolRegistry.test.js`, `tests/unit/toolRegistry.logs.test.js`, `tests/unit/endpoints.test.js`, `tests/integration/mcpSessions.test.js`, `tests/unit/contextBudgetHarness.js`, `tests/unit/contextBudget.test.js` | none | T1, T2 | G2 sidecar | on landing | yes |
 | T4 client registry, callTool, push bound | `src/bridge/scripts/registry.js`, `src/bridge/scripts/callTool.js`, `src/bridge/scripts/registryPayload.js`, `src/bridge/foundryBridge.js`, `tests/unit/scriptRegistry.test.js`, `tests/unit/callTool.test.js`, `tests/unit/registryPayload.test.js`, `tests/unit/foundryBridge.scripts.test.js`, `tests/unit/riskGates.test.js` | none | T1, T2 | G3 client | on landing | yes |
@@ -280,14 +289,12 @@ it('accepts a valid plugin script and keeps its moduleId', () => {
    expect(outcome.warnings).toEqual([]);
 });
 
-it('warns for a plugin name over 64 characters that a shipped or agent name would refuse', () => {
-   const name = `my-module__${'a'.repeat(59)}`; // 70 characters
-   const outcome = plugin(name);
-   expect(outcome.ok).toBe(true);
-   expect(outcome.warnings).toEqual([
-      'name is 70 characters, over the 64-character guideline; every listed tool name costs context in every session',
-   ]);
-   expect(validateScriptDefinition(script('a'.repeat(70)), 'shipped').ok).toBe(false);
+it('accepts a plugin name of 50 characters and refuses 51 with the prefix explained', () => {
+   expect(plugin(`my-module__${'a'.repeat(39)}`).ok).toBe(true); // 50 characters
+   expect(plugin(`my-module__${'a'.repeat(40)}`).reason).toBe( // 51 characters
+      'name is 51 characters; Claude Code lists it as mcp__wiretap__<name> and the API accepts at most 64, so ' +
+         '<moduleId>__<tool> may be at most 50 characters',
+   );
 });
 
 it('warns for a plugin description over 240 characters with the 240 line only; refuses it for a shipped script', () => {
@@ -353,16 +360,20 @@ Expected: FAIL; the plugin cases report `plugin scripts are not supported by thi
 
 - [ ] **Step 3: Implement the plugin route in `shared/scripts.js`**
 
-  - `nameProblem(name, source, moduleId)`: for `plugin`, test `PLUGIN_NAME_PATTERN` without a length limit and refuse
-    with R2 when the pattern or the `<moduleId>__<tool>` prefix fails; `shipped` and `agent` keep their length limits.
+  - `nameProblem(name, source, moduleId)`: for `plugin`, refuse with R2 when `PLUGIN_NAME_PATTERN` or the
+    `<moduleId>__<tool>` prefix fails, and with R6 when the name is over `PLUGIN_TOOL_NAME_MAX_CHARS`; `shipped` and
+    `agent` keep their existing checks and messages.
+  - `shared/budgets.js`: `PLUGIN_TOOL_NAME_MAX_CHARS` becomes 50, its comment stating the reason (the 14-character
+    `mcp__wiretap__` prefix Claude Code adds and the API's 64-character tool-name limit); update
+    `tests/unit/budgets.test.js` and the existing `scripts.test.js` case at ~501 if they pin 64.
   - `validateScriptDefinition`: the plugin `moduleId` check refuses with R1; the description check refuses an empty or
     control-character description for every source but refuses length only for `shipped` and `agent`; the budget check
     refuses a non-integer or a value below 1 for every source, refuses over the cap for `shipped` and `agent`, and for
     `plugin` clamps to `RESULT_HARD_CAP_MAX_BYTES` with W4; the raw `DEFINITION_MAX_BYTES` refusal applies to `shipped`
     and `agent` only (`definitionBytes` still runs for every source, so an unserializable schema is refused); the
-    "not supported" refusal stays only for `agent`; plugin warnings are W1, then W2 or W3, then W4; the normalized
+    "not supported" refusal stays only for `agent`; plugin warnings are W2 or W3, then W4; the normalized
     definition copies `moduleId` when the source is `plugin`.
-  - Update the module header: plugin names are `<moduleId>__<tool>` and draw a warning over 64 characters; say which
+  - Update the module header: plugin names are `<moduleId>__<tool>` of at most 50 characters and why; say which
     checks warn for plugins.
   - `shared/gates.js`: `unlocks` of `allowedPluginModules` becomes `'Plugin tools of the listed module ids; none by
     default.'` and the `GateState` line `Ids of the modules whose plugin tools are enabled.`
@@ -999,8 +1010,7 @@ Agent: `wiretap-coder`. Delivers the removal of `ALWAYS_LISTED_TOOLS_MAX` and `A
 budget table, after Tasks 3 and 4 stopped reading them; the measurement report keeps totals as information.
 
 **Files:**
-- Modify: `shared/budgets.js:89-92` (remove both entries; the `PLUGIN_TOOL_NAME_MAX_CHARS` comment becomes "Plugin tool
-  names over it draw a registration warning; agent-saved names over it are refused.")
+- Modify: `shared/budgets.js:89-92` (remove both entries; leave `PLUGIN_TOOL_NAME_MAX_CHARS` as Task 1 set it)
 - Modify: `tests/unit/budgets.test.js:66-72`, `tests/unit/writeScripts.test.js:~152` (remove the total assertion; keep
   the per-definition checks), `tests/measure/measureContext.mjs:54-57`
 
@@ -1316,7 +1326,7 @@ project rules require at the end of a plan. `docs/PLAN.md` stays forward-looking
   every client but only GM clients push tools to the agent); naming (`<moduleId>__<name>`, the charset, no dots or
   capitals, long names warn); every field with required and optional marked and the `result` default of 2,000 B;
   `ctx` (`core`, `shape`, `signal`, `log`, `dom`) and that every risk gate applies inside `ctx.core`; the two gates of a
-  plugin tool; the three check groups with every warning W1 to W5 and S1 to S9 and every refusal R1 to R5 explained
+  plugin tool; the three check groups with every warning W2 to W5 and S1 to S9 and every refusal R1 to R6 explained
   with what to change; large results become handles; descriptions that stand alone (what the tool does, what to pass,
   what it returns, within 160 characters); an optional guide skill folder that names the tools as
   `mcp__wiretap__<moduleId>__<tool>` and how a user installs it (the same steps as `skills/wiretap`), descriptions
@@ -1376,7 +1386,7 @@ is done") and the new subsystem skill its growth rule calls for.
 - Modify: `.claude/skills/wiretap-build-test/SKILL.md` and its `references/context-budget-test.md` and
   `references/e2e-foundry-server.md` (the fixture install in the launcher and the global setup, `pluginTools` spec,
   `test/state/plugin-fixture.json`, the removed cap tests)
-- Modify: `.claude/skills/wiretap-sidecar/references/script-definition.md` (plugin route, W1 to W4, no "not supported"
+- Modify: `.claude/skills/wiretap-sidecar/references/script-definition.md` (plugin route, W2 to W4, R6, no "not supported"
   for plugins)
 - Modify: `.claude/skills/wiretap-codebase-core/SKILL.md` (subsystem map row for `wiretap-plugin-api`)
 - Modify: `.claude/CLAUDE.md` (the skills table row for `wiretap-plugin-api`)
