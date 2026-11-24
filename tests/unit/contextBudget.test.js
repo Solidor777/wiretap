@@ -21,7 +21,7 @@ import {
 } from './contextBudgetHarness.js';
 
 /**
- * A skills directory that does not exist, so a test of the tool-count boundary is not also a test of the shipped
+ * A skills directory that does not exist, so a test of the listed totals is not also a test of the shipped
  * skill's tool mentions (the default-root tests below check those against the real tool list).
  * @type {string}
  */
@@ -281,14 +281,9 @@ describe('context budgets of the real MCP server', () => {
          );
       });
 
-      it('fails a 31st tool', async () => {
-         /**
-          * @type {number} The tools the sidecar itself lists. Fillers fill the fixed-name room, so no registry script
-          * (the shipped scripts included) is listed beside them.
-          */
-         const shipped = RESERVED_SCRIPT_NAMES.length;
-         /** @type {number} Fillers that bring the counted tools to one over the maximum. */
-         const fillers = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - shipped + 1;
+      it('does not count the helper tool toward the totals', async () => {
+         /** @type {number} The test-local tools added beside the sidecar built-ins and the shipped scripts. */
+         const fillers = 25;
          /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of the fillers. */
          const fixtures = {};
          const extra = Array.from({ length: fillers }, (_, index) => {
@@ -297,47 +292,12 @@ describe('context budgets of the real MCP server', () => {
             return makeTool(name, 'Short.');
          });
          const report = await reportWith(extra, fixtures, NO_SKILLS_ROOT);
-         expect(report.totals.count).toBe(31);
-         expect(report.failures).toEqual(['tool list: tool count is 31, at most 30 (ALWAYS_LISTED_TOOLS_MAX)']);
-      });
-
-      it('does not count the helper tool toward the tool count, but counts the tools under test', async () => {
-         /**
-          * @type {number} The tools the sidecar itself lists. Fillers fill the fixed-name room, so no registry script
-          * (the shipped scripts included) is listed beside them.
-          */
-         const shipped = RESERVED_SCRIPT_NAMES.length;
-         /** @type {number} Fillers that bring the counted tools exactly to the maximum. */
-         const fillers = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - shipped;
-         /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of the fillers. */
-         const fixtures = {};
-         const extra = Array.from({ length: fillers }, (_, index) => {
-            const name = `test_filler_${index}`;
-            fixtures[name] = trivialFixture(name);
-            return makeTool(name, 'Short.');
-         });
-         const report = await reportWith(extra, fixtures, NO_SKILLS_ROOT);
-         expect(report.listing).toHaveLength(31);
-         expect(report.totals.count).toBe(30);
+         /** @type {number} Every tool the session lists except the helper. */
+         const counted = RESERVED_SCRIPT_NAMES.length + fillers + SHIPPED_COUNT;
+         expect(report.listing).toHaveLength(counted + 1);
+         expect(report.totals.count).toBe(counted);
          expect(report.helperTotals.count).toBe(1);
          expect(report.failures).toEqual([]);
-      });
-
-      it('fails when all definitions together exceed their total', async () => {
-         /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of the tools. */
-         const fixtures = {};
-         /** @type {number} The tool count left beside the sidecar built-ins, so only the total breaks. */
-         const count = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
-         const extra = Array.from({ length: count }, (_, index) => {
-            const name = `test_total_${index}`;
-            fixtures[name] = trivialFixture(name);
-            return makeTool(name, 'd'.repeat(240), makeShape(3, 60));
-         });
-         const report = await reportWith(extra, fixtures, NO_SKILLS_ROOT);
-         expect(report.failures).toHaveLength(1);
-         expect(report.failures[0]).toMatch(
-            /^tool list: total definition size is \d+ bytes, at most 16000 bytes \(ALL_DEFINITIONS_MAX_BYTES\)$/,
-         );
       });
 
       it('checks that every tool has a fixture without running any when fixtures are not run', async () => {
@@ -529,16 +489,15 @@ describe('context budgets of the real MCP server', () => {
          ]);
       });
 
-      it('lists no more tools than the always-listed budget however many the endpoint registers', async () => {
+      it('lists every tool the endpoint registers', async () => {
          harness = await startHarness();
          /** @type {string[]} The names offered, 40 in all. */
          const names = Array.from({ length: 40 }, (_, index) => `registry_${index}`);
          const changed = harness.nextToolListChange();
          const ack = await harness.registerTools(names.map((name) => registryEntry(name)));
          await changed;
-         const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
-         expect(ack.accepted).toBe(room);
-         expect(ack.refused).toBe(40 + SHIPPED_COUNT - room);
+         expect(ack.accepted).toBe(40 + SHIPPED_COUNT);
+         expect(ack.refused).toBe(0);
          /** @type {Record<string, import('./contextBudgetHarness.js').FixtureCase[]>} Fixtures of all 40 tools. */
          const fixtures = Object.fromEntries(names.map((name) => [
             name,
@@ -546,9 +505,7 @@ describe('context budgets of the real MCP server', () => {
          ]));
          const report = await reportOn(fixtures, names);
          expect(report.failures).toEqual([]);
-         expect(report.totals.count + report.helperTotals.count).toBeLessThanOrEqual(
-            getBudget('ALWAYS_LISTED_TOOLS_MAX').value,
-         );
+         expect(report.listing.map((tool) => tool.name)).toEqual(expect.arrayContaining(names));
       });
 
       it('refuses a definition over a budget at the registry, so it is never listed', async () => {

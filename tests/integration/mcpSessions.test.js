@@ -683,7 +683,6 @@ describe('stateful MCP sessions', () => {
          expect(names).not.toContain('ok_name');
          expect(names).not.toContain('wrapped');
          expect(names.filter((name) => name === 'read_handle')).toHaveLength(1);
-         expect(names.length).toBeLessThanOrEqual(getBudget('ALWAYS_LISTED_TOOLS_MAX').value);
          expect({}.polluted).toBeUndefined();
          // A valid registry still works afterwards.
          expect(await gm.register([entry('fine_tool')])).toEqual({
@@ -713,14 +712,17 @@ describe('stateful MCP sessions', () => {
          ]);
       });
 
-      it('never lists more than the always-listed tool budget', async () => {
+      it('lists every tool an endpoint registers', async () => {
          await start();
          const gm = await connectGm();
          const ack = await gm.register(Array.from({ length: 40 }, (_, index) => entry(`many_${index}`)));
-         expect(ack.accepted).toBe(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length);
-         expect(ack.refused).toBe(40 - ack.accepted);
+         expect(ack).toEqual({
+            ok: true,
+            accepted: 40,
+            refused: 0,
+         });
          const { client } = await connectClient();
-         expect((await toolNames(client)).length).toBe(getBudget('ALWAYS_LISTED_TOOLS_MAX').value);
+         expect(await toolNames(client)).toHaveLength(40 + RESERVED_SCRIPT_NAMES.length);
       });
    });
 

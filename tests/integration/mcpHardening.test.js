@@ -406,6 +406,55 @@ describe('MCP HTTP hardening and session robustness', () => {
          ]);
       });
 
+      it('leaves a session listing thousands of tools unchanged when the same tools are synced again', async () => {
+         /** @type {number} How many registry tools the bridge offers. */
+         const count = 3000;
+         /** @type {object[]} The sanitized tools, all offered on every ask. */
+         const tools = sanitizeRegistry(
+            registryPayload(Array.from({ length: count }, (_, index) => entry(`many_${index}`))),
+            () => undefined,
+         ).tools;
+         expect(tools).toHaveLength(count);
+         /** @type {number} How many times the bridge was asked for tools. */
+         let asked = 0;
+         /**
+          * Announces a bridge change; replaced when the MCP server subscribes.
+          * @returns {void}
+          */
+         let announce = () => undefined;
+         await harness.start({ bridge: {
+            invokeTool: async () => ({
+               result: 'unused',
+               tool: tools[0],
+            }),
+            tools: () => {
+               asked += 1;
+               return tools;
+            },
+            subscribe: (listener) => {
+               announce = listener;
+               return () => undefined;
+            },
+         } });
+         const { client } = await harness.connectClient();
+         /** @type {number} How many `tools/list_changed` notifications the client received. */
+         let notified = 0;
+         client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+            notified += 1;
+         });
+         const before = await harness.toolNames(client);
+         // The registry tools plus `read_handle` and the four backup tools.
+         expect(before).toHaveLength(count + 5);
+         // The session was built and then held, so the bridge has been asked twice; the change below asks once more.
+         expect(asked).toBe(2);
+         const register = vi.spyOn(McpServer.prototype, 'registerTool');
+         announce();
+         await expect.poll(() => asked, { timeout: 1000 }).toBe(3);
+         expect(register).not.toHaveBeenCalled();
+         expect(await harness.toolNames(client)).toEqual(before);
+         expect(notified).toBe(0);
+      });
+
       it('fails the initialize and ends the session when the sync right after holding it throws', async () => {
          const [tool] = sanitizeRegistry(registryPayload([entry('late_tool')]), () => undefined).tools;
          await harness.start({ bridge: lateBridge(tool) });

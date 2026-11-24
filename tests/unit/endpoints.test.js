@@ -280,6 +280,53 @@ describe('createEndpointRegistry change notifications', () => {
       expect(listener).not.toHaveBeenCalled();
    });
 
+   it('notifies subscribers when allowedPluginModules changes and not for another gate', () => {
+      const { registry, listener } = setup();
+      add(registry, 'a', 'agent');
+      listener.mockClear();
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowDelete: true,
+      });
+      expect(listener).toHaveBeenCalledTimes(0);
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: ['my-mod'],
+      });
+      expect(listener).toHaveBeenCalledTimes(1);
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: ['my-mod'],
+      });
+      expect(listener).toHaveBeenCalledTimes(1);
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: [],
+      });
+      expect(listener).toHaveBeenCalledTimes(2);
+   });
+
+   it('notifies when the allowed modules are reordered', () => {
+      const { registry, listener } = setup();
+      add(registry, 'a', 'agent');
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: [
+            'mod-a',
+            'mod-b',
+         ],
+      });
+      listener.mockClear();
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: [
+            'mod-b',
+            'mod-a',
+         ],
+      });
+      expect(listener).toHaveBeenCalledTimes(1);
+   });
+
    it('does not notify for a registration the limit refused', () => {
       const { registry, listener } = setup();
       const identity = validateIdentify(identify()).identity;
@@ -1303,6 +1350,7 @@ describe('createRouter tools', () => {
                name: `tool_${id}`,
                description: 'A synthetic tool.',
                shape: {},
+               gates: [],
                signature: id,
             },
          ]);
@@ -1633,6 +1681,97 @@ describe('router invokeTool', () => {
       const { router, sent } = setup([['a', 'agent', [tool('shot', { mutates: true })]]]);
       await expect(router.invokeTool('shot', {}, { listed })).rejects.toMatchObject({ code: TOOL_GONE });
       expect(sent).toEqual([]);
+   });
+
+   describe('plugin tools', () => {
+      /**
+       * Build the plugin tool of module `my-mod` that declares the `allowDelete` gate.
+       * @returns {object} The sanitized tool.
+       */
+      function plugin() {
+         return tool('my-mod__echo', {
+            moduleId: 'my-mod',
+            gate: 'allowDelete',
+         });
+      }
+
+      it('denies a plugin tool whose module the picked endpoint does not allow, sending nothing', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowDelete: true,
+         });
+         const error = await router.invokeTool('my-mod__echo', {}, { listed }).catch((cause) => cause);
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowedPluginModules');
+         expect(sent).toEqual([]);
+      });
+
+      it('denies a plugin tool whose declared gate is closed while its module is allowed', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowedPluginModules: ['my-mod'],
+         });
+         const error = await router.invokeTool('my-mod__echo', {}, { listed }).catch((cause) => cause);
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowDelete');
+         expect(sent).toEqual([]);
+      });
+
+      it('judges the module gate before the declared gate when both are closed, sending nothing', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', closedGateState());
+         const error = await router.invokeTool('my-mod__echo', {}, { listed }).catch((cause) => cause);
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowedPluginModules');
+         expect(error.message).not.toContain('allowDelete');
+         expect(sent).toEqual([]);
+      });
+
+      it('runs a plugin tool when its module and its declared gate are both open', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowDelete: true,
+            allowedPluginModules: ['my-mod'],
+         });
+         const outcome = await router.invokeTool('my-mod__echo', {}, { listed });
+         expect(outcome.result).toBe('ran');
+         expect(sent).toHaveLength(1);
+      });
+
+      it('denies when the picked endpoint\'s gates differ from the listed tool\'s', async () => {
+         const listed = tool('my-mod__echo', { moduleId: 'my-mod' });
+         const { router, registry, sent } = setup([['a', 'agent', [plugin()]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowDelete: true,
+            allowedPluginModules: ['my-mod'],
+         });
+         await expect(router.invokeTool('my-mod__echo', {}, { listed })).rejects.toMatchObject({ code: GATE_DENIED });
+         expect(sent).toEqual([]);
+      });
+
+      it('lists a plugin tool only while the routed endpoint\'s snapshot allows its module', () => {
+         const { router, registry } = setup([['a', 'agent', [
+            tool('shipped_one'),
+            plugin(),
+         ]]]);
+         expect(router.tools().map((entry) => entry.name)).toEqual(['shipped_one']);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowedPluginModules: ['my-mod'],
+         });
+         expect(router.tools().map((entry) => entry.name)).toEqual([
+            'shipped_one',
+            'my-mod__echo',
+         ]);
+      });
    });
 });
 
