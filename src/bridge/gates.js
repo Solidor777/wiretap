@@ -4,8 +4,8 @@ import { GATES, gateDenial, sanitizeGateState } from '$shared/gates.js';
 const GATE_KEY_PREFIX = 'wiretap.';
 
 /**
- * Split a stored comma-separated module id string into candidate ids. Validation (id shape, length, duplicates, count)
- * is left to `sanitizeGateState`; a non-string value gives an empty list.
+ * Split a stored comma-separated module id string into candidate ids. Validation (id shape and duplicates) is left to
+ * `sanitizeGateState`; a non-string value gives an empty list.
  * @param {unknown} stored - The stored value of a `moduleList` gate setting.
  * @returns {string[]} The trimmed, non-empty candidates in stored order.
  */

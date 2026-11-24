@@ -63,18 +63,6 @@ const EXPECTED = [
       'hard',
    ],
    [
-      'ALWAYS_LISTED_TOOLS_MAX',
-      30,
-      'count',
-      'hard',
-   ],
-   [
-      'ALL_DEFINITIONS_MAX_BYTES',
-      16000,
-      'bytes',
-      'hard',
-   ],
-   [
       'ACK_MAX_BYTES',
       256,
       'bytes',
@@ -352,6 +340,12 @@ describe('getBudget', () => {
 
    it('covers exactly the expected budgets', () => {
       expect(Object.keys(BUDGETS).sort()).toEqual(EXPECTED.map(([name]) => name).sort());
+   });
+
+   it('has no tool count or total definition budget', () => {
+      expect(Object.hasOwn(BUDGETS, 'ALWAYS_LISTED_TOOLS_MAX')).toBe(false);
+      expect(Object.hasOwn(BUDGETS, 'ALL_DEFINITIONS_MAX_BYTES')).toBe(false);
+      expect(() => getBudget('ALWAYS_LISTED_TOOLS_MAX')).toThrow('Unknown budget: ALWAYS_LISTED_TOOLS_MAX');
    });
 
    it('throws for an unknown budget name', () => {

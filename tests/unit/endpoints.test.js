@@ -1772,6 +1772,36 @@ describe('router invokeTool', () => {
             'my-mod__echo',
          ]);
       });
+
+      it('lists 3,000 plugin tools against a 30,000-id module list, keeping only the allowed modules\' tools', () => {
+         /** @type {object} One sanitized plugin tool, copied for each module. */
+         const base = plugin();
+         /** @type {object[]} One plugin tool for each of the modules m0 to m2999. */
+         const plugins = Array.from({ length: 3000 }, (_, index) => ({
+            ...base,
+            name: `m${index}__echo`,
+            gates: [
+               {
+                  gate: 'allowedPluginModules',
+                  moduleId: `m${index}`,
+               },
+               { gate: 'allowDelete' },
+            ],
+         }));
+         const { router, registry } = setup([['a', 'agent', [
+            tool('shipped_one'),
+            ...plugins,
+         ]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            // The even-numbered modules m0 to m59998: half of the tools' modules and 28,500 others.
+            allowedPluginModules: Array.from({ length: 30000 }, (_, index) => `m${index * 2}`),
+         });
+         expect(router.tools().map((entry) => entry.name)).toEqual([
+            'shipped_one',
+            ...Array.from({ length: 1500 }, (_, index) => `m${index * 2}__echo`),
+         ]);
+      });
    });
 });
 

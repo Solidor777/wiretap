@@ -142,15 +142,6 @@ describe('shipped scripts', () => {
          'delete_pack',
       ]);
    });
-
-   it('keep the whole listed definition set within the total budget', () => {
-      let total = 0;
-      for (const definition of registry.definitions()) {
-         const { listed } = compileSchema(definition.inputSchema);
-         total += definitionBytes(definition.name, definition.description, listed);
-      }
-      expect(total).toBeLessThanOrEqual(getBudget('ALL_DEFINITIONS_MAX_BYTES').value);
-   });
 });
 
 describe.each([

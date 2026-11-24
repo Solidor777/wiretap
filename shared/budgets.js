@@ -87,10 +87,6 @@ export const BUDGETS = table([
    budget('MCP_SESSIONS_MAX', 32, 'count', BUDGET_SEVERITY.HARD),
    // Request body bytes the MCP endpoint reads; a larger body is refused with 413 and the request is destroyed.
    budget('MCP_BODY_MAX_BYTES', 1_048_576, 'bytes', BUDGET_SEVERITY.HARD),
-   // Tools listed to the client at all times (core plus shipped).
-   budget('ALWAYS_LISTED_TOOLS_MAX', 30, 'count', BUDGET_SEVERITY.HARD),
-   // Serialized size of all core and shipped definitions together (16 KB).
-   budget('ALL_DEFINITIONS_MAX_BYTES', 16000, 'bytes', BUDGET_SEVERITY.HARD),
    // Acknowledgement of a write, per document.
    budget('ACK_MAX_BYTES', 256, 'bytes', BUDGET_SEVERITY.HARD),
    // Default compact view of one document (2 KB).
