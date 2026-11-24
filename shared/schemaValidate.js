@@ -4,13 +4,24 @@
  * `callTool` before a script handler runs, so a call that bypassed the sidecar's check still meets the script's own
  * declared schema. Plain JS because both sides can import it.
  *
- * Supported constructs (anything else refuses the schema): a root `object` schema whose properties are `string`
- * (`enum`, `minLength`, `maxLength`), `number` and `integer` (`minimum`, `maximum`), `boolean`, `array` (`items`,
- * `minItems`, `maxItems`) or nested `object` (`properties`, `required`, `additionalProperties: false`), each with an
- * optional single-line `description`. Limits: object and array nesting of 4 levels (the root is level 1), 64 schema
- * nodes, 32 properties per object, 32 enum values of at most 64 characters, string and item-count bounds of at most
- * 100,000, an array must declare `maxItems` of at most `SCHEMA_ARRAY_ITEMS_MAX` (a budget), property names of
- * `[A-Za-z_][A-Za-z0-9_]{0,63}` that are not `Object.prototype` members. The sidecar imports these limits from here.
+ * Supported constructs (anything else refuses the schema for every source): a root `object` schema whose properties
+ * are `string` (`enum`, `minLength`, `maxLength`), `number` and `integer` (`minimum`, `maximum`), `boolean`, `array`
+ * (`items`, `minItems`, `maxItems`) or nested `object` (`properties`, `required`, `additionalProperties: false`), each
+ * with an optional non-empty single-line `description`; bounds are non-negative integers, an enum is a non-empty list
+ * of strings, and property names match `[A-Za-z_][A-Za-z0-9_]{0,63}` and are not `Object.prototype` members.
+ *
+ * Server protection, for every source: object and array nesting deeper than `SCHEMA_PLUGIN_DEPTH_MAX` (32) levels is
+ * refused, so a hostile schema cannot overflow the stack of either side; and a schema whose walk expands past
+ * `SCHEMA_EXPANDED_NODES_MAX` (60,000) nodes is refused, each reused object counted every time it appears, so a
+ * schema built in code that reuses one object at several levels costs bounded work. The name lookups use sets, so the
+ * compile takes time linear in the schema.
+ *
+ * Plugin switch: the complexity guidelines (`SCHEMA_GUIDELINES`: nesting of 4 levels, the root being level 1; 64
+ * schema nodes; 32 properties per object; 32 enum values of at most 64 characters; string and item-count bounds of at
+ * most 100,000; every array declaring a `maxItems` of at most `SCHEMA_ARRAY_ITEMS_MAX`; node descriptions of at most
+ * `DESCRIPTION_MAX_CHARS`) refuse a `shipped` schema and only warn for a `plugin` schema: one `guidelineWarning` line
+ * per guideline passed, carrying the largest measured value, in `SCHEMA_GUIDELINES` order. A plugin array without
+ * `maxItems` has no item cap. The sidecar imports these limits and helpers from here.
  *
  * Semantics follow zod's object handling: an undeclared property is dropped from the validated copy when the object
  * does not declare `additionalProperties: false` (never an error), and is an error when it does (zod's `strict`). A
@@ -39,11 +50,16 @@ import { CONTROL_PATTERN } from './logText.js';
  */
 
 /**
- * @typedef {{ ok: true, validate: ArgumentValidator, listed: Record<string, unknown> } | { ok: false, reason: string }}
- * CompileOutcome
- * The result of compiling a schema: its validator and listed form, or the short reason the schema is outside the
- * supported subset.
+ * @typedef {{ ok: true, validate: ArgumentValidator, listed: Record<string, unknown>, warnings: string[] }} Compiled
+ * A compiled schema: its validator, listed form and guideline warnings (always empty for a shipped schema).
  */
+
+/**
+ * @typedef {Compiled | { ok: false, reason: string }} CompileOutcome
+ * The result of compiling a schema: the compiled schema, or the short reason the schema is refused.
+ */
+
+/** @typedef {'shipped' | 'plugin'} SchemaSource Who wrote the schema: Wiretap itself, or a plugin module. */
 
 /**
  * The most values one validation visits (the root, every property and every array element each count one); a larger
@@ -60,37 +76,57 @@ export const VALUE_NODES_MAX = 10_000;
 export const VALIDATION_ERROR_MAX_BYTES = 256;
 
 /**
- * Deepest object and array nesting of a schema; the root object is level 1 and scalar leaves are not counted.
+ * Guideline for the deepest object and array nesting of a schema; the root object is level 1 and scalar leaves are not
+ * counted. Deeper refuses a shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_DEPTH_MAX = 4;
 
 /**
- * Most schema nodes in one schema.
+ * Server protection: the deepest object and array nesting of any schema, plugin ones included; deeper is refused for
+ * every source. It bounds the recursion of the compile and the conversion, so neither can overflow the stack.
+ * @type {number}
+ */
+export const SCHEMA_PLUGIN_DEPTH_MAX = 32;
+
+/**
+ * Server protection: the most schema nodes the walk expands, for every source. A schema built in code can reuse one
+ * object at several levels, and the walk visits it each time it appears, so the count is of expanded nodes, and the
+ * walk stops as soon as it passes this limit. No schema of more nodes fits in one registry message: the client's
+ * registry push is bounded to 900,000 bytes of JSON and every node serializes to at least 15 bytes (the shortest,
+ * `{"type":"string"}`, is 17), and 900,000 / 15 = 60,000.
+ * @type {number}
+ */
+export const SCHEMA_EXPANDED_NODES_MAX = 60_000;
+
+/**
+ * Guideline for the most schema nodes in one schema; more refuses a shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_NODES_MAX = 64;
 
 /**
- * Most properties of one object schema.
+ * Guideline for the most properties of one object schema; more refuses a shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_PROPERTIES_MAX = 32;
 
 /**
- * Most values of one string enum.
+ * Guideline for the most values of one string enum; more refuses a shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_ENUM_MAX = 32;
 
 /**
- * Longest value of a string enum, in characters.
+ * Guideline for the longest value of a string enum, in characters; longer refuses a shipped schema and warns for a
+ * plugin one.
  * @type {number}
  */
 export const SCHEMA_ENUM_VALUE_MAX_CHARS = 64;
 
 /**
- * Largest `minLength`, `maxLength`, `minItems` or `maxItems` a schema may declare.
+ * Guideline for the largest `minLength`, `maxLength`, `minItems` or `maxItems` a schema declares; larger refuses a
+ * shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_BOUND_MAX = 100_000;
@@ -148,6 +184,77 @@ export const TYPE_KEYWORDS = Object.freeze({
 });
 
 /**
+ * The complexity guidelines, in the order their warnings are emitted.
+ * @type {readonly string[]}
+ */
+export const SCHEMA_GUIDELINES = Object.freeze([
+   'depth',
+   'nodes',
+   'properties',
+   'enumValues',
+   'enumValueChars',
+   'bound',
+   'maxItemsMissing',
+   'maxItems',
+   'descriptionChars',
+]);
+
+/**
+ * The warning text of each guideline, built from the measured value and the guideline's own constant.
+ * @type {Readonly<Record<string, (measured: number) => string>>}
+ */
+const GUIDELINE_TEXTS = Object.freeze({
+   depth: (measured) => {
+      return `schema nests objects and arrays ${measured} levels deep, over the ${SCHEMA_DEPTH_MAX}-level guideline`;
+   },
+   nodes: (measured) => {
+      return `schema has ${measured} nodes, over the ${SCHEMA_NODES_MAX}-node guideline`;
+   },
+   properties: (measured) => {
+      return `an object schema has ${measured} properties, over the ${SCHEMA_PROPERTIES_MAX}-property guideline`;
+   },
+   enumValues: (measured) => {
+      return `an enum has ${measured} values, over the ${SCHEMA_ENUM_MAX}-value guideline`;
+   },
+   enumValueChars: (measured) => {
+      return `an enum value is ${measured} characters, over the ${SCHEMA_ENUM_VALUE_MAX_CHARS}-character guideline`;
+   },
+   bound: (measured) => {
+      return `a length or item bound is ${measured}, over the ${SCHEMA_BOUND_MAX} guideline`;
+   },
+   maxItemsMissing: () => {
+      return 'an array schema declares no maxItems; the guideline is a maxItems of at most ' +
+         `${getBudget('SCHEMA_ARRAY_ITEMS_MAX').value}`;
+   },
+   maxItems: (measured) => {
+      return `an array schema allows ${measured} items, over the ` +
+         `${getBudget('SCHEMA_ARRAY_ITEMS_MAX').value}-item guideline`;
+   },
+   descriptionChars: (measured) => {
+      return `a schema description is ${measured} characters, over the ` +
+         `${getBudget('DESCRIPTION_MAX_CHARS').value}-character guideline`;
+   },
+});
+
+/**
+ * Build the warning line of one guideline a plugin schema passed.
+ * @param {string} guideline - A name from `SCHEMA_GUIDELINES`.
+ * @param {number} measured - The largest value measured for it (ignored by `maxItemsMissing`).
+ * @returns {string} The warning text.
+ */
+export function guidelineWarning(guideline, measured) {
+   return GUIDELINE_TEXTS[guideline](measured);
+}
+
+/**
+ * @typedef {object} CompileState
+ * @property {number} nodes - Schema nodes compiled so far, the root included.
+ * @property {boolean} strictNested - Whether every object below the root refuses an undeclared key.
+ * @property {SchemaSource} source - Who wrote the schema; decides whether a guideline refuses or warns.
+ * @property {Map<string, number>} measured - The largest measured value of each guideline a plugin schema passed.
+ */
+
+/**
  * @typedef {object} CheckState
  * @property {number} nodes - Values visited so far in this validation.
  */
@@ -180,26 +287,56 @@ function isRecord(value) {
 }
 
 /**
- * Check a non-negative integer length or item bound.
+ * Check a description's form: a non-empty string without control characters. Its length is a guideline, judged apart.
  * @param {unknown} value - The candidate.
- * @returns {value is number} Whether it is an integer from 0 to the bound maximum.
+ * @returns {value is string} Whether it is well formed.
  */
-export function isBound(value) {
-   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= SCHEMA_BOUND_MAX;
+export function isWellFormedDescription(value) {
+   return typeof value === 'string' && value.length > 0 && !CONTROL_PATTERN.test(value);
 }
 
 /**
- * Check a description: a string within the hard description budget without control characters.
- * @param {unknown} value - The candidate.
- * @returns {value is string} Whether it is acceptable.
+ * Hold a schema to one complexity guideline: a shipped schema over it is refused, and a plugin schema over it records
+ * the measured value, keeping the largest, for one warning after the walk.
+ * @param {CompileState} state - The compile state.
+ * @param {string} guideline - A name from `SCHEMA_GUIDELINES`.
+ * @param {number} measured - The measured value.
+ * @param {number} limit - The guideline's largest allowed value.
+ * @param {string} refusal - The reason a shipped schema is refused with.
+ * @returns {void}
+ * @throws {SchemaRefusal} When a shipped schema passes the guideline.
  */
-export function isValidDescription(value) {
-   return (
-      typeof value === 'string' &&
-      value.length > 0 &&
-      value.length <= getBudget('DESCRIPTION_MAX_CHARS').value &&
-      !CONTROL_PATTERN.test(value)
-   );
+function holdGuideline(state, guideline, measured, limit, refusal) {
+   if (measured <= limit) {
+      return;
+   }
+   if (state.source !== 'plugin') {
+      throw new SchemaRefusal(refusal);
+   }
+   state.measured.set(guideline, Math.max(measured, state.measured.get(guideline) ?? measured));
+}
+
+/**
+ * Read a length or item bound: absent, or a non-negative integer held to the bound guideline.
+ * @param {Record<string, unknown>} node - The schema node.
+ * @param {string} keyword - `minLength`, `maxLength`, `minItems` or `maxItems`.
+ * @param {CompileState} state - The compile state.
+ * @param {string} [overGuideline] - The reason a shipped bound over the guideline is refused with; by default it names
+ * the guideline's limit.
+ * @returns {number | undefined} The bound, or undefined when the node does not declare it.
+ * @throws {SchemaRefusal} When the bound is not a non-negative integer, or a shipped one passes the guideline.
+ */
+function readBound(node, keyword, state, overGuideline = `${keyword} must be at most ${SCHEMA_BOUND_MAX}`) {
+   /** @type {unknown} The declared bound. */
+   const value = ownValue(node, keyword);
+   if (value === undefined) {
+      return undefined;
+   }
+   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+      throw new SchemaRefusal(`${keyword} must be a non-negative integer`);
+   }
+   holdGuideline(state, 'bound', value, SCHEMA_BOUND_MAX, overGuideline);
+   return value;
 }
 
 /**
@@ -236,31 +373,31 @@ function visit(state, path) {
 /**
  * Compile a string node.
  * @param {Record<string, unknown>} node - The JSON Schema node to compile.
+ * @param {CompileState} state - The source, node count and guideline measurements of this compile.
  * @returns {CompiledNode} The compiled node.
  * @throws {SchemaRefusal} When the node uses a construct outside the supported subset.
  */
-function compileString(node) {
-   /** @type {unknown} The declared minimum length. */
-   const minLength = ownValue(node, 'minLength');
-   /** @type {unknown} The declared maximum length. */
-   const maxLength = ownValue(node, 'maxLength');
-   if (minLength !== undefined && !isBound(minLength)) {
-      throw new SchemaRefusal('minLength must be a non-negative integer');
-   }
-   if (maxLength !== undefined && !isBound(maxLength)) {
-      throw new SchemaRefusal('maxLength must be a non-negative integer');
-   }
+function compileString(node, state) {
+   /** @type {number | undefined} The declared minimum length. */
+   const minLength = readBound(node, 'minLength', state);
+   /** @type {number | undefined} The declared maximum length. */
+   const maxLength = readBound(node, 'maxLength', state);
    /** @type {unknown} The declared enum. */
    const values = ownValue(node, 'enum');
    if (values !== undefined) {
-      if (
-         !Array.isArray(values) ||
-         values.length === 0 ||
-         values.length > SCHEMA_ENUM_MAX ||
-         !values.every((value) => typeof value === 'string' && value.length <= SCHEMA_ENUM_VALUE_MAX_CHARS)
-      ) {
-         throw new SchemaRefusal(`enum must hold 1 to ${SCHEMA_ENUM_MAX} short strings`);
+      if (!Array.isArray(values) || values.length === 0 || !values.every((value) => typeof value === 'string')) {
+         throw new SchemaRefusal('enum must be a non-empty list of strings');
       }
+      /** @type {string} The reason a shipped enum over a guideline is refused with. */
+      const enumReason = `enum must hold 1 to ${SCHEMA_ENUM_MAX} short strings`;
+      holdGuideline(state, 'enumValues', values.length, SCHEMA_ENUM_MAX, enumReason);
+      holdGuideline(
+         state,
+         'enumValueChars',
+         values.reduce((longest, value) => Math.max(longest, value.length), 0),
+         SCHEMA_ENUM_VALUE_MAX_CHARS,
+         enumReason,
+      );
       // The length bounds do not apply to an enum: the sidecar's zod enum ignores them, and so does this validator.
       /** @type {Set<string>} The allowed values. */
       const allowed = new Set(values);
@@ -324,7 +461,7 @@ function compileNumber(node, integer) {
  * Compile an array node.
  * @param {Record<string, unknown>} node - The JSON Schema node to compile.
  * @param {number} depth - The nesting level of this node.
- * @param {{ nodes: number, strictNested?: boolean }} counter - The schema node counter and compile options.
+ * @param {CompileState} counter - The compile state.
  * @returns {CompiledNode} The compiled node.
  * @throws {SchemaRefusal} When the node uses a construct outside the supported subset.
  */
@@ -334,17 +471,20 @@ function compileArray(node, depth, counter) {
    }
    /** @type {CompiledNode} The compiled element schema. */
    const element = compileNode(ownValue(node, 'items'), depth + 1, counter);
-   /** @type {unknown} The declared minimum item count. */
-   const minItems = ownValue(node, 'minItems');
-   /** @type {unknown} The declared maximum item count. */
-   const maxItems = ownValue(node, 'maxItems');
-   if (minItems !== undefined && !isBound(minItems)) {
-      throw new SchemaRefusal('minItems must be a non-negative integer');
-   }
-   /** @type {number} The most items any array may allow. */
+   /** @type {number | undefined} The declared minimum item count. */
+   const minItems = readBound(node, 'minItems', counter);
+   /** @type {number} The item cap guideline, which binds every shipped array. */
    const itemsCap = getBudget('SCHEMA_ARRAY_ITEMS_MAX').value;
-   if (!isBound(maxItems) || maxItems > itemsCap) {
-      throw new SchemaRefusal(`an array schema needs a maxItems of 0 to ${itemsCap}`);
+   /** @type {string} The reason a shipped array over the item guideline is refused with. */
+   const capReason = `an array schema needs a maxItems of 0 to ${itemsCap}`;
+   // A shipped maxItems over the bound guideline is also over the tighter item cap, so it is refused with the cap text.
+   /** @type {number | undefined} The declared maximum item count; a plugin array may leave it out. */
+   const maxItems = readBound(node, 'maxItems', counter, capReason);
+   if (maxItems === undefined) {
+      // A missing cap counts as one array over the guideline; its warning carries no measured value.
+      holdGuideline(counter, 'maxItemsMissing', 1, 0, capReason);
+   } else {
+      holdGuideline(counter, 'maxItems', maxItems, itemsCap, capReason);
    }
    return (value, path, state) => {
       if (!Array.isArray(value)) {
@@ -355,7 +495,7 @@ function compileArray(node, depth, counter) {
       if (minItems !== undefined && length < minItems) {
          return problem(path, `needs at least ${minItems} items`);
       }
-      if (length > maxItems) {
+      if (maxItems !== undefined && length > maxItems) {
          return problem(path, `allows at most ${maxItems} items`);
       }
       /** @type {unknown[]} The cleaned elements. */
@@ -382,7 +522,7 @@ function compileArray(node, depth, counter) {
  * Compile an object node.
  * @param {Record<string, unknown>} node - The JSON Schema node to compile.
  * @param {number} depth - The nesting level of this node.
- * @param {{ nodes: number, strictNested?: boolean }} counter - The schema node counter and compile options.
+ * @param {CompileState} counter - The compile state.
  * @returns {CompiledNode} The compiled node.
  * @throws {SchemaRefusal} When the node uses a construct outside the supported subset.
  */
@@ -401,16 +541,24 @@ function compileObject(node, depth, counter) {
    }
    /** @type {string[]} The property names, own and enumerable. */
    const names = Object.keys(properties);
-   if (names.length > SCHEMA_PROPERTIES_MAX) {
-      throw new SchemaRefusal(`an object schema has more than ${SCHEMA_PROPERTIES_MAX} properties`);
-   }
+   /** @type {Set<string>} The property names, for constant-time lookups that keep the work linear in the schema. */
+   const declared = new Set(names);
+   holdGuideline(
+      counter,
+      'properties',
+      names.length,
+      SCHEMA_PROPERTIES_MAX,
+      `an object schema has more than ${SCHEMA_PROPERTIES_MAX} properties`,
+   );
    /** @type {unknown} The declared required list. */
    const requiredList = ownValue(node, 'required') ?? [];
    if (!Array.isArray(requiredList) || !requiredList.every((name) => typeof name === 'string')) {
       throw new SchemaRefusal('required must be an array of property names');
    }
-   for (const name of requiredList) {
-      if (!names.includes(name)) {
+   /** @type {Set<string>} The names a value must set, for constant-time lookups. */
+   const requiredNames = new Set(requiredList);
+   for (const name of requiredNames) {
+      if (!declared.has(name)) {
          throw new SchemaRefusal('required names a property that is not declared');
       }
    }
@@ -422,7 +570,7 @@ function compileObject(node, depth, counter) {
       }
       fields.push({
          name,
-         required: requiredList.includes(name),
+         required: requiredNames.has(name),
          check: compileNode(properties[name], depth + 1, counter),
       });
    }
@@ -430,7 +578,7 @@ function compileObject(node, depth, counter) {
       if (!isRecord(value)) {
          return problem(path || 'arguments', 'expected an object');
       }
-      if (strict && Object.keys(value).some((key) => !names.includes(key))) {
+      if (strict && Object.keys(value).some((key) => !declared.has(key))) {
          return problem(path || 'arguments', 'has a property that is not an argument');
       }
       /** @type {Record<string, unknown>} The cleaned copy: declared properties only. */
@@ -465,15 +613,25 @@ function compileObject(node, depth, counter) {
  * Compile one schema node; throws a SchemaRefusal for anything outside the supported subset.
  * @param {unknown} node - The JSON Schema node.
  * @param {number} depth - The nesting level of this node (the root object is 1).
- * @param {{ nodes: number, strictNested?: boolean }} counter - The schema node counter and compile options.
+ * @param {CompileState} counter - The compile state.
  * @returns {CompiledNode} The compiled node.
  * @throws {SchemaRefusal} When the node uses a construct outside the supported subset.
  */
 function compileNode(node, depth, counter) {
    counter.nodes += 1;
-   if (counter.nodes > SCHEMA_NODES_MAX) {
-      throw new SchemaRefusal(`schema has more than ${SCHEMA_NODES_MAX} nodes`);
+   if (counter.nodes > SCHEMA_EXPANDED_NODES_MAX) {
+      // Checked before anything else of the node, so a reused object costs at most this many node visits.
+      throw new SchemaRefusal(
+         `schema expands to more than ${SCHEMA_EXPANDED_NODES_MAX} nodes, more than one registry message can carry`,
+      );
    }
+   holdGuideline(
+      counter,
+      'nodes',
+      counter.nodes,
+      SCHEMA_NODES_MAX,
+      `schema has more than ${SCHEMA_NODES_MAX} nodes`,
+   );
    if (!isRecord(node)) {
       throw new SchemaRefusal('a schema node is not an object');
    }
@@ -482,8 +640,18 @@ function compileNode(node, depth, counter) {
    if (typeof type !== 'string' || !Object.hasOwn(TYPE_KEYWORDS, type)) {
       throw new SchemaRefusal('type must be one of string, number, integer, boolean, array or object');
    }
-   if ((type === 'object' || type === 'array') && depth > SCHEMA_DEPTH_MAX) {
-      throw new SchemaRefusal(`schema nests objects and arrays deeper than ${SCHEMA_DEPTH_MAX} levels`);
+   if (type === 'object' || type === 'array') {
+      // Checked before descending, so the recursion never nests more than one level past the ceiling.
+      if (depth > SCHEMA_PLUGIN_DEPTH_MAX) {
+         throw new SchemaRefusal(`schema nests objects and arrays deeper than ${SCHEMA_PLUGIN_DEPTH_MAX} levels`);
+      }
+      holdGuideline(
+         counter,
+         'depth',
+         depth,
+         SCHEMA_DEPTH_MAX,
+         `schema nests objects and arrays deeper than ${SCHEMA_DEPTH_MAX} levels`,
+      );
    }
    /** @type {string[]} The keywords this type allows. */
    const allowed = [
@@ -499,7 +667,7 @@ function compileNode(node, depth, counter) {
    let compiled;
    switch (type) {
       case 'string':
-         compiled = compileString(node);
+         compiled = compileString(node, counter);
          break;
       case 'number':
       case 'integer':
@@ -519,8 +687,17 @@ function compileNode(node, depth, counter) {
    }
    /** @type {unknown} The node's description, validated on every node. */
    const description = ownValue(node, 'description');
-   if (description !== undefined && !isValidDescription(description)) {
-      throw new SchemaRefusal('description must be a short single-line string');
+   if (description !== undefined) {
+      if (!isWellFormedDescription(description)) {
+         throw new SchemaRefusal('description must be a non-empty single-line string');
+      }
+      holdGuideline(
+         counter,
+         'descriptionChars',
+         description.length,
+         getBudget('DESCRIPTION_MAX_CHARS').value,
+         'description must be a short single-line string',
+      );
    }
    return compiled;
 }
@@ -608,22 +785,31 @@ function listedNode(node) {
  * pays for): the client checks the size of that form, not of the raw schema, so it refuses what the sidecar refuses.
  * `tests/unit/schemaValidate.test.js` asserts `listed` equals the sidecar's listing for the parity fixtures.
  * @param {unknown} schema - The JSON Schema of the arguments.
- * @param {{ strictNested?: boolean }} [options] - `strictNested`: every object below the root refuses an undeclared
- * key, though the listed form does not say so (it would take definition budget).
- * @returns {CompileOutcome} The validator and listed form, or the short reason the schema is refused. Never throws.
+ * @param {{ strictNested?: boolean, source?: SchemaSource }} [options] - `strictNested`: every object below the root
+ * refuses an undeclared key, though the listed form does not say so (it would take definition budget). `source`
+ * (default `shipped`): a `plugin` schema over a complexity guideline compiles with a warning instead of being refused.
+ * @returns {CompileOutcome} The validator, listed form and warnings, or the short reason the schema is refused. Never
+ * throws.
  */
 export function compileSchema(schema, options = {}) {
    try {
       if (!isRecord(schema) || ownValue(schema, 'type') !== 'object') {
          throw new SchemaRefusal('the schema root must be an object schema');
       }
-      /** @type {CompiledNode} The compiled root. */
-      const root = compileNode(schema, 1, {
+      /** @type {CompileState} The state of this compile. */
+      const state = {
          nodes: 0,
          strictNested: options.strictNested === true,
-      });
+         source: options.source === 'plugin' ? 'plugin' : 'shipped',
+         measured: new Map(),
+      };
+      /** @type {CompiledNode} The compiled root. */
+      const root = compileNode(schema, 1, state);
       return {
          ok: true,
+         warnings: SCHEMA_GUIDELINES.filter((guideline) => state.measured.has(guideline)).map((guideline) => {
+            return guidelineWarning(guideline, state.measured.get(guideline));
+         }),
          listed: {
             $schema: 'http://json-schema.org/draft-07/schema#',
             ...listedNode(schema),

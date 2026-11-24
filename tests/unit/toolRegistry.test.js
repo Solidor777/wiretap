@@ -609,6 +609,7 @@ describe('jsonSchemaToZodShape: supported constructs', () => {
          ok: true,
          shape: {},
          strict: false,
+         warnings: [],
       });
    });
 

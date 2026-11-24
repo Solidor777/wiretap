@@ -3,7 +3,13 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { getBudget } from '../../shared/budgets.js';
-import { compileSchema, VALUE_NODES_MAX } from '../../shared/schemaValidate.js';
+import {
+   SCHEMA_EXPANDED_NODES_MAX,
+   SCHEMA_GUIDELINES,
+   compileSchema,
+   guidelineWarning,
+   isWellFormedDescription,
+} from '../../shared/schemaValidate.js';
 import { argumentSchema, jsonSchemaToZodShape } from '../../server/toolRegistry.ts';
 
 /**
@@ -1027,5 +1033,528 @@ describe('validate: results and errors', () => {
       const outcome = validate(hostile);
       expect(outcome.ok).toBe(false);
       expect(outcome.error).toMatch(/^arguments: /);
+   });
+});
+
+/**
+ * Build an object chain `levels` deep with a string leaf; the root object is level 1.
+ * @param {number} levels - How many object levels.
+ * @returns {object} The nested schema.
+ */
+const depth = (levels) => {
+   let node = { type: 'string' };
+   for (let level = 1; level < levels; level += 1) {
+      node = {
+         type: 'object',
+         properties: { n: node },
+      };
+   }
+   return {
+      type: 'object',
+      properties: { n: node },
+   };
+};
+
+/**
+ * Build `count` boolean properties named `b0`, `b1`, and so on.
+ * @param {number} count - How many properties.
+ * @returns {Record<string, object>} The properties.
+ */
+const booleans = (count) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`b${i}`, { type: 'boolean' }]));
+
+/**
+ * Wrap one property schema in an object root.
+ * @param {object} node - The schema of property `a`.
+ * @returns {object} The root schema.
+ */
+const rootOf = (node) => {
+   return {
+      type: 'object',
+      properties: { a: node },
+   };
+};
+
+describe('the plugin switch: guidelines warn for plugin schemas and refuse shipped ones', () => {
+   it.each([
+      [
+         'depth',
+         depth(5),
+         'schema nests objects and arrays 5 levels deep, over the 4-level guideline',
+      ],
+      [
+         'nodes',
+         {
+            type: 'object',
+            properties: {
+               a: {
+                  type: 'object',
+                  properties: booleans(32),
+               },
+               b: {
+                  type: 'object',
+                  properties: booleans(32),
+               },
+            },
+         },
+         'schema has 67 nodes, over the 64-node guideline',
+      ],
+      [
+         'properties',
+         {
+            type: 'object',
+            properties: booleans(33),
+         },
+         'an object schema has 33 properties, over the 32-property guideline',
+      ],
+      [
+         'enum values',
+         rootOf({
+            type: 'string',
+            enum: Array.from({ length: 33 }, (_, i) => `v${i}`),
+         }),
+         'an enum has 33 values, over the 32-value guideline',
+      ],
+      [
+         'enum value length',
+         rootOf({
+            type: 'string',
+            enum: ['v'.repeat(65)],
+         }),
+         'an enum value is 65 characters, over the 64-character guideline',
+      ],
+      [
+         'bound',
+         rootOf({
+            type: 'string',
+            maxLength: 100001,
+         }),
+         'a length or item bound is 100001, over the 100000 guideline',
+      ],
+      [
+         'no maxItems',
+         rootOf({
+            type: 'array',
+            items: { type: 'string' },
+         }),
+         'an array schema declares no maxItems; the guideline is a maxItems of at most 1000',
+      ],
+      [
+         'maxItems',
+         rootOf({
+            type: 'array',
+            maxItems: 1001,
+            items: { type: 'string' },
+         }),
+         'an array schema allows 1001 items, over the 1000-item guideline',
+      ],
+      [
+         'description',
+         rootOf({
+            type: 'string',
+            description: 'd'.repeat(241),
+         }),
+         'a schema description is 241 characters, over the 240-character guideline',
+      ],
+   ])('a plugin schema over the %s guideline compiles with one warning on both sides; a shipped one is refused',
+      (_, schema, warning) => {
+         const client = compileSchema(schema, { source: 'plugin' });
+         const sidecar = jsonSchemaToZodShape(schema, false, 'plugin');
+         expect(client.ok).toBe(true);
+         expect(client.warnings).toEqual([warning]);
+         expect(sidecar.ok).toBe(true);
+         expect(sidecar.warnings).toEqual([warning]);
+         expect(client.listed).toEqual(toJsonSchemaCompat(argumentSchema(sidecar), {
+            strictUnions: true,
+            pipeStrategy: 'input',
+         }));
+         expect(compileSchema(schema).ok).toBe(false);
+         expect(jsonSchemaToZodShape(schema).ok).toBe(false);
+      });
+
+   it('warns once per guideline, in guideline order, with the largest measured value', () => {
+      const schema = {
+         type: 'object',
+         properties: {
+            a: {
+               type: 'string',
+               enum: Array.from({ length: 33 }, (_, i) => `a${i}`),
+            },
+            b: {
+               type: 'string',
+               enum: Array.from({ length: 40 }, (_, i) => `b${i}`),
+            },
+            c: {
+               type: 'string',
+               maxLength: 100001,
+            },
+         },
+      };
+      const expected = [
+         'an enum has 40 values, over the 32-value guideline',
+         'a length or item bound is 100001, over the 100000 guideline',
+      ];
+      expect(compileSchema(schema, { source: 'plugin' }).warnings).toEqual(expected);
+      expect(jsonSchemaToZodShape(schema, false, 'plugin').warnings).toEqual(expected);
+   });
+
+   it('refuses a plugin schema deeper than 32 levels on both sides without overflowing the stack', () => {
+      for (const levels of [33, 5000]) {
+         const client = compileSchema(depth(levels), { source: 'plugin' });
+         const sidecar = jsonSchemaToZodShape(depth(levels), false, 'plugin');
+         expect(client).toEqual({
+            ok: false,
+            reason: 'schema nests objects and arrays deeper than 32 levels',
+         });
+         expect(sidecar).toEqual({
+            ok: false,
+            reason: 'schema nests objects and arrays deeper than 32 levels',
+         });
+      }
+      expect(compileSchema(depth(32), { source: 'plugin' }).ok).toBe(true);
+      expect(jsonSchemaToZodShape(depth(32), false, 'plugin').ok).toBe(true);
+   });
+
+   it('lists a plugin array without maxItems with no item cap and parses more than 1000 items on both sides', () => {
+      const schema = rootOf({
+         type: 'array',
+         items: { type: 'integer' },
+      });
+      const client = compileSchema(schema, { source: 'plugin' });
+      const sidecar = jsonSchemaToZodShape(schema, false, 'plugin');
+      expect(client.listed.properties.a.maxItems).toBeUndefined();
+      const many = { a: Array.from({ length: 1500 }, () => 1) };
+      expect(client.validate(many).ok).toBe(true);
+      expect(argumentSchema(sidecar).safeParse(many).success).toBe(true);
+   });
+
+   it('refuses a reused object 32 levels deep by its expanded size, quickly, on both sides and for every source', () => {
+      /** @type {object} One object reused as both properties of the level above, 32 object levels in all. */
+      let node = { type: 'boolean' };
+      for (let level = 0; level < 32; level += 1) {
+         node = {
+            type: 'object',
+            properties: {
+               a: node,
+               b: node,
+            },
+         };
+      }
+      /** @type {string} The expanded-size refusal. */
+      const reason = `schema expands to more than ${SCHEMA_EXPANDED_NODES_MAX} nodes, more than one registry message ` +
+         'can carry';
+      // Fully expanded, this schema has 2^33 - 1 nodes; the walk stops after 60,001. The fixed times are in
+      // milliseconds: the sidecar's walk builds a zod type per node, so it is slower than the client's.
+      /** @type {number} When the client compile starts. */
+      const clientStart = performance.now();
+      expect(compileSchema(node, { source: 'plugin' })).toEqual({
+         ok: false,
+         reason,
+      });
+      expect(performance.now() - clientStart).toBeLessThan(250);
+      /** @type {number} When the sidecar conversion starts. */
+      const sidecarStart = performance.now();
+      expect(jsonSchemaToZodShape(node, false, 'plugin')).toEqual({
+         ok: false,
+         reason,
+      });
+      expect(performance.now() - sidecarStart).toBeLessThan(2000);
+      expect(compileSchema(node).ok).toBe(false);
+      expect(jsonSchemaToZodShape(node).ok).toBe(false);
+   });
+
+   it('compiles a schema that reuses one small sub-schema in two properties', () => {
+      /** @type {object} The reused sub-schema. */
+      const shared = {
+         type: 'object',
+         properties: { x: { type: 'integer' } },
+         required: ['x'],
+      };
+      const schema = {
+         type: 'object',
+         properties: {
+            from: shared,
+            to: shared,
+         },
+      };
+      const client = compileSchema(schema);
+      const sidecar = jsonSchemaToZodShape(schema);
+      expect(client.ok).toBe(true);
+      expect(sidecar.ok).toBe(true);
+      expect(client.listed).toEqual(toJsonSchemaCompat(argumentSchema(sidecar), {
+         strictUnions: true,
+         pipeStrategy: 'input',
+      }));
+      expect(client.validate({
+         from: { x: 1 },
+         to: { x: 2 },
+      }).ok).toBe(true);
+      expect(client.validate({ from: {} }).ok).toBe(false);
+   });
+
+   it('accepts a plugin schema of exactly the expanded-node limit and refuses one node more, on both sides', () => {
+      expect(SCHEMA_EXPANDED_NODES_MAX).toBe(60_000);
+      /**
+       * Build an object root with `count - 1` boolean properties, so the schema has `count` nodes.
+       * @param {number} count - The node count.
+       * @returns {object} The schema.
+       */
+      const flat = (count) => {
+         return {
+            type: 'object',
+            properties: booleans(count - 1),
+         };
+      };
+      const atLimit = flat(SCHEMA_EXPANDED_NODES_MAX);
+      /** @type {string[]} The warnings of the schema at the limit. */
+      const warnings = [
+         'schema has 60000 nodes, over the 64-node guideline',
+         'an object schema has 59999 properties, over the 32-property guideline',
+      ];
+      expect(compileSchema(atLimit, { source: 'plugin' }).warnings).toEqual(warnings);
+      expect(jsonSchemaToZodShape(atLimit, false, 'plugin').warnings).toEqual(warnings);
+      const overLimit = flat(SCHEMA_EXPANDED_NODES_MAX + 1);
+      /** @type {{ ok: false, reason: string }} The refusal of one node more. */
+      const refusal = {
+         ok: false,
+         reason: 'schema expands to more than 60000 nodes, more than one registry message can carry',
+      };
+      expect(compileSchema(overLimit, { source: 'plugin' })).toEqual(refusal);
+      expect(jsonSchemaToZodShape(overLimit, false, 'plugin')).toEqual(refusal);
+   });
+
+   it.each([
+      [
+         'a $ref keyword',
+         rootOf({
+            type: 'string',
+            $ref: '#/x',
+         }),
+      ],
+      [
+         'oneOf',
+         rootOf({
+            type: 'string',
+            oneOf: [{ type: 'string' }],
+         }),
+      ],
+      [
+         'pattern',
+         rootOf({
+            type: 'string',
+            pattern: '^a',
+         }),
+      ],
+      [
+         'format',
+         rootOf({
+            type: 'string',
+            format: 'uri',
+         }),
+      ],
+      [
+         'default',
+         rootOf({
+            type: 'string',
+            default: 'x',
+         }),
+      ],
+      [
+         'const',
+         rootOf({
+            type: 'string',
+            const: 'x',
+         }),
+      ],
+      [
+         'an unknown keyword',
+         rootOf({
+            type: 'string',
+            x: 1,
+         }),
+      ],
+      [
+         'additionalProperties true',
+         {
+            type: 'object',
+            additionalProperties: true,
+         },
+      ],
+      [
+         'a fractional maxLength',
+         rootOf({
+            type: 'string',
+            maxLength: 1.5,
+         }),
+      ],
+      [
+         'a negative minItems',
+         rootOf({
+            type: 'array',
+            items: { type: 'string' },
+            minItems: -1,
+         }),
+      ],
+      [
+         'an empty enum',
+         rootOf({
+            type: 'string',
+            enum: [],
+         }),
+      ],
+      [
+         'a non-string enum',
+         rootOf({
+            type: 'string',
+            enum: [1],
+         }),
+      ],
+      [
+         'a property named __proto__',
+         JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}}}'),
+      ],
+      [
+         'a property named a-b',
+         {
+            type: 'object',
+            properties: { 'a-b': { type: 'string' } },
+         },
+      ],
+      [
+         'a description with a newline',
+         rootOf({
+            type: 'string',
+            description: 'a\nb',
+         }),
+      ],
+      [
+         'an empty description',
+         rootOf({
+            type: 'string',
+            description: '',
+         }),
+      ],
+      [
+         'a root that is not an object schema',
+         { type: 'string' },
+      ],
+   ])('refuses what the converter cannot support for plugin schemas as for shipped ones: %s', (_, schema) => {
+      expect(compileSchema(schema, { source: 'plugin' }).ok).toBe(false);
+      expect(jsonSchemaToZodShape(schema, false, 'plugin').ok).toBe(false);
+   });
+
+   it('returns no warnings for a shipped schema that compiles', () => {
+      const validSchema = textSchema({ maxLength: 10 });
+      expect(compileSchema(validSchema).warnings).toEqual([]);
+      expect(jsonSchemaToZodShape(validSchema).warnings).toEqual([]);
+   });
+
+   it('refuses a malformed bound as not a non-negative integer and a shipped bound over the guideline by its limit',
+      () => {
+         for (const sidecar of [false, true]) {
+            /**
+             * Judge a schema on the side under test.
+             * @param {object} schema - The JSON Schema to judge.
+             * @returns {{ ok: boolean, reason?: string }} The outcome.
+             */
+            const judge = (schema) => {
+               return sidecar ? jsonSchemaToZodShape(schema) : compileSchema(schema);
+            };
+            expect(judge(rootOf({
+               type: 'string',
+               maxLength: -1,
+            }))).toEqual({
+               ok: false,
+               reason: 'maxLength must be a non-negative integer',
+            });
+            expect(judge(rootOf({
+               type: 'string',
+               minLength: 100001,
+            }))).toEqual({
+               ok: false,
+               reason: 'minLength must be at most 100000',
+            });
+            expect(judge(rootOf({
+               type: 'array',
+               items: { type: 'string' },
+               maxItems: 10,
+               minItems: 100001,
+            }))).toEqual({
+               ok: false,
+               reason: 'minItems must be at most 100000',
+            });
+            expect(judge(rootOf({
+               type: 'array',
+               items: { type: 'string' },
+               maxItems: 100001,
+            }))).toEqual({
+               ok: false,
+               reason: 'an array schema needs a maxItems of 0 to 1000',
+            });
+         }
+      });
+
+   it('compiles, converts and validates a schema of 40,000 properties, 9,000 required, on both sides', () => {
+      /** @type {string[]} The property names. */
+      const names = Array.from({ length: 40_000 }, (_, i) => `p${i}`);
+      // The required names are the last ones, so a list scan for any of them would run nearly the whole list. 9,000
+      // keeps a full argument under the client's value bound of 10,000.
+      /** @type {string[]} The required names. */
+      const required = names.slice(-9_000);
+      const schema = {
+         type: 'object',
+         properties: Object.fromEntries(names.map((name) => [
+            name,
+            { type: 'boolean' },
+         ])),
+         required,
+         additionalProperties: false,
+      };
+      /** @type {Record<string, boolean>} An argument that sets every required property. */
+      const full = Object.fromEntries(required.map((name) => [
+         name,
+         true,
+      ]));
+      const client = compileSchema(schema, { source: 'plugin' });
+      const sidecar = jsonSchemaToZodShape(schema, false, 'plugin');
+      expect(client.ok).toBe(true);
+      expect(sidecar.ok).toBe(true);
+      const parser = argumentSchema(sidecar);
+      expect(client.validate(full).ok).toBe(true);
+      expect(parser.safeParse(full).success).toBe(true);
+      const extra = {
+         ...full,
+         x: true,
+      };
+      expect(client.validate(extra)).toEqual({
+         ok: false,
+         error: 'arguments: has a property that is not an argument',
+      });
+      expect(parser.safeParse(extra).success).toBe(false);
+      const missing = { ...full };
+      delete missing.p39999;
+      expect(client.validate(missing)).toEqual({
+         ok: false,
+         error: 'p39999: is required',
+      });
+      expect(parser.safeParse(missing).success).toBe(false);
+   });
+
+   it('names the guidelines in warning order and checks a description without a length limit', () => {
+      expect(SCHEMA_GUIDELINES).toEqual([
+         'depth',
+         'nodes',
+         'properties',
+         'enumValues',
+         'enumValueChars',
+         'bound',
+         'maxItemsMissing',
+         'maxItems',
+         'descriptionChars',
+      ]);
+      expect(guidelineWarning('nodes', 70)).toBe('schema has 70 nodes, over the 64-node guideline');
+      expect(isWellFormedDescription('d'.repeat(500))).toBe(true);
+      expect(isWellFormedDescription('')).toBe(false);
+      expect(isWellFormedDescription('a\tb')).toBe(false);
+      expect(isWellFormedDescription(1)).toBe(false);
    });
 });
