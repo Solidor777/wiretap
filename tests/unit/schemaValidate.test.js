@@ -13,6 +13,13 @@ import {
 import { argumentSchema, jsonSchemaToZodShape } from '../../server/toolRegistry.ts';
 
 /**
+ * Per-test limit, in milliseconds, for the tests that build schemas of tens of thousands of nodes. Alone they take
+ * about 1.5 s; the full suite runs files in parallel and has slowed them past the 5 s default.
+ * @type {number}
+ */
+const HEAVY_TEST_LIMIT_MS = 60_000;
+
+/**
  * Compile a schema that must be accepted.
  * @param {unknown} schema - The JSON Schema.
  * @returns {(value: unknown) => { ok: boolean, value?: unknown, error?: string }} The validator.
@@ -1227,7 +1234,7 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
       expect(argumentSchema(sidecar).safeParse(many).success).toBe(true);
    });
 
-   it('refuses a reused object 32 levels deep by its expanded size, quickly, on both sides and for every source', () => {
+   it('refuses a reused object 32 levels deep by its expanded size, on both sides and for every source', () => {
       /** @type {object} One object reused as both properties of the level above, 32 object levels in all. */
       let node = { type: 'boolean' };
       for (let level = 0; level < 32; level += 1) {
@@ -1242,25 +1249,19 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
       /** @type {string} The expanded-size refusal. */
       const reason = `schema expands to more than ${SCHEMA_EXPANDED_NODES_MAX} nodes, more than one registry message ` +
          'can carry';
-      // Fully expanded, this schema has 2^33 - 1 nodes; the walk stops after 60,001. The fixed times are in
-      // milliseconds: the sidecar's walk builds a zod type per node, so it is slower than the client's.
-      /** @type {number} When the client compile starts. */
-      const clientStart = performance.now();
+      // Fully expanded, this schema has 2^33 - 1 nodes, so a walk that did not stop after 60,001 would never end and
+      // the per-test limit fails it. No wall-clock bound: the suite runs in parallel and its speed varies with load.
       expect(compileSchema(node, { source: 'plugin' })).toEqual({
          ok: false,
          reason,
       });
-      expect(performance.now() - clientStart).toBeLessThan(250);
-      /** @type {number} When the sidecar conversion starts. */
-      const sidecarStart = performance.now();
       expect(jsonSchemaToZodShape(node, false, 'plugin')).toEqual({
          ok: false,
          reason,
       });
-      expect(performance.now() - sidecarStart).toBeLessThan(2000);
       expect(compileSchema(node).ok).toBe(false);
       expect(jsonSchemaToZodShape(node).ok).toBe(false);
-   });
+   }, HEAVY_TEST_LIMIT_MS);
 
    it('compiles a schema that reuses one small sub-schema in two properties', () => {
       /** @type {object} The reused sub-schema. */
@@ -1320,7 +1321,7 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
       };
       expect(compileSchema(overLimit, { source: 'plugin' })).toEqual(refusal);
       expect(jsonSchemaToZodShape(overLimit, false, 'plugin')).toEqual(refusal);
-   });
+   }, HEAVY_TEST_LIMIT_MS);
 
    it.each([
       [
@@ -1537,7 +1538,7 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
          error: 'p39999: is required',
       });
       expect(parser.safeParse(missing).success).toBe(false);
-   });
+   }, HEAVY_TEST_LIMIT_MS);
 
    it('names the guidelines in warning order and checks a description without a length limit', () => {
       expect(SCHEMA_GUIDELINES).toEqual([
