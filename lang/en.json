@@ -92,7 +92,7 @@
             },
             "AllowedPluginModules": {
                "Name": "Risk gate: plugin modules",
-               "Hint": "Comma-separated ids of the modules whose plugin skills and scripts agents may use. A plugin script is arbitrary code with GM authority and can call game.settings.set, so listing a module lets an agent change any gate; list only modules you trust. Empty by default."
+               "Hint": "Comma-separated ids of the modules whose plugin tools agents may use. A plugin tool is arbitrary code with GM authority and can call game.settings.set, so listing a module lets an agent change any gate; list only modules you trust. Empty by default."
             }
          }
       }
