@@ -489,35 +489,6 @@ describe('validateScriptDefinition: source', () => {
       }
    });
 
-   it('validates a plugin script by the plugin rules and then refuses it as not supported', () => {
-      const plugin = script('my-module__tool', { moduleId: 'my-module' });
-      const outcome = validateScriptDefinition(plugin, 'plugin');
-      expect(outcome.ok).toBe(false);
-      expect(outcome.reason).toContain('plugin scripts are not supported');
-   });
-
-   it('applies the plugin name budget to a plugin script', () => {
-      const moduleId = 'my-module';
-      const longest = `${moduleId}__${'a'.repeat(getBudget('PLUGIN_TOOL_NAME_MAX_CHARS').value - moduleId.length - 2)}`;
-      expect(longest).toHaveLength(64);
-      const fits = validateScriptDefinition(script(longest, { moduleId }), 'plugin');
-      expect(fits.reason).toContain('not supported');
-      const over = validateScriptDefinition(script(`${longest}a`, { moduleId }), 'plugin');
-      expect(over.reason).toContain('name');
-      expect(over.reason).not.toContain('not supported');
-   });
-
-   it('requires a plugin script to carry its module id and to be named from it', () => {
-      const missing = validateScriptDefinition(script('my-module__tool'), 'plugin');
-      expect(missing.reason).toContain('moduleId');
-      const unrelated = validateScriptDefinition(script('other__tool', { moduleId: 'my-module' }), 'plugin');
-      expect(unrelated.reason).toContain('name');
-      const bare = validateScriptDefinition(script('my-module__', { moduleId: 'my-module' }), 'plugin');
-      expect(bare.reason).toContain('name');
-      const badId = validateScriptDefinition(script('bad__tool', { moduleId: 'Bad Id' }), 'plugin');
-      expect(badId.reason).toContain('moduleId');
-   });
-
    it('validates an agent script by the agent rules and then refuses it as not supported', () => {
       const outcome = validateScriptDefinition(script('agent__saved'), 'agent');
       expect(outcome.ok).toBe(false);
@@ -527,6 +498,120 @@ describe('validateScriptDefinition: source', () => {
       expect(unprefixed.reason).not.toContain('not supported');
       const withModule = validateScriptDefinition(script('agent__saved', { moduleId: 'my-module' }), 'agent');
       expect(withModule.reason).toContain('moduleId');
+   });
+});
+
+describe('validateScriptDefinition: plugin route', () => {
+   /**
+    * Validate a definition owned by `my-module` as a plugin script.
+    * @param {string} name - The tool name the script registers as.
+    * @param {object} [overrides] - Fields replacing the defaults.
+    * @returns {ReturnType<typeof validateScriptDefinition>} The outcome.
+    */
+   const plugin = (name, overrides = {}) => validateScriptDefinition(
+      script(name, {
+         moduleId: 'my-module',
+         ...overrides,
+      }),
+      'plugin',
+   );
+
+   it('accepts a valid plugin script and keeps its moduleId', () => {
+      const outcome = plugin('my-module__tool');
+      expect(outcome.ok).toBe(true);
+      expect(outcome.definition.moduleId).toBe('my-module');
+      expect(outcome.definition.name).toBe('my-module__tool');
+      expect(outcome.warnings).toEqual([]);
+   });
+
+   it('accepts a plugin name of 50 characters and refuses 51 with the prefix explained', () => {
+      expect(plugin(`my-module__${'a'.repeat(39)}`).ok).toBe(true); // 50 characters
+      expect(plugin(`my-module__${'a'.repeat(40)}`).reason).toBe( // 51 characters
+         'name is 51 characters; Claude Code lists it as mcp__wiretap__<name> and the API accepts at most 64, so ' +
+            '<moduleId>__<tool> may be at most 50 characters',
+      );
+   });
+
+   it('warns for a plugin description over 240 characters with the 240 line only; refuses it when shipped', () => {
+      expect(plugin('my-module__tool', { description: 'd'.repeat(300) }).warnings).toEqual([
+         'description is 300 characters, over the 240-character guideline',
+      ]);
+      expect(validateScriptDefinition(script('tool', { description: 'd'.repeat(300) }), 'shipped').ok).toBe(false);
+   });
+
+   it('keeps the 160-character target warning for both sources', () => {
+      expect(plugin('my-module__tool', { description: 'd'.repeat(200) }).warnings).toEqual([
+         'description is 200 characters, over the 160-character target',
+      ]);
+   });
+
+   it('clamps a plugin result budget over the hard cap to the cap with a warning; refuses it when shipped', () => {
+      const outcome = plugin('my-module__tool', { result: { budgetBytes: 50000 } });
+      expect(outcome.definition.result).toEqual({ budgetBytes: 16000 });
+      expect(outcome.warnings).toEqual([
+         'result.budgetBytes is 50000, over the 16000-byte result cap; the cap applies',
+      ]);
+      expect(validateScriptDefinition(script('tool', { result: { budgetBytes: 50000 } }), 'shipped').ok).toBe(false);
+   });
+
+   it('does not refuse or warn for a plugin definition over 800 raw bytes; refuses it for a shipped script', () => {
+      const inputSchema = {
+         type: 'object',
+         properties: Object.fromEntries(Array.from({ length: 20 }, (_, index) => [
+            `p${index}`,
+            {
+               type: 'string',
+               description: 'd'.repeat(60),
+            },
+         ])),
+      };
+      expect(plugin('my-module__tool', { inputSchema }).warnings).toEqual([]);
+      expect(validateScriptDefinition(script('tool', { inputSchema }), 'shipped').reason).toContain('definition is');
+   });
+
+   it('names what to change when a plugin moduleId is not a module id', () => {
+      expect(plugin('my.module__tool', { moduleId: 'my.module' }).reason).toBe(
+         'moduleId must be your module\'s id from module.json: 1 to 64 characters of a-z, 0-9, _ or - (no dots or ' +
+            'capitals), starting with a letter or digit',
+      );
+      expect(plugin('my-module__tool', { moduleId: undefined }).reason).toBe(
+         plugin('my.module__tool', { moduleId: 'my.module' }).reason,
+      );
+   });
+
+   it('names the <moduleId>__<tool> form when a plugin name breaks it', () => {
+      for (const name of [
+         'other__tool',
+         'my-module__',
+         'my-module__Tool',
+         'my-module__a.b',
+      ]) {
+         expect(plugin(name).reason, name).toBe(
+            'name must be <moduleId>__<tool>, where <tool> uses only a-z, 0-9, _ and -',
+         );
+      }
+   });
+
+   it.each([
+      { version: undefined },
+      { version: '1.0' },
+      { description: '' },
+      { description: 'a\nb' },
+      { inputSchema: 'x' },
+      { result: undefined },
+      { result: { budgetBytes: 0 } },
+      { result: { budgetBytes: 1.5 } },
+      { requires: 'everywhere' },
+      { mutates: undefined },
+      { mutates: 'no' },
+      { gate: 'allowedPluginModules' },
+      { gate: 'noSuchGate' },
+      { handleArgs: ['missing'] },
+      { strictNested: false },
+      { requiresUserInteraction: false },
+   ])('refuses each needed-to-work rule for both sources: %j', (overrides) => {
+      expect(validateScriptDefinition(script('tool', overrides), 'shipped').ok).toBe(false);
+      expect(plugin('my-module__tool', overrides).ok).toBe(false);
    });
 });
 
@@ -765,7 +850,7 @@ describe('validateScriptDefinition: requiresUserInteraction', () => {
       [
          'plugin',
          { moduleId: 'my-module' },
-         'name must be <moduleId>__<skill>',
+         'name must be <moduleId>__<tool>, where <tool> uses only a-z, 0-9, _ and -',
       ],
       [
          'agent',

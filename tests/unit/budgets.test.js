@@ -16,7 +16,7 @@ const EXPECTED = [
    ],
    [
       'PLUGIN_TOOL_NAME_MAX_CHARS',
-      64,
+      50,
       'chars',
       'hard',
    ],

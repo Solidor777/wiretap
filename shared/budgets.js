@@ -70,8 +70,9 @@ function table(entries) {
 export const BUDGETS = table([
    // Core and shipped tool name length. Names are always in the client's context.
    budget('CORE_TOOL_NAME_MAX_CHARS', 32, 'chars', BUDGET_SEVERITY.HARD),
-   // Plugin and agent-saved tool name length. Module ids are outside Wiretap's control, so the limit is looser.
-   budget('PLUGIN_TOOL_NAME_MAX_CHARS', 64, 'chars', BUDGET_SEVERITY.HARD),
+   // Plugin and agent-saved tool name length. Claude Code lists each tool as `mcp__wiretap__<name>` (a 14-character
+   // prefix) and the Anthropic API refuses tool names over 64 characters, so a longer name could not be called.
+   budget('PLUGIN_TOOL_NAME_MAX_CHARS', 50, 'chars', BUDGET_SEVERITY.HARD),
    // Script `version` string length (a semver-like string).
    budget('SCRIPT_VERSION_MAX_CHARS', 32, 'chars', BUDGET_SEVERITY.HARD),
    // Serialized `{name, description, inputSchema}` of one tool.
