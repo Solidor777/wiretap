@@ -91,7 +91,7 @@ describe('pack tool definitions', () => {
          {
             label: 'Wiretap',
             type: 'Item',
-            name: 'a'.repeat(65),
+            name: '',
          },
          {
             label: 'Wiretap',
@@ -105,7 +105,7 @@ describe('pack tool definitions', () => {
       expect(create({
          label: 'a'.repeat(128),
          type: 'Item',
-         name: 'b'.repeat(64),
+         name: 'b'.repeat(1000),
          dryRun: true,
       }).ok).toBe(true);
 

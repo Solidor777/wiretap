@@ -1,14 +1,11 @@
 /**
- * The GM-client half of a backup: plan the selection, measure it against the backup bounds, then export every
- * document again and stream the lines to the sidecar in pieces. The documents never pass through the agent's context;
- * the sidecar writes the header and the file.
+ * The GM-client half of a backup: plan the selection, measure it, then export every document again and stream the
+ * lines to the sidecar in pieces. A backup holds any number of documents and bytes; the sidecar warns past the
+ * guidelines. The documents never pass through the agent's context; the sidecar writes the header and the file.
  */
 
 import {
    BACKUP_EMPTY,
-   BACKUP_MAX_BYTES,
-   BACKUP_MAX_DOCUMENTS,
-   BACKUP_TOO_LARGE,
    HEADER_LINE_BYTES,
 } from '$shared/backup.js';
 import { utf8Bytes } from '$shared/utf8.js';
@@ -113,25 +110,19 @@ async function exportLines(entries, deadline, onLine) {
 }
 
 /**
- * Back up a selection: plan it, measure it, refuse it when it is empty or over the bounds, and unless `dryRun` export
- * it again and stream the lines to the sidecar.
+ * Back up a selection: plan it, measure it, refuse it when it is empty, and unless `dryRun` export it again and stream
+ * the lines to the sidecar.
  * @param {ExportParams} params - The selection, the dry-run flag and the time limit.
  * @param {ExportInvocation} invocation - The op invocation whose piece channel carries the stream.
  * @returns {Promise<ExportResult>} The counts and the file size; the world description unless a dry run.
- * @throws {ScriptError} `DOC_NOT_FOUND` or `ARGS_INVALID` for the selection, `BACKUP_TOO_LARGE`, `BACKUP_EMPTY`,
- * `SCRIPT_TIMEOUT`, or the error of a refused piece.
+ * @throws {ScriptError} `DOC_NOT_FOUND` or `ARGS_INVALID` for the selection, `BACKUP_EMPTY`, `SCRIPT_TIMEOUT`, or the
+ * error of a refused piece.
  */
 export async function exportBackup(params, invocation) {
    /** @type {number} The time after which the export stops. */
    const deadline = Date.now() + params.timeoutMs;
    /** @type {import('./selection.js').SelectionPlan} The selection. */
    const plan = await planSelection(params);
-   if (plan.entries.length > BACKUP_MAX_DOCUMENTS) {
-      throw new ScriptError(
-         BACKUP_TOO_LARGE,
-         `The selection holds ${plan.entries.length} documents; a backup holds at most ${BACKUP_MAX_DOCUMENTS}.`,
-      );
-   }
 
    /** @type {number} The measured bytes of the document lines. */
    let measured = 0;
@@ -141,12 +132,6 @@ export async function exportBackup(params, invocation) {
    });
    if (counts.documents === 0) {
       throw new ScriptError(BACKUP_EMPTY, 'Nothing to back up: the selection holds no readable document.');
-   }
-   if (HEADER_LINE_BYTES + measured > BACKUP_MAX_BYTES) {
-      throw new ScriptError(
-         BACKUP_TOO_LARGE,
-         `The backup would be ${HEADER_LINE_BYTES + measured} bytes; a backup holds at most ${BACKUP_MAX_BYTES}.`,
-      );
    }
    if (params.dryRun === true) {
       return {

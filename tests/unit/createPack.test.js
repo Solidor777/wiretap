@@ -265,33 +265,47 @@ describe('createPackHandler', () => {
       expect(error.message).toContain('label has no letters or digits to name the pack; give a name');
    });
 
-   it('refuses a derived or given name over 64 characters and accepts exactly 64', async () => {
+   it('creates a derived or given name of any length, warning once past 64 characters and not at 64', async () => {
       gates.allowCompendiumWrites = true;
-      /** @type {ScriptError} The refusal of a derived name of 65 characters. */
-      const derived = await refusal({
-         label: 'a'.repeat(65),
-         type: 'Actor',
-      });
-      expect(derived.code).toBe('ARGS_INVALID');
-      expect(derived.message).toContain('name is over 64 characters');
-      /** @type {ScriptError} The refusal of a given name of 65 characters. */
-      const given = await refusal({
-         label: 'MOCK Pack One',
-         type: 'Actor',
-         name: 'b'.repeat(65),
-      });
-      expect(given.code).toBe('ARGS_INVALID');
-      expect(given.message).toContain('name is over 64 characters');
+      /** @type {string[]} The log lines of the calls. */
+      const logs = [];
+      /** @type {{ log: (line: string) => void }} A context that records log lines. */
+      const ctx = { log: (line) => logs.push(line) };
       /** @type {Record<string, unknown>} The ack of a derived name of exactly 64 characters. */
-      const result = await createPackHandler(
+      const atGuideline = await createPackHandler(
          {
             label: 'a'.repeat(64),
             type: 'Actor',
          },
-         {},
+         ctx,
       );
-      expect(result.id).toBe(`world.${'a'.repeat(64)}`);
-      expect(createCompendium).toHaveBeenCalledTimes(1);
+      expect(atGuideline.id).toBe(`world.${'a'.repeat(64)}`);
+      expect(logs).toEqual([]);
+      /** @type {Record<string, unknown>} The ack of a derived name of 65 characters. */
+      const derived = await createPackHandler(
+         {
+            label: 'c'.repeat(65),
+            type: 'Actor',
+         },
+         ctx,
+      );
+      expect(derived.id).toBe(`world.${'c'.repeat(65)}`);
+      /** @type {Record<string, unknown>} The dry run of a given name of 500 characters. */
+      const given = await createPackHandler(
+         {
+            label: 'MOCK Pack One',
+            type: 'Actor',
+            name: 'b'.repeat(500),
+            dryRun: true,
+         },
+         ctx,
+      );
+      expect(given.id).toBe(`world.${'b'.repeat(500)}`);
+      expect(logs).toEqual([
+         'Wiretap | create_pack warning: name characters 65 is over the 64 guideline',
+         'Wiretap | create_pack warning: name characters 500 is over the 64 guideline',
+      ]);
+      expect(createCompendium).toHaveBeenCalledTimes(2);
    });
 
    it('refuses a collision with world.<name>, on a real run and on a dry run', async () => {
@@ -369,11 +383,6 @@ describe('createPackHandler', () => {
          {
             label: '!!!',
             type: 'Actor',
-         },
-         {
-            label: 'MOCK',
-            type: 'Actor',
-            name: 'c'.repeat(65),
          },
          {
             label: 'MOCK',

@@ -14,17 +14,17 @@ afterEach(() => {
  * string }} The invocation, plus the streamed text decoded.
  */
 function fakeInvocation() {
-   /** @type {number[]} Every byte sent, in order. */
-   const bytes = [];
+   /** @type {Uint8Array[]} Every piece sent, in order. */
+   const sent = [];
    return {
       requestId: 'MOCK_REQUEST',
       pieces: {
          send: vi.fn(async (requestId, seq, piece) => {
-            bytes.push(...piece);
+            sent.push(Uint8Array.from(piece));
          }),
          end: vi.fn(async () => {}),
       },
-      received: () => new TextDecoder().decode(Uint8Array.from(bytes)),
+      received: () => new TextDecoder().decode(Buffer.concat(sent)),
    };
 }
 
@@ -145,24 +145,25 @@ describe('exportBackup', () => {
       });
    });
 
-   // Each cap is reached only by its smallest case: 10001 mocked actors, and one export of more than 64000000 bytes.
-   // Measured: about 2 s alone and 2.5 to 5.1 s in a full default-worker run, past the 5 s default limit. The limit is
-   // about three times the worst full run.
-   it('refuses more than 10000 documents and more than 64000000 bytes before sending anything', {
+   // The backup holds any number of documents and bytes; the cases are the smallest past the 10000-document and
+   // 64000000-byte guidelines, which the sidecar warns about. The 64000000-byte case is a dry run, so the test does not
+   // hold the streamed bytes. Measured: about 2 s alone and up to 5.1 s in a full default-worker run, past the 5 s
+   // default limit. The limit is about three times the worst full run.
+   it('exports more than 10000 documents and measures more than 64000000 bytes', {
       timeout: 15000,
    }, async () => {
       installBackupWorld(vi.fn, { extraActors: 10_001 - 6 });
       const invocation = fakeInvocation();
-      await expect(exportBackup(
+      /** @type {Awaited<ReturnType<typeof exportBackup>>} The export of 10001 actors. */
+      const many = await exportBackup(
          {
             documentName: 'Actor',
             timeoutMs: 60_000,
          },
          invocation,
-      )).rejects.toMatchObject({
-         code: 'BACKUP_TOO_LARGE',
-         message: 'The selection holds 10001 documents; a backup holds at most 10000.',
-      });
+      );
+      expect(many.documents).toBe(10_001);
+      expect(invocation.received().split('\n')).toHaveLength(10_002);
       removeBackupWorld();
 
       const { docs } = installBackupWorld(vi.fn);
@@ -176,15 +177,16 @@ describe('exportBackup', () => {
       await expect(exportBackup(
          {
             uuids: [docs.actor3.uuid],
+            dryRun: true,
             timeoutMs: 60_000,
          },
-         invocation,
-      )).rejects.toMatchObject({
-         code: 'BACKUP_TOO_LARGE',
-         message: `The backup would be ${expected} bytes; a backup holds at most 64000000.`,
+         fakeInvocation(),
+      )).resolves.toEqual({
+         documents: 1,
+         bytes: expected,
+         unreadable: 0,
+         parents: 0,
       });
-      expect(invocation.pieces.send).not.toHaveBeenCalled();
-      expect(invocation.pieces.end).not.toHaveBeenCalled();
    });
 
    it('counts unreadable documents and refuses a selection with none readable as BACKUP_EMPTY', async () => {

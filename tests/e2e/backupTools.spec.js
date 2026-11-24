@@ -28,7 +28,7 @@ const MARKER = 'WIRETAP-MARKER-7f3a';
 /** @type {string} The `createdBy` value of every document this spec records. */
 const CREATED_BY = 'backupTools.spec';
 
-/** @type {number} The `timeoutMs` of the largest pack's dry run: the longest a backup call may set. */
+/** @type {number} The `timeoutMs` of the largest pack's dry run: the 300,000 ms guideline, at which nothing warns. */
 const DRY_RUN_TIMEOUT_MS = 300_000;
 
 /**
@@ -37,7 +37,7 @@ const DRY_RUN_TIMEOUT_MS = 300_000;
  */
 const DRY_RUN_REQUEST_MS = DRY_RUN_TIMEOUT_MS + 10_000;
 
-/** @type {number} The bytes the largest backup may hold, used to project the export time at the measured rate. */
+/** @type {number} The 64,000,000-byte backup guideline, used to project the export time at the measured rate. */
 const PROJECTED_BYTES = 64_000_000;
 
 /** @type {number} The most bytes a `delete_backup` result may take. */

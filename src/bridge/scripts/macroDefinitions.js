@@ -6,12 +6,26 @@
 import { getBudget } from '../../../shared/budgets.js';
 
 /**
+ * The largest `timeoutMs`: the sidecar waits `timeoutMs` + 2 s for the reply (`server/endpoints.ts`), and that delay
+ * must fit a timer, which Node and browsers store as a signed 32-bit integer of milliseconds; a longer one fires at
+ * once (Node `setTimeout` docs; MDN, "setTimeout(): Maximum delay value"). The smallest is 1 ms: a time limit of 0 or
+ * less has passed before the macro starts.
+ * @type {number}
+ */
+const MACRO_TIMEOUT_MAX_MS = 2 ** 31 - 1 - 2000;
+
+/**
+ * The `timeoutMs` past which a call logs one warning line.
+ * @type {number}
+ */
+export const MACRO_TIMEOUT_GUIDELINE_MS = 300_000;
+
+/**
  * The `execute_macro` definition. A macro is arbitrary code, so the script declares the `allowMacroExecution` gate,
  * which the sidecar judges on the endpoint snapshot and the `callTool` dispatcher judges again on this client before
  * validation and before the handler. The result is the macro's value, so it takes the hard cap and the sidecar turns
  * anything larger into a handle. `timeoutMs` is the shared time-limit argument the `callTool` dispatcher and the
- * sidecar both read: from 1 s to 5 minutes, so a macro can wait on a player's dialog but a typo cannot hang a call
- * for days; absent, the limit is 8 s.
+ * sidecar both read; absent, the limit is 8 s. The handler logs one warning line past `MACRO_TIMEOUT_GUIDELINE_MS`.
  * @type {import('$shared/scripts.js').ScriptDefinition}
  */
 export const executeMacroDefinition = {
@@ -28,8 +42,8 @@ export const executeMacroDefinition = {
          tokenUuid: { type: 'string' },
          timeoutMs: {
             type: 'integer',
-            minimum: 1000,
-            maximum: 300_000,
+            minimum: 1,
+            maximum: MACRO_TIMEOUT_MAX_MS,
          },
       },
       required: ['uuid'],

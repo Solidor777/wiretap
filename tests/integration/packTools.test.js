@@ -177,7 +177,7 @@ describe('the pack tools over the bridge', () => {
             arguments: {
                label: 'MOCK_PACK_A',
                type: 'Actor',
-               name: 'a'.repeat(65),
+               name: '',
             },
          },
          {

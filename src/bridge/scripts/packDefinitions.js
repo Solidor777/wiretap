@@ -8,10 +8,9 @@ import { getBudget } from '../../../shared/budgets.js';
 
 /**
  * The `create_pack` definition. It declares no `gate`: the dispatcher would judge a definition gate before the
- * handler, which would block the dry run, so the handler checks `allowCompendiumWrites` itself on a real run only. The
- * bounds hold untrusted MCP input: a pack name becomes a folder name on the Foundry server, so `name` (and the slug of
- * `label` that stands in for it) is held to 64 characters. `type` is checked against Foundry's compendium document
- * types in the handler, which costs fewer listed bytes than an enum.
+ * handler, which would block the dry run, so the handler checks `allowCompendiumWrites` itself on a real run only.
+ * `name` has no length bound: the handler holds it to Foundry's package-id rules, which set none. `type` is checked
+ * against Foundry's compendium document types in the handler, which costs fewer listed bytes than an enum.
  * @type {import('$shared/scripts.js').ScriptDefinition}
  */
 export const createPackDefinition = {
@@ -32,7 +31,6 @@ export const createPackDefinition = {
          name: {
             type: 'string',
             minLength: 1,
-            maxLength: 64,
          },
          dryRun: { type: 'boolean' },
       },
