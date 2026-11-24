@@ -38,7 +38,7 @@ describe('buildRegistryPayload', () => {
       expect(log).not.toHaveBeenCalled();
    });
 
-   it('leaves out plugin definitions, most recently registered first, until the payload fits', () => {
+   it('leaves out the most recently registered of equal-size plugin definitions first, until the payload fits', () => {
       const log = vi.fn();
       const definitions = [
          shipped('a'),
@@ -59,15 +59,43 @@ describe('buildRegistryPayload', () => {
       ]);
    });
 
-   it('leaves out a plugin definition registered before a shipped one when the later ones are not enough', () => {
+   it('leaves out one large plugin definition registered first and keeps the later small ones', () => {
       const log = vi.fn();
       const definitions = [
          plugin('p__1', 500_000),
          shipped('a', 450_000),
          plugin('p__2', 10),
+         plugin('p__3', 10),
       ];
-      expect(buildRegistryPayload(definitions, log).scripts.map((d) => d.name)).toEqual(['a']);
-      expect(log).toHaveBeenCalledTimes(2);
+      expect(buildRegistryPayload(definitions, log).scripts.map((d) => d.name)).toEqual([
+         'a',
+         'p__2',
+         'p__3',
+      ]);
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toContain('"p__1"');
+   });
+
+   it('leaves out the largest plugin definitions first, logs them in that order, and keeps registration order', () => {
+      const log = vi.fn();
+      const definitions = [
+         shipped('a'),
+         plugin('p__1', 400_000),
+         plugin('p__2', 500_000),
+         plugin('p__3', 100_000),
+         plugin('p__4', 450_000),
+         shipped('b'),
+      ];
+      expect(buildRegistryPayload(definitions, log).scripts.map((d) => d.name)).toEqual([
+         'a',
+         'p__1',
+         'p__3',
+         'b',
+      ]);
+      expect(log.mock.calls.map(([line]) => line.match(/"(p__\d)"/)[1])).toEqual([
+         'p__2',
+         'p__4',
+      ]);
    });
 
    it('always keeps shipped definitions', () => {

@@ -292,6 +292,76 @@ describe('bridge:registry push', () => {
       });
    });
 
+   it('leaves out a large plugin tool registered first and keeps the later small plugin tools', () => {
+      /** @type {import('vitest').Mock} The registry's log sink. */
+      const log = vi.fn();
+      registry = createScriptRegistry({ log });
+      expect(
+         registry.register(
+            script('big-mod__huge', {
+               moduleId: 'big-mod',
+               description: 'd'.repeat(950_000),
+            }),
+            async () => 'h',
+            'plugin',
+         ).ok,
+      ).toBe(true);
+      registry.register(script('alpha'), async () => 'a');
+      for (const name of ['small-a__tool', 'small-b__tool']) {
+         expect(
+            registry.register(
+               script(name, { moduleId: name.split('__')[0] }),
+               async () => 's',
+               'plugin',
+            ).ok,
+         ).toBe(true);
+      }
+      const socket = makeFakeSocket(true);
+      wire(socket);
+      acceptIdentify(socket);
+      expect(socket.registries[0].payload.scripts.map((definition) => definition.name)).toEqual([
+         'alpha',
+         'small-a__tool',
+         'small-b__tool',
+      ]);
+      expect(
+         log.mock.calls.map(([line]) => line).filter((line) => line.includes('registry push left out')),
+      ).toEqual([
+         'Wiretap | registry push left out plugin tool "big-mod__huge": the registry message would exceed 900000 ' +
+            'bytes (the sidecar\'s Socket.IO message bound is 1000000 bytes)',
+      ]);
+   });
+
+   it('leaves out the later of two equal-size plugin tools first, and keeps the shipped tools', () => {
+      /** @type {import('vitest').Mock} The registry's log sink. */
+      const log = vi.fn();
+      registry = createScriptRegistry({ log });
+      registry.register(script('alpha'), async () => 'a');
+      for (const name of ['mod-a__tool', 'mod-b__tool']) {
+         expect(
+            registry.register(
+               script(name, {
+                  moduleId: name.split('__')[0],
+                  description: 'd'.repeat(500_000),
+               }),
+               async () => 'p',
+               'plugin',
+            ).ok,
+         ).toBe(true);
+      }
+      const socket = makeFakeSocket(true);
+      wire(socket);
+      acceptIdentify(socket);
+      expect(socket.registries[0].payload.scripts.map((definition) => definition.name)).toEqual([
+         'alpha',
+         'mod-a__tool',
+      ]);
+      expect(
+         log.mock.calls.map(([line]) => line).filter((line) => line.includes('registry push left out')),
+      ).toHaveLength(1);
+      expect(log.mock.calls.flat().join('\n')).toContain('left out plugin tool "mod-b__tool"');
+   });
+
    it('pushes a change once per wiring when the bridge is wired twice', async () => {
       const socket = makeFakeSocket(true);
       wire(socket);
