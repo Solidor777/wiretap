@@ -13,7 +13,6 @@
  * divide the byte size printed here by the token difference. Use at most `LIVE_RECALIBRATION_MAX_RUNS` live runs;
  * tokenizers and Claude Code behaviour change between versions.
  */
-import { getBudget } from '../../shared/budgets.js';
 import { FIXTURES, HELPER_TOOL_NAME, collectReport, startHarness } from '../unit/contextBudgetHarness.js';
 
 /**
@@ -52,8 +51,7 @@ try {
       );
    }
    console.log(
-      `total: ${shipped.length} tools (max ${getBudget('ALWAYS_LISTED_TOOLS_MAX').value}), ${shippedBytes} bytes ` +
-         `(max ${getBudget('ALL_DEFINITIONS_MAX_BYTES').value}), about ${Math.round(shippedBytes / 2)} tokens`,
+      `total: ${shipped.length} tools, ${shippedBytes} bytes, about ${Math.round(shippedBytes / 2)} tokens`,
    );
    console.log('');
    console.log('Fixture results against their budgets');
