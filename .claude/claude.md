@@ -64,6 +64,15 @@
 
 ## Project Scope
 
+### Shared resources
+Only one task at a time may use each of these. Tasks run in parallel only when they share none of them.
+
+| Resource | Used by | How to tell it is free |
+|---|---|---|
+| Live Foundry server on port 30000, sidecar ports 31416-31419 | `npx playwright test` (starts its own Foundry and sidecar) | No listener on any of the five ports (`Get-NetTCPConnection -LocalPort 30000,31416,31417,31418,31419 -State Listen` returns nothing), and no other e2e run is active, this project's or titan's (the Foundry user data and the `test-titan` world are shared) |
+| `dist/` | `npm run build`, the e2e build | No build or e2e run in progress; after an e2e run, `npm run build`, recycle the e2e chunks, then `npm run check:release` passes |
+| Shared Foundry `Data/modules` folder and the `test-titan` world's module configuration | e2e tasks that install or enable a fixture module | No e2e run in progress, and the world's module configuration matches what the last run recorded and restored |
+
 ### Test Waits
 - Every wait on something inside an already-loaded page is at most 1000 ms: `expect.poll`, `waitForFunction`, `titanWait`, `toPass`, and explicit `timeout:` values on assertions and actions. The e2e suite runs on one machine, so replicated updates and renders land at once.
 - A wait that needs longer is a defect to find and fix, not a ceiling to raise.
