@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { getBudget } from '../../shared/budgets.js';
 import {
+   SCHEMA_EXPANDED_NODES_MAX,
    SCHEMA_GUIDELINES,
    compileSchema,
    guidelineWarning,
@@ -1226,6 +1227,101 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
       expect(argumentSchema(sidecar).safeParse(many).success).toBe(true);
    });
 
+   it('refuses a reused object 32 levels deep by its expanded size, quickly, on both sides and for every source', () => {
+      /** @type {object} One object reused as both properties of the level above, 32 object levels in all. */
+      let node = { type: 'boolean' };
+      for (let level = 0; level < 32; level += 1) {
+         node = {
+            type: 'object',
+            properties: {
+               a: node,
+               b: node,
+            },
+         };
+      }
+      /** @type {string} The expanded-size refusal. */
+      const reason = `schema expands to more than ${SCHEMA_EXPANDED_NODES_MAX} nodes, more than one registry message ` +
+         'can carry';
+      // Fully expanded, this schema has 2^33 - 1 nodes; the walk stops after 60,001. The fixed times are in
+      // milliseconds: the sidecar's walk builds a zod type per node, so it is slower than the client's.
+      /** @type {number} When the client compile starts. */
+      const clientStart = performance.now();
+      expect(compileSchema(node, { source: 'plugin' })).toEqual({
+         ok: false,
+         reason,
+      });
+      expect(performance.now() - clientStart).toBeLessThan(250);
+      /** @type {number} When the sidecar conversion starts. */
+      const sidecarStart = performance.now();
+      expect(jsonSchemaToZodShape(node, false, 'plugin')).toEqual({
+         ok: false,
+         reason,
+      });
+      expect(performance.now() - sidecarStart).toBeLessThan(2000);
+      expect(compileSchema(node).ok).toBe(false);
+      expect(jsonSchemaToZodShape(node).ok).toBe(false);
+   });
+
+   it('compiles a schema that reuses one small sub-schema in two properties', () => {
+      /** @type {object} The reused sub-schema. */
+      const shared = {
+         type: 'object',
+         properties: { x: { type: 'integer' } },
+         required: ['x'],
+      };
+      const schema = {
+         type: 'object',
+         properties: {
+            from: shared,
+            to: shared,
+         },
+      };
+      const client = compileSchema(schema);
+      const sidecar = jsonSchemaToZodShape(schema);
+      expect(client.ok).toBe(true);
+      expect(sidecar.ok).toBe(true);
+      expect(client.listed).toEqual(toJsonSchemaCompat(argumentSchema(sidecar), {
+         strictUnions: true,
+         pipeStrategy: 'input',
+      }));
+      expect(client.validate({
+         from: { x: 1 },
+         to: { x: 2 },
+      }).ok).toBe(true);
+      expect(client.validate({ from: {} }).ok).toBe(false);
+   });
+
+   it('accepts a plugin schema of exactly the expanded-node limit and refuses one node more, on both sides', () => {
+      expect(SCHEMA_EXPANDED_NODES_MAX).toBe(60_000);
+      /**
+       * Build an object root with `count - 1` boolean properties, so the schema has `count` nodes.
+       * @param {number} count - The node count.
+       * @returns {object} The schema.
+       */
+      const flat = (count) => {
+         return {
+            type: 'object',
+            properties: booleans(count - 1),
+         };
+      };
+      const atLimit = flat(SCHEMA_EXPANDED_NODES_MAX);
+      /** @type {string[]} The warnings of the schema at the limit. */
+      const warnings = [
+         'schema has 60000 nodes, over the 64-node guideline',
+         'an object schema has 59999 properties, over the 32-property guideline',
+      ];
+      expect(compileSchema(atLimit, { source: 'plugin' }).warnings).toEqual(warnings);
+      expect(jsonSchemaToZodShape(atLimit, false, 'plugin').warnings).toEqual(warnings);
+      const overLimit = flat(SCHEMA_EXPANDED_NODES_MAX + 1);
+      /** @type {{ ok: false, reason: string }} The refusal of one node more. */
+      const refusal = {
+         ok: false,
+         reason: 'schema expands to more than 60000 nodes, more than one registry message can carry',
+      };
+      expect(compileSchema(overLimit, { source: 'plugin' })).toEqual(refusal);
+      expect(jsonSchemaToZodShape(overLimit, false, 'plugin')).toEqual(refusal);
+   });
+
    it.each([
       [
          'a $ref keyword',
@@ -1350,6 +1446,119 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
       const validSchema = textSchema({ maxLength: 10 });
       expect(compileSchema(validSchema).warnings).toEqual([]);
       expect(jsonSchemaToZodShape(validSchema).warnings).toEqual([]);
+   });
+
+   it('refuses a malformed bound as not a non-negative integer and a shipped bound over the guideline by its limit',
+      () => {
+         for (const sidecar of [false, true]) {
+            /**
+             * Judge a schema on the side under test.
+             * @param {object} schema - The JSON Schema to judge.
+             * @returns {{ ok: boolean, reason?: string }} The outcome.
+             */
+            const judge = (schema) => {
+               return sidecar ? jsonSchemaToZodShape(schema) : compileSchema(schema);
+            };
+            expect(judge(rootOf({
+               type: 'string',
+               maxLength: -1,
+            }))).toEqual({
+               ok: false,
+               reason: 'maxLength must be a non-negative integer',
+            });
+            expect(judge(rootOf({
+               type: 'string',
+               minLength: 100001,
+            }))).toEqual({
+               ok: false,
+               reason: 'minLength must be at most 100000',
+            });
+            expect(judge(rootOf({
+               type: 'array',
+               items: { type: 'string' },
+               maxItems: 10,
+               minItems: 100001,
+            }))).toEqual({
+               ok: false,
+               reason: 'minItems must be at most 100000',
+            });
+            expect(judge(rootOf({
+               type: 'array',
+               items: { type: 'string' },
+               maxItems: 100001,
+            }))).toEqual({
+               ok: false,
+               reason: 'an array schema needs a maxItems of 0 to 1000',
+            });
+         }
+      });
+
+   it('compiles, converts and validates a schema of 40,000 properties, 9,000 required, in linear time', () => {
+      // The fixed times, in milliseconds. The linear steps measure 19 to 31 ms (client compile), 2 to 3 ms (client
+      // validation) and 226 to 292 ms (sidecar conversion, mostly zod building 40,000 property types); with a list scan
+      // per name they take 0.4 to 3.4 s, 0.2 s and 0.6 to 0.9 s. Zod's own parse measures 265 to 738 ms.
+      /** @type {number} The time a client step must finish in. */
+      const clientMaxMs = 150;
+      /** @type {number} The time the sidecar conversion must finish in. */
+      const convertMaxMs = 600;
+      /** @type {number} The time a zod parse must finish in. */
+      const parseMaxMs = 2000;
+      /** @type {string[]} The property names. */
+      const names = Array.from({ length: 40_000 }, (_, i) => `p${i}`);
+      // The required names are the last ones, so a list scan for any of them would run nearly the whole list. 9,000
+      // keeps a full argument under the client's value bound of 10,000.
+      /** @type {string[]} The required names. */
+      const required = names.slice(-9_000);
+      const schema = {
+         type: 'object',
+         properties: Object.fromEntries(names.map((name) => [
+            name,
+            { type: 'boolean' },
+         ])),
+         required,
+         additionalProperties: false,
+      };
+      /** @type {Record<string, boolean>} An argument that sets every required property. */
+      const full = Object.fromEntries(required.map((name) => [
+         name,
+         true,
+      ]));
+      /**
+       * Run one step and assert it finished within a fixed time.
+       * @template T
+       * @param {number} maxMs - The fixed time, in milliseconds.
+       * @param {() => T} step - The work to time.
+       * @returns {T} Its result.
+       */
+      const timed = (maxMs, step) => {
+         const start = performance.now();
+         const result = step();
+         expect(performance.now() - start).toBeLessThan(maxMs);
+         return result;
+      };
+      const client = timed(clientMaxMs, () => compileSchema(schema, { source: 'plugin' }));
+      const sidecar = timed(convertMaxMs, () => jsonSchemaToZodShape(schema, false, 'plugin'));
+      expect(client.ok).toBe(true);
+      expect(sidecar.ok).toBe(true);
+      const parser = argumentSchema(sidecar);
+      expect(timed(clientMaxMs, () => client.validate(full)).ok).toBe(true);
+      expect(timed(parseMaxMs, () => parser.safeParse(full)).success).toBe(true);
+      const extra = {
+         ...full,
+         x: true,
+      };
+      expect(timed(clientMaxMs, () => client.validate(extra))).toEqual({
+         ok: false,
+         error: 'arguments: has a property that is not an argument',
+      });
+      expect(timed(parseMaxMs, () => parser.safeParse(extra)).success).toBe(false);
+      const missing = { ...full };
+      delete missing.p39999;
+      expect(timed(clientMaxMs, () => client.validate(missing))).toEqual({
+         ok: false,
+         error: 'p39999: is required',
+      });
+      expect(timed(parseMaxMs, () => parser.safeParse(missing)).success).toBe(false);
    });
 
    it('names the guidelines in warning order and checks a description without a length limit', () => {

@@ -15,6 +15,7 @@ import {
    SCHEMA_DEPTH_MAX,
    SCHEMA_ENUM_MAX,
    SCHEMA_ENUM_VALUE_MAX_CHARS,
+   SCHEMA_EXPANDED_NODES_MAX,
    SCHEMA_GUIDELINES,
    SCHEMA_NODES_MAX,
    SCHEMA_PLUGIN_DEPTH_MAX,
@@ -166,20 +167,25 @@ function holdGuideline(
  * @param {Record<string, unknown>} node - The schema node.
  * @param {string} keyword - `minLength`, `maxLength`, `minItems` or `maxItems`.
  * @param {ConvertState} state - The conversion state.
+ * @param {string} [overGuideline] - The reason a shipped bound over the guideline is refused with; by default it names
+ * the guideline's limit.
  * @returns {number | undefined} The bound, or undefined when the node does not declare it.
  */
-function readBound(node: Record<string, unknown>, keyword: string, state: ConvertState): number | undefined {
+function readBound(
+   node: Record<string, unknown>,
+   keyword: string,
+   state: ConvertState,
+   overGuideline: string = `${keyword} must be at most ${SCHEMA_BOUND_MAX}`,
+): number | undefined {
    // The declared bound.
    const value: unknown = ownValue(node, keyword);
    if (value === undefined) {
       return undefined;
    }
-   // The refusal reason for this keyword.
-   const reason: string = `${keyword} must be a non-negative integer`;
    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
-      throw new SchemaRefusal(reason);
+      throw new SchemaRefusal(`${keyword} must be a non-negative integer`);
    }
-   holdGuideline(state, 'bound', value, SCHEMA_BOUND_MAX, reason);
+   holdGuideline(state, 'bound', value, SCHEMA_BOUND_MAX, overGuideline);
    return value;
 }
 
@@ -192,6 +198,12 @@ function readBound(node: Record<string, unknown>, keyword: string, state: Conver
  */
 function convertNode(node: unknown, depth: number, state: ConvertState): ZodType {
    state.nodes += 1;
+   if (state.nodes > SCHEMA_EXPANDED_NODES_MAX) {
+      // Checked before anything else of the node, so a reused object costs at most this many node visits.
+      throw new SchemaRefusal(
+         `schema expands to more than ${SCHEMA_EXPANDED_NODES_MAX} nodes, more than one registry message can carry`,
+      );
+   }
    holdGuideline(state, 'nodes', state.nodes, SCHEMA_NODES_MAX, `schema has more than ${SCHEMA_NODES_MAX} nodes`);
    if (!isRecord(node)) {
       throw new SchemaRefusal('a schema node is not an object');
@@ -202,7 +214,7 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
       throw new SchemaRefusal('type must be one of string, number, integer, boolean, array or object');
    }
    if (type === 'object' || type === 'array') {
-      // Checked before descending, so the recursion never goes deeper than the ceiling plus one frame.
+      // Checked before descending, so the recursion never nests more than one level past the ceiling.
       if (depth > SCHEMA_PLUGIN_DEPTH_MAX) {
          throw new SchemaRefusal(`schema nests objects and arrays deeper than ${SCHEMA_PLUGIN_DEPTH_MAX} levels`);
       }
@@ -290,8 +302,6 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
          // The array schema, extended by the declared bounds.
          let list: z.ZodArray = z.array(convertNode(ownValue(node, 'items'), depth + 1, state));
          const minItems: number | undefined = readBound(node, 'minItems', state);
-         // The declared item cap; a plugin array may leave it out and is then listed and parsed without one.
-         const maxItems: number | undefined = readBound(node, 'maxItems', state);
          if (minItems !== undefined) {
             list = list.min(minItems);
          }
@@ -299,6 +309,9 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
          const itemsCap: number = getBudget('SCHEMA_ARRAY_ITEMS_MAX').value;
          // The reason a shipped array over the item guideline is refused with.
          const capReason: string = `an array schema needs a maxItems of 0 to ${itemsCap}`;
+         // The declared item cap; a plugin array may leave it out and is then listed and parsed without one. A shipped
+         // maxItems over the bound guideline is also over the tighter item cap, so it is refused with the cap text.
+         const maxItems: number | undefined = readBound(node, 'maxItems', state, capReason);
          if (maxItems === undefined) {
             // A missing cap counts as one array over the guideline; its warning carries no measured value.
             holdGuideline(state, 'maxItemsMissing', 1, 0, capReason);
@@ -362,6 +375,8 @@ function convertObjectShape(node: Record<string, unknown>, depth: number, state:
    }
    // The property names, own and enumerable.
    const names: string[] = Object.keys(properties);
+   // The property names, for constant-time lookups that keep the conversion linear in the schema.
+   const declared: Set<string> = new Set(names);
    holdGuideline(
       state,
       'properties',
@@ -373,8 +388,10 @@ function convertObjectShape(node: Record<string, unknown>, depth: number, state:
    if (!Array.isArray(requiredList) || !requiredList.every((name) => typeof name === 'string')) {
       throw new SchemaRefusal('required must be an array of property names');
    }
-   for (const name of requiredList as string[]) {
-      if (!names.includes(name)) {
+   // The names a value must set, for constant-time lookups.
+   const requiredNames: Set<string> = new Set(requiredList as string[]);
+   for (const name of requiredNames) {
+      if (!declared.has(name)) {
          throw new SchemaRefusal('required names a property that is not declared');
       }
    }
@@ -386,7 +403,7 @@ function convertObjectShape(node: Record<string, unknown>, depth: number, state:
       }
       // The property's zod type, optional unless required.
       let type: ZodType = convertNode(properties[name], depth + 1, state);
-      if (!(requiredList as string[]).includes(name)) {
+      if (!requiredNames.has(name)) {
          type = type.optional();
       }
       // The description sits on the outermost type so the SDK lists it.
@@ -413,8 +430,11 @@ export function argumentSchema(converted: { shape: ZodRawShape; strict: boolean 
  * `maximum`), `boolean`, `array` (with `items`, `minItems`, `maxItems`) or nested `object`, each with an optional
  * `description`; `required`; and `additionalProperties: false`. Every other keyword (references, combinators,
  * patterns, formats, defaults, constants) refuses the schema for every source: a pattern is attacker-supplied
- * regular-expression work and a combinator or reference cannot be bounded. Nesting deeper than
- * `SCHEMA_PLUGIN_DEPTH_MAX` levels is refused for every source, so the recursive conversion cannot overflow the stack.
+ * regular-expression work and a combinator or reference cannot be bounded. Server protection, for every source: nesting
+ * deeper than `SCHEMA_PLUGIN_DEPTH_MAX` levels is refused, so the recursive conversion cannot overflow the stack, and a
+ * schema whose walk expands past `SCHEMA_EXPANDED_NODES_MAX` nodes (a reused object counted every time it appears) is
+ * refused, so a schema that reuses one object at several levels costs bounded work. Name lookups use sets, so the
+ * conversion is linear in the schema.
  * Plugin switch: the complexity guidelines of `shared/schemaValidate.js` (`SCHEMA_GUIDELINES`) refuse a `shipped`
  * schema and only warn for a `plugin` one, with the same rules and texts as `compileSchema` there; a plugin array
  * without `maxItems` has no `.max()`.

@@ -8,9 +8,13 @@
  * are `string` (`enum`, `minLength`, `maxLength`), `number` and `integer` (`minimum`, `maximum`), `boolean`, `array`
  * (`items`, `minItems`, `maxItems`) or nested `object` (`properties`, `required`, `additionalProperties: false`), each
  * with an optional non-empty single-line `description`; bounds are non-negative integers, an enum is a non-empty list
- * of strings, and property names match `[A-Za-z_][A-Za-z0-9_]{0,63}` and are not `Object.prototype` members. Object
- * and array nesting deeper than `SCHEMA_PLUGIN_DEPTH_MAX` (32) levels is refused for every source, so a hostile schema
- * cannot overflow the stack of either side.
+ * of strings, and property names match `[A-Za-z_][A-Za-z0-9_]{0,63}` and are not `Object.prototype` members.
+ *
+ * Server protection, for every source: object and array nesting deeper than `SCHEMA_PLUGIN_DEPTH_MAX` (32) levels is
+ * refused, so a hostile schema cannot overflow the stack of either side; and a schema whose walk expands past
+ * `SCHEMA_EXPANDED_NODES_MAX` (60,000) nodes is refused, each reused object counted every time it appears, so a
+ * schema built in code that reuses one object at several levels costs bounded work. Each object's names are held in
+ * sets, so the compile and every validation take time linear in the schema and the value.
  *
  * Plugin switch: the complexity guidelines (`SCHEMA_GUIDELINES`: nesting of 4 levels, the root being level 1; 64
  * schema nodes; 32 properties per object; 32 enum values of at most 64 characters; string and item-count bounds of at
@@ -72,44 +76,57 @@ export const VALUE_NODES_MAX = 10_000;
 export const VALIDATION_ERROR_MAX_BYTES = 256;
 
 /**
- * Deepest object and array nesting guideline of a schema; the root object is level 1 and scalar leaves are not counted.
+ * Guideline for the deepest object and array nesting of a schema; the root object is level 1 and scalar leaves are not
+ * counted. Deeper refuses a shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_DEPTH_MAX = 4;
 
 /**
- * Deepest object and array nesting of any schema, plugin ones included; deeper is refused. It protects the recursive
- * compile and conversion from a stack overflow.
+ * Server protection: the deepest object and array nesting of any schema, plugin ones included; deeper is refused for
+ * every source. It bounds the recursion of the compile and the conversion, so neither can overflow the stack.
  * @type {number}
  */
 export const SCHEMA_PLUGIN_DEPTH_MAX = 32;
 
 /**
- * Most schema nodes in one schema.
+ * Server protection: the most schema nodes the walk expands, for every source. A schema built in code can reuse one
+ * object at several levels, and the walk visits it each time it appears, so the count is of expanded nodes, and the
+ * walk stops as soon as it passes this limit. No schema of more nodes fits in one registry message: the client's
+ * registry push is bounded to 900,000 bytes of JSON and every node serializes to at least 15 bytes (the shortest,
+ * `{"type":"string"}`, is 17), and 900,000 / 15 = 60,000.
+ * @type {number}
+ */
+export const SCHEMA_EXPANDED_NODES_MAX = 60_000;
+
+/**
+ * Guideline for the most schema nodes in one schema; more refuses a shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_NODES_MAX = 64;
 
 /**
- * Most properties of one object schema.
+ * Guideline for the most properties of one object schema; more refuses a shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_PROPERTIES_MAX = 32;
 
 /**
- * Most values of one string enum.
+ * Guideline for the most values of one string enum; more refuses a shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_ENUM_MAX = 32;
 
 /**
- * Longest value of a string enum, in characters.
+ * Guideline for the longest value of a string enum, in characters; longer refuses a shipped schema and warns for a
+ * plugin one.
  * @type {number}
  */
 export const SCHEMA_ENUM_VALUE_MAX_CHARS = 64;
 
 /**
- * Largest `minLength`, `maxLength`, `minItems` or `maxItems` a schema may declare.
+ * Guideline for the largest `minLength`, `maxLength`, `minItems` or `maxItems` a schema declares; larger refuses a
+ * shipped schema and warns for a plugin one.
  * @type {number}
  */
 export const SCHEMA_BOUND_MAX = 100_000;
@@ -304,21 +321,21 @@ function holdGuideline(state, guideline, measured, limit, refusal) {
  * @param {Record<string, unknown>} node - The schema node.
  * @param {string} keyword - `minLength`, `maxLength`, `minItems` or `maxItems`.
  * @param {CompileState} state - The compile state.
+ * @param {string} [overGuideline] - The reason a shipped bound over the guideline is refused with; by default it names
+ * the guideline's limit.
  * @returns {number | undefined} The bound, or undefined when the node does not declare it.
  * @throws {SchemaRefusal} When the bound is not a non-negative integer, or a shipped one passes the guideline.
  */
-function readBound(node, keyword, state) {
+function readBound(node, keyword, state, overGuideline = `${keyword} must be at most ${SCHEMA_BOUND_MAX}`) {
    /** @type {unknown} The declared bound. */
    const value = ownValue(node, keyword);
    if (value === undefined) {
       return undefined;
    }
-   /** @type {string} The refusal reason for this keyword. */
-   const reason = `${keyword} must be a non-negative integer`;
    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
-      throw new SchemaRefusal(reason);
+      throw new SchemaRefusal(`${keyword} must be a non-negative integer`);
    }
-   holdGuideline(state, 'bound', value, SCHEMA_BOUND_MAX, reason);
+   holdGuideline(state, 'bound', value, SCHEMA_BOUND_MAX, overGuideline);
    return value;
 }
 
@@ -456,12 +473,13 @@ function compileArray(node, depth, counter) {
    const element = compileNode(ownValue(node, 'items'), depth + 1, counter);
    /** @type {number | undefined} The declared minimum item count. */
    const minItems = readBound(node, 'minItems', counter);
-   /** @type {number | undefined} The declared maximum item count; a plugin array may leave it out. */
-   const maxItems = readBound(node, 'maxItems', counter);
    /** @type {number} The item cap guideline, which binds every shipped array. */
    const itemsCap = getBudget('SCHEMA_ARRAY_ITEMS_MAX').value;
    /** @type {string} The reason a shipped array over the item guideline is refused with. */
    const capReason = `an array schema needs a maxItems of 0 to ${itemsCap}`;
+   // A shipped maxItems over the bound guideline is also over the tighter item cap, so it is refused with the cap text.
+   /** @type {number | undefined} The declared maximum item count; a plugin array may leave it out. */
+   const maxItems = readBound(node, 'maxItems', counter, capReason);
    if (maxItems === undefined) {
       // A missing cap counts as one array over the guideline; its warning carries no measured value.
       holdGuideline(counter, 'maxItemsMissing', 1, 0, capReason);
@@ -523,6 +541,8 @@ function compileObject(node, depth, counter) {
    }
    /** @type {string[]} The property names, own and enumerable. */
    const names = Object.keys(properties);
+   /** @type {Set<string>} The property names, for constant-time lookups that keep the work linear in the schema. */
+   const declared = new Set(names);
    holdGuideline(
       counter,
       'properties',
@@ -535,8 +555,10 @@ function compileObject(node, depth, counter) {
    if (!Array.isArray(requiredList) || !requiredList.every((name) => typeof name === 'string')) {
       throw new SchemaRefusal('required must be an array of property names');
    }
-   for (const name of requiredList) {
-      if (!names.includes(name)) {
+   /** @type {Set<string>} The names a value must set, for constant-time lookups. */
+   const requiredNames = new Set(requiredList);
+   for (const name of requiredNames) {
+      if (!declared.has(name)) {
          throw new SchemaRefusal('required names a property that is not declared');
       }
    }
@@ -548,7 +570,7 @@ function compileObject(node, depth, counter) {
       }
       fields.push({
          name,
-         required: requiredList.includes(name),
+         required: requiredNames.has(name),
          check: compileNode(properties[name], depth + 1, counter),
       });
    }
@@ -556,7 +578,7 @@ function compileObject(node, depth, counter) {
       if (!isRecord(value)) {
          return problem(path || 'arguments', 'expected an object');
       }
-      if (strict && Object.keys(value).some((key) => !names.includes(key))) {
+      if (strict && Object.keys(value).some((key) => !declared.has(key))) {
          return problem(path || 'arguments', 'has a property that is not an argument');
       }
       /** @type {Record<string, unknown>} The cleaned copy: declared properties only. */
@@ -597,6 +619,12 @@ function compileObject(node, depth, counter) {
  */
 function compileNode(node, depth, counter) {
    counter.nodes += 1;
+   if (counter.nodes > SCHEMA_EXPANDED_NODES_MAX) {
+      // Checked before anything else of the node, so a reused object costs at most this many node visits.
+      throw new SchemaRefusal(
+         `schema expands to more than ${SCHEMA_EXPANDED_NODES_MAX} nodes, more than one registry message can carry`,
+      );
+   }
    holdGuideline(
       counter,
       'nodes',
@@ -613,7 +641,7 @@ function compileNode(node, depth, counter) {
       throw new SchemaRefusal('type must be one of string, number, integer, boolean, array or object');
    }
    if (type === 'object' || type === 'array') {
-      // Checked before descending, so the recursion never goes deeper than the ceiling plus one frame.
+      // Checked before descending, so the recursion never nests more than one level past the ceiling.
       if (depth > SCHEMA_PLUGIN_DEPTH_MAX) {
          throw new SchemaRefusal(`schema nests objects and arrays deeper than ${SCHEMA_PLUGIN_DEPTH_MAX} levels`);
       }
