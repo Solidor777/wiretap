@@ -14,7 +14,7 @@ import {
    PROTOCOL_VERSION,
    TOOL_GONE,
 } from '../shared/protocol.js';
-import { closedGateState, gateDenial, sanitizeGateState, type GateState } from '../shared/gates.js';
+import { closedGateState, gateDenial, isModuleAllowed, sanitizeGateState, type GateState } from '../shared/gates.js';
 import { sanitizeBridgeSettings, type BridgeSettings } from '../shared/bridgeSettings.js';
 import { BACKUP_SIDECAR_CODES } from '../shared/backup.js';
 import type { RegistryTool } from './toolRegistry.ts';
@@ -94,7 +94,7 @@ export interface EndpointSnapshot {
 export interface ToolInvokeOptions {
    // Restricts the choice to one endpoint kind, with no fallback.
    endpoint?: EndpointKind;
-   // The definition the caller listed to its client; the picked endpoint's own declaration must match its gate.
+   // The definition the caller listed to its client; the picked endpoint's own declaration must match its gates.
    listed: RegistryTool;
 }
 
@@ -110,7 +110,8 @@ export interface EndpointRegistry {
    get: (socketId: string) => Endpoint | undefined;
    // Sets a registered socket's health; ignored for an unregistered socket.
    setHealth: (socketId: string, health: EndpointHealth) => void;
-   // Replaces a registered socket's gate snapshot (already sanitized); ignored for an unregistered socket.
+   // Replaces a registered socket's gate snapshot (already sanitized); ignored for an unregistered socket. Notifies the
+   // subscribers when the `allowedPluginModules` list differs (other ids, or the same ids in another order).
    setGateState: (socketId: string, gateState: GateState) => void;
    // Replaces a registered socket's bridge settings (already sanitized); ignored for an unregistered socket.
    setSettings: (socketId: string, settings: BridgeSettings) => void;
@@ -120,8 +121,9 @@ export interface EndpointRegistry {
    // Replaces a registered socket's tools (already sanitized); ignored for an unregistered socket.
    setTools: (socketId: string, tools: RegistryTool[]) => void;
    // Calls the listener after every change that can alter which endpoint a call reaches or which tools it lists:
-   // a register, a remove, a health change and a tool replacement. A gate state or settings change does not notify.
-   // The listener runs synchronously inside the change and must not throw. Returns the function that unsubscribes it.
+   // a register, a remove, a health change, a tool replacement and an `allowedPluginModules` change. A change of any
+   // other gate or of the settings does not notify. The listener runs synchronously inside the change and must not
+   // throw. Returns the function that unsubscribes it.
    subscribe: (listener: () => void) => () => void;
 }
 
@@ -129,10 +131,11 @@ export interface EndpointRegistry {
 export interface Router {
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
    // Runs the `callTool` operation for a registry tool on the picked endpoint. The tool is resolved by name on that
-   // endpoint: its own declaration (not the listed one) supplies the gate that is judged against that endpoint's
-   // snapshot and is returned with the result. Fails with TOOL_GONE when the endpoint no longer registers the name or
-   // declares other arguments for it, and with GATE_DENIED when its declared gate differs from the listed one. A
-   // different description or result budget does not fail the call; the picked endpoint's budget applies.
+   // endpoint: its own declaration (not the listed one) supplies the gates that are judged in order against that
+   // endpoint's snapshot and is returned with the result. Fails with TOOL_GONE when the endpoint no longer registers the
+   // name or declares other arguments for it, and with GATE_DENIED when its gates differ from the listed ones or one of
+   // them is closed. A different description or result budget does not fail the call; the picked endpoint's budget
+   // applies.
    invokeTool: (
       name: string,
       args: Record<string, unknown>,
@@ -145,8 +148,9 @@ export interface Router {
    // Copies the socket id, gate snapshot and settings of the endpoint a plain `invoke` with the same `endpoint` option
    // would pick now; undefined when none is healthy. Like `gateState` it is not a gate check.
    snapshot: (options?: InvokeOptions) => EndpointSnapshot | undefined;
-   // Copies the tool list of the endpoint a call with the same `endpoint` option would reach now; empty when none is
-   // eligible. Like `gateState` it is a listing aid, not a guarantee that a later `invoke` reaches the same endpoint.
+   // Copies the tool list of the endpoint a call with the same `endpoint` option would reach now, without the plugin
+   // tools whose module that endpoint's snapshot does not allow; empty when none is eligible. Like `gateState` it is a
+   // listing aid, not a guarantee that a later `invoke` reaches the same endpoint.
    tools: (options?: InvokeOptions) => RegistryTool[];
    // Stops probing a socket's endpoint; called when the socket disconnects.
    forget: (socketId: string) => void;
@@ -288,16 +292,26 @@ function toolReplyWaitMs(listed: RegistryTool, args: Record<string, unknown>): n
 }
 
 /**
- * Compare two optional gate declarations.
- * @param {RequiredGate | undefined} a - The first declaration.
- * @param {RequiredGate | undefined} b - The second declaration.
- * @returns {boolean} Whether both declare no gate, or both declare the same gate and module id.
+ * Compare two gate lists.
+ * @param {RequiredGate[]} a - The first list.
+ * @param {RequiredGate[]} b - The second list.
+ * @returns {boolean} Whether both have the same length and the same gate and module id at each index.
  */
-function sameGate(a: RequiredGate | undefined, b: RequiredGate | undefined): boolean {
-   if (a === undefined || b === undefined) {
-      return a === b;
-   }
-   return a.gate === b.gate && a.moduleId === b.moduleId;
+function sameGates(a: RequiredGate[], b: RequiredGate[]): boolean {
+   return (
+      a.length === b.length &&
+      a.every((entry, index) => entry.gate === b[index].gate && entry.moduleId === b[index].moduleId)
+   );
+}
+
+/**
+ * Compare two sanitized module lists.
+ * @param {readonly string[]} a - The first list.
+ * @param {readonly string[]} b - The second list.
+ * @returns {boolean} Whether both hold the same ids in the same order.
+ */
+function sameModules(a: readonly string[], b: readonly string[]): boolean {
+   return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
 /** The structured error every bridge failure is thrown as. */
@@ -360,7 +374,7 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
    const listeners: Set<() => void> = new Set();
 
    /**
-    * Tell every listener that the endpoint set, an endpoint's health or its tools changed.
+    * Tell every listener that the endpoint set, an endpoint's health, its tools or its allowed plugin modules changed.
     * @returns {void}
     */
    function notify(): void {
@@ -438,7 +452,8 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       },
 
       /**
-       * Replace a registered endpoint's gate snapshot.
+       * Replace a registered endpoint's gate snapshot, and notify when its `allowedPluginModules` list changed, since
+       * that list decides which plugin tools the endpoint's sessions list.
        * @param {string} socketId - The socket id; an unregistered socket is ignored.
        * @param {GateState} gateState - The new snapshot, already sanitized.
        * @returns {void}
@@ -446,7 +461,15 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       setGateState(socketId: string, gateState: GateState): void {
          const existing: Endpoint | undefined = endpoints.get(socketId);
          if (existing) {
+            // Whether the plugin modules the endpoint allows differ from the stored ones.
+            const modulesChanged: boolean = !sameModules(
+               existing.gateState.allowedPluginModules,
+               gateState.allowedPluginModules,
+            );
             existing.gateState = gateState;
+            if (modulesChanged) {
+               notify();
+            }
          }
       },
 
@@ -491,7 +514,7 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       },
 
       /**
-       * Subscribe to endpoint-set, health and tool changes.
+       * Subscribe to endpoint-set, health, tool and `allowedPluginModules` changes.
        * @param {() => void} listener - Called synchronously after each change; must not throw.
        * @returns {() => void} The function that removes the listener.
        */
@@ -846,9 +869,10 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
    }
 
    /**
-    * Pick one endpoint, judge the gate on it and run an operation there. With `listed`, the operation is a registry
+    * Pick one endpoint, judge the gates on it and run an operation there. With `listed`, the operation is a registry
     * tool call: the tool is looked up by `listed.name` on the picked endpoint and that endpoint's own declaration
-    * supplies the gate, so a tool listed from one endpoint never borrows the declaration of another.
+    * supplies the gates (a plugin tool's module gate, then its declared gate), so a tool listed from one endpoint never
+    * borrows the declaration of another.
     * @param {string} op - The operation name.
     * @param {object} params - The operation parameters.
     * @param {InvokeOptions} options - `endpoint` restricts the kind; `requireGate` is the gate of a plain call;
@@ -876,8 +900,9 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
             .some((candidate) => kinds.includes(candidate.kind) && (!dom || candidate.dom));
          throw stuck ? endpointUnavailable(options.endpoint) : noEndpoint(options.endpoint, dom);
       }
-      // The gate to judge: the picked endpoint's own declaration of the tool for a registry tool call.
-      let requireGate: RequiredGate | undefined = options.requireGate;
+      // The gates to judge, in order: the picked endpoint's own declaration of the tool for a registry tool call, else
+      // the plain call's `requireGate`.
+      let requiredGates: RequiredGate[] = options.requireGate === undefined ? [] : [options.requireGate];
       // The picked endpoint's declaration of the listed tool.
       let declared: RegistryTool | undefined;
       if (listed) {
@@ -885,11 +910,11 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
          if (!declared) {
             throw new BridgeError(TOOL_GONE, 'The Foundry endpoint no longer registers this tool.');
          }
-         if (!sameGate(declared.gate, listed.gate)) {
-            deps.log(`Wiretap sidecar | invoke ${op} denied: the endpoint declares a different gate for the tool`);
+         if (!sameGates(declared.gates, listed.gates)) {
+            deps.log(`Wiretap sidecar | invoke ${op} denied: the endpoint declares different gates for the tool`);
             throw new BridgeError(
                GATE_DENIED,
-               'The endpoint declares a different gate for this tool than the one listed; list the tools again.',
+               'The endpoint declares different gates for this tool than the ones listed; list the tools again.',
             );
          }
          if (declared.requires !== listed.requires || declared.mutates !== listed.mutates) {
@@ -906,16 +931,12 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
                'The endpoint now declares different arguments for this tool; list the tools again.',
             );
          }
-         requireGate = declared.gate;
+         requiredGates = declared.gates;
       }
-      if (requireGate) {
-         // The gate is judged on the snapshot of the endpoint picked above; a denial is thrown before any send.
+      for (const required of requiredGates) {
+         // Each gate is judged on the snapshot of the endpoint picked above; the first denial is thrown before any send.
          // The denial of the gate on the picked endpoint's snapshot, or null when it is open.
-         const denial: ReturnType<typeof gateDenial> = gateDenial(
-            endpoint.gateState,
-            requireGate.gate,
-            requireGate.moduleId,
-         );
+         const denial: ReturnType<typeof gateDenial> = gateDenial(endpoint.gateState, required.gate, required.moduleId);
          if (denial) {
             deps.log(`Wiretap sidecar | invoke ${op} denied by gate ${denial.code}`);
             throw new BridgeError(GATE_DENIED, truncateUtf8(denial.message, MAX_GATE_DENIAL_BYTES));
@@ -1000,14 +1021,22 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       },
 
       /**
-       * Copy the tool list of the endpoint a call with the same options would reach now. A listing aid only: a later
-       * `invoke` picks its endpoint again.
+       * Copy the tool list of the endpoint a call with the same options would reach now, leaving out every plugin tool
+       * whose module that endpoint's snapshot does not allow. A listing aid only: a later `invoke` picks its endpoint
+       * again and judges the gates there.
        * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback.
-       * @returns {RegistryTool[]} A copy of the endpoint's tools; empty when no healthy endpoint is eligible.
+       * @returns {RegistryTool[]} A copy of the endpoint's listable tools; empty when no healthy endpoint is eligible.
        */
       tools(options: InvokeOptions = {}): RegistryTool[] {
          const { endpoint } = pick(options);
-         return endpoint ? [...endpoint.tools] : [];
+         if (!endpoint) {
+            return [];
+         }
+         return endpoint.tools.filter((tool) => {
+            return tool.gates.every((required) => {
+               return required.gate !== 'allowedPluginModules' || isModuleAllowed(endpoint.gateState, required.moduleId);
+            });
+         });
       },
 
       /**

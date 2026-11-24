@@ -2,7 +2,6 @@ import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-sc
 import { z, type ZodRawShape, type ZodType } from 'zod';
 import { getBudget } from '../shared/budgets.js';
 import {
-   RESERVED_SCRIPT_NAMES,
    USER_INTERACTION_TOOLS,
    definitionBytes,
    parseRegistryPayload,
@@ -36,7 +35,10 @@ export type RegistryRequires = 'api' | 'dom';
  * the sessions routed to that client and forwards its calls back to it.
  */
 export interface RegistryTool {
-   /** The MCP tool name: lowercase letters, digits, `_` and `-`, starting with a letter; within the name budget. */
+   /**
+    * The MCP tool name: a shipped name of at most 32 characters of lowercase letters, digits, `_` and `-` starting with a
+    * letter, or a plugin name `<moduleId>__<tool>` of at most 50 characters.
+    */
    name: string;
    /** The script's version string. */
    version: string;
@@ -52,8 +54,11 @@ export interface RegistryTool {
    requires: RegistryRequires;
    /** Whether the script changes the world; listed to the client as the inverse of `readOnlyHint`. */
    mutates: boolean;
-   /** The risk gate the tool declared; the sidecar pre-checks it against the routed endpoint's snapshot. */
-   gate?: RequiredGate;
+   /**
+    * The gates a call must pass, judged in order against the routed endpoint's snapshot. A shipped tool has none or the
+    * one it declared; a plugin tool has its module's `allowedPluginModules` entry first, then the gate it declared.
+    */
+   gates: RequiredGate[];
    /** The text arguments that may be given as a handle reference; empty when the tool takes none. */
    handleArgs: string[];
    /**
@@ -70,14 +75,14 @@ export interface RegistryTool {
 /** The outcome of sanitizing a registry payload. */
 export type RegistryOutcome =
    | {
-        /** The payload was an array; `tools` holds the accepted entries. */
+        /** The payload was a registry object; `tools` holds the accepted entries. */
         ok: true;
         tools: RegistryTool[];
-        /** Entries that were refused or never examined. */
+        /** Entries that were refused. */
         refused: number;
      }
    | {
-        /** The payload was not an array; no tool is accepted. */
+        /** The payload was not a registry object of the current api version; no tool is accepted. */
         ok: false;
         reason: string;
      };
@@ -91,9 +96,7 @@ export type ShapeOutcome =
    | { ok: false; reason: string };
 
 /** The outcome of sanitizing one entry. */
-type ToolOutcome =
-   | { ok: true; tool: RegistryTool; warnings: string[]; listedBytes: number }
-   | { ok: false; reason: string };
+type ToolOutcome = { ok: true; tool: RegistryTool; warnings: string[] } | { ok: false; reason: string };
 
 /** The state shared by one schema conversion. */
 interface ConvertState {
@@ -480,15 +483,22 @@ export function jsonSchemaToZodShape(
 }
 
 /**
- * Validate one registry entry with the shared script validator (shipped route), then convert its argument schema. Reads
- * own properties only; nothing of the received object is kept.
+ * Validate one registry entry with the shared script validator, then convert its argument schema. An entry with an own
+ * `moduleId` that is not undefined takes the plugin route: the per-tool guidelines (description, result budget, schema
+ * complexity, listed size) warn instead of refusing, and the tool is gated by its module before its declared gate.
+ * Every other entry takes the shipped route, where each guideline refuses. Reads own properties only; nothing of the
+ * received object is kept.
  * @param {unknown} entry - The untrusted entry.
  * @param {Set<string>} seen - The names accepted so far in this payload.
- * @returns {ToolOutcome} The tool and any warnings, or the reason the entry is refused.
+ * @returns {ToolOutcome} The tool and its warnings (the validator's, then the schema's, then the listed size's), or the
+ *          reason the entry is refused.
  */
-function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): ToolOutcome {
-   // The shared validator's verdict on the definition; every script a client registers is a shipped script.
-   const validated: ReturnType<typeof validateScriptDefinition> = validateScriptDefinition(entry, 'shipped');
+function sanitizeTool(entry: unknown, seen: Set<string>): ToolOutcome {
+   // The route the entry registers through, chosen by the module id it carries.
+   const source: SchemaSource =
+      isRecord(entry) && ownValue(entry, 'moduleId') !== undefined ? 'plugin' : 'shipped';
+   // The shared validator's verdict on the definition.
+   const validated: ReturnType<typeof validateScriptDefinition> = validateScriptDefinition(entry, source);
    if (!validated.ok) {
       return validated;
    }
@@ -501,6 +511,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
       result,
       requires,
       mutates,
+      moduleId,
       gate,
       handleArgs,
       strictNested,
@@ -518,7 +529,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
          reason: 'duplicate name in this registry',
       };
    }
-   const converted: ShapeOutcome = jsonSchemaToZodShape(inputSchema, strictNested === true);
+   const converted: ShapeOutcome = jsonSchemaToZodShape(inputSchema, strictNested === true, source);
    if (!converted.ok) {
       return converted;
    }
@@ -529,27 +540,38 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
    });
    const listed: number = definitionBytes(name, description, listedSchema);
    const maxDefinition: number = getBudget('DEFINITION_MAX_BYTES').value;
+   // The findings of an accepted entry, in the order they are logged.
+   const warnings: string[] = [
+      ...validated.warnings,
+      ...converted.warnings,
+   ];
    if (listed > maxDefinition) {
-      return {
-         ok: false,
-         reason: `listed definition is ${listed} bytes, at most ${maxDefinition} bytes`,
-      };
+      if (source !== 'plugin') {
+         return {
+            ok: false,
+            reason: `listed definition is ${listed} bytes, at most ${maxDefinition} bytes`,
+         };
+      }
+      warnings.push(`listed definition is ${listed} bytes, over the ${maxDefinition}-byte guideline`);
    }
-   if (listed > bytesLeft) {
-      return {
-         ok: false,
-         reason: `all definitions together may take at most ${getBudget('ALL_DEFINITIONS_MAX_BYTES').value} bytes`,
-      };
-   }
-   // The risk gate the script declared, when it declared one.
-   const requiredGate: RequiredGate | undefined = gate === undefined ? undefined : { gate };
+   // The gates a call must pass: a plugin tool's module first, then the gate the script declared.
+   const gates: RequiredGate[] = [
+      ...(source === 'plugin'
+         ? [
+              {
+                 gate: 'allowedPluginModules',
+                 moduleId: moduleId as string,
+              },
+           ]
+         : []),
+      ...(gate === undefined ? [] : [{ gate }]),
+   ];
    // Whether the human is prompted before every call; forced by name so no client can list such a tool without it.
    const prompted: boolean = requiresUserInteraction === true || USER_INTERACTION_TOOLS.includes(name);
    seen.add(name);
    return {
       ok: true,
-      warnings: validated.warnings,
-      listedBytes: listed,
+      warnings,
       tool: {
          name,
          version,
@@ -559,7 +581,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
          budgetBytes: result.budgetBytes,
          requires,
          mutates,
-         ...(requiredGate === undefined ? {} : { gate: requiredGate }),
+         gates,
          handleArgs: handleArgs ?? [],
          requiresUserInteraction: prompted,
          signature: JSON.stringify([
@@ -570,7 +592,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
             result.budgetBytes,
             requires,
             mutates,
-            requiredGate ?? null,
+            gates,
             handleArgs ?? [],
             strictNested === true,
             prompted,
@@ -585,12 +607,11 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
 }
 
 /**
- * Reduce an untrusted `bridge:registry` payload to the scripts that pass every budget. The payload must be
- * `{ apiVersion, scripts }`; entries are judged one by one: a refused entry is logged with its reason and dropped, the
- * others are kept. At most `ALWAYS_LISTED_TOOLS_MAX` less the sidecar's own tool count entries are accepted, and at
- * most twice `ALWAYS_LISTED_TOOLS_MAX` are examined; the rest are refused with one summary line, so a hostile payload
- * costs bounded work and bounded log output. The accepted tools' listed definitions, with the room kept for the
- * sidecar's own definitions, fit `ALL_DEFINITIONS_MAX_BYTES`; a tool that would overflow it is refused.
+ * Reduce an untrusted `bridge:registry` payload to the scripts that pass their checks. The payload must be
+ * `{ apiVersion, scripts }`; every entry is judged, one by one: a refused entry is logged with its reason and dropped, an
+ * accepted entry's warnings are logged, and the accepted entries are kept. There is no bound on the number of tools or
+ * on their total size: the payload is bounded by the Socket.IO `maxHttpBufferSize` (1,000,000 bytes), and the caller's
+ * throttled logger bounds the log output.
  * @param {unknown} payload - The untrusted payload.
  * @param {(line: string) => void} log - Receives one line per refusal or warning; callers pass a throttled logger.
  * @returns {RegistryOutcome} The accepted tools and the number of refused entries, or a failure when the payload is
@@ -607,23 +628,13 @@ export function sanitizeRegistry(payload: unknown, log: (line: string) => void):
    }
    // The raw entries.
    const entries: unknown[] = opened.scripts;
-   // The most tools the always-listed budget leaves room for beside the sidecar's own tools.
-   const room: number = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
-   // The most entries examined, so an enormous array costs bounded work.
-   const examineMax: number = 2 * getBudget('ALWAYS_LISTED_TOOLS_MAX').value;
    // The accepted tools.
    const tools: RegistryTool[] = [];
-   // The listed bytes the accepted tools may still take: the total budget less the room kept for the sidecar's tools.
-   let bytesLeft: number =
-      getBudget('ALL_DEFINITIONS_MAX_BYTES').value -
-      RESERVED_SCRIPT_NAMES.length * getBudget('DEFINITION_MAX_BYTES').value;
    // The names accepted so far, so a repeated name is refused.
    const seen: Set<string> = new Set();
-   // The entries refused or never examined.
+   // The entries refused.
    let refused: number = 0;
-   // The position of the entry being examined.
-   let index: number = 0;
-   for (; index < Math.min(entries.length, examineMax) && tools.length < room; index += 1) {
+   for (let index: number = 0; index < entries.length; index += 1) {
       // The entry's label in log lines: its name when it is a string, else its position.
       let label: string = `#${index}`;
       try {
@@ -631,10 +642,9 @@ export function sanitizeRegistry(payload: unknown, log: (line: string) => void):
          if (isRecord(entry) && typeof ownValue(entry, 'name') === 'string') {
             label = cleanForLog(ownValue(entry, 'name') as string, LOG_LABEL_BYTES);
          }
-         const outcome: ToolOutcome = sanitizeTool(entry, seen, bytesLeft);
+         const outcome: ToolOutcome = sanitizeTool(entry, seen);
          if (outcome.ok) {
             tools.push(outcome.tool);
-            bytesLeft -= outcome.listedBytes;
             for (const warning of outcome.warnings) {
                log(
                   `Wiretap sidecar | registry warning for tool ${JSON.stringify(label)}: ` +
@@ -651,12 +661,6 @@ export function sanitizeRegistry(payload: unknown, log: (line: string) => void):
          refused += 1;
          log(`Wiretap sidecar | registry refused tool ${JSON.stringify(label)}: the entry is unreadable`);
       }
-   }
-   // Entries never examined: past the examine bound or past the room for tools.
-   const skipped: number = entries.length - index;
-   if (skipped > 0) {
-      refused += skipped;
-      log(`Wiretap sidecar | registry refused ${skipped} tools: tool count budget of ${room} reached`);
    }
    return {
       ok: true,

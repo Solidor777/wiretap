@@ -61,7 +61,7 @@ describe('sanitizeRegistry: accepted tools', () => {
       expect(tool.budgetBytes).toBe(4000);
       expect(tool.requires).toBe('dom');
       expect(tool.mutates).toBe(true);
-      expect(tool.gate).toEqual({ gate: 'allowUserWrites' });
+      expect(tool.gates).toEqual([{ gate: 'allowUserWrites' }]);
       expect(Object.keys(tool.shape)).toEqual(['text']);
       expect(tool).not.toHaveProperty('extra');
       expect(lines).toEqual([]);
@@ -327,9 +327,9 @@ describe('sanitizeRegistry: refused tools', () => {
          'gate',
       ],
       [
-         'a module id on a shipped script',
+         'a module id whose name is not in its module',
          { moduleId: 'some-module' },
-         'moduleId',
+         'name must be <moduleId>__<tool>',
       ],
    ])('refuses %s and logs the reason', (_label, overrides, word) => {
       const { outcome, lines } = run([entry(overrides)]);
@@ -388,17 +388,18 @@ describe('sanitizeRegistry: refused tools', () => {
       }
    });
 
-   it('refuses a plugin or agent script registered through the shipped route', () => {
+   it('judges an entry whose moduleId is undefined by the shipped rules', () => {
       const { outcome, lines } = run([
          entry({
-            name: 'my-module__tool',
-            moduleId: 'my-module',
+            name: 'x'.repeat(40),
+            moduleId: undefined,
          }),
-         entry({ name: 'x'.repeat(40) }),
+         entry({ moduleId: undefined }),
       ]);
-      expect(outcome.tools).toEqual([]);
-      expect(outcome.refused).toBe(2);
-      expect(lines).toHaveLength(2);
+      expect(outcome.tools.map((tool) => tool.gates)).toEqual([[]]);
+      expect(outcome.refused).toBe(1);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('1 to 32 characters');
    });
 
    it('replaces control characters and cuts a hostile name in the log line', () => {
@@ -463,47 +464,170 @@ describe('sanitizeRegistry: definition budget', () => {
    });
 });
 
-describe('sanitizeRegistry: total definition budget', () => {
-   it('accepts definitions only while all listed definitions and the built-in reserve fit the total budget', () => {
-      /** @type {object} A schema whose listed definition is close to the definition budget. */
-      const inputSchema = paddedSchema(790);
-      /** @type {object[]} 29 definitions of about 790 listed bytes: more than the total budget allows. */
-      const payload = Array.from({ length: 29 }, (_, index) => entry({
-         name: `padded_script_${String(index).padStart(2, '0')}`,
-         description: 'd'.repeat(20),
-         inputSchema,
-      }));
-      const { outcome, lines } = run(payload);
-      /** @type {number} The listed size of each definition. */
-      const each = definitionBytes('padded_script_00', 'd'.repeat(20), compileSchema(inputSchema).listed);
-      const reserve = RESERVED_SCRIPT_NAMES.length * getBudget('DEFINITION_MAX_BYTES').value;
-      const fits = Math.floor((getBudget('ALL_DEFINITIONS_MAX_BYTES').value - reserve) / each);
-      expect(fits).toBeLessThan(29);
-      expect(outcome.tools).toHaveLength(fits);
-      expect(outcome.refused).toBe(29 - fits);
-      expect(lines.length).toBeLessThanOrEqual(29 - fits);
-      expect(lines.join('|')).toMatch(/all definitions together/);
-      expect(lines.every((line) => line.length < 400)).toBe(true);
+describe('sanitizeRegistry: plugin entries', () => {
+   it('validates an entry that carries moduleId by the plugin rules and gates it by its module first', () => {
+      const { outcome } = run([entry({
+         name: 'my-mod__echo',
+         moduleId: 'my-mod',
+         gate: 'allowDelete',
+      })]);
+      expect(outcome.tools[0].gates).toEqual([
+         {
+            gate: 'allowedPluginModules',
+            moduleId: 'my-mod',
+         },
+         { gate: 'allowDelete' },
+      ]);
+   });
+
+   it('gates a plugin entry that declares no gate by its module only', () => {
+      const { outcome } = run([entry({
+         name: 'my-mod__echo',
+         moduleId: 'my-mod',
+      })]);
+      expect(outcome.tools[0].gates).toEqual([
+         {
+            gate: 'allowedPluginModules',
+            moduleId: 'my-mod',
+         },
+      ]);
+   });
+
+   it('lists a shipped gate as a one-entry list and no gate as an empty list', () => {
+      expect(run([entry({ gate: 'allowUserWrites' })]).outcome.tools[0].gates).toEqual([{ gate: 'allowUserWrites' }]);
+      expect(run([entry()]).outcome.tools[0].gates).toEqual([]);
+   });
+
+   it('gives two tools that differ only in their module gate different signatures', () => {
+      const first = run([entry({
+         name: 'my-mod__echo',
+         moduleId: 'my-mod',
+      })]).outcome.tools[0];
+      const second = run([entry({
+         name: 'my-mod__echo',
+         moduleId: 'my-mod',
+         gate: 'allowDelete',
+      })]).outcome.tools[0];
+      expect(second.signature).not.toBe(first.signature);
+   });
+
+   it('accepts a plugin entry over the per-tool guidelines and logs one warning line for each', () => {
+      const { outcome, lines } = run([entry({
+         name: 'my-mod__big',
+         moduleId: 'my-mod',
+         description: 'd'.repeat(200),
+         inputSchema: paddedSchema(1500),
+      })]);
+      expect(outcome.tools).toHaveLength(1);
+      expect(lines).toEqual([
+         'Wiretap sidecar | registry warning for tool "my-mod__big": description is 200 characters, over the ' +
+            '160-character target',
+         expect.stringMatching(
+            /^Wiretap sidecar \| registry warning for tool "my-mod__big": listed definition is \d+ bytes, over the 800-byte guideline$/,
+         ),
+      ]);
+   });
+
+   it('logs the schema guideline warnings after the definition warnings and before the listed-size one', () => {
+      const { outcome, lines } = run([entry({
+         name: 'my-mod__list',
+         moduleId: 'my-mod',
+         description: 'd'.repeat(300),
+         inputSchema: {
+            type: 'object',
+            properties: {
+               ids: {
+                  type: 'array',
+                  items: { type: 'string' },
+               },
+            },
+         },
+      })]);
+      expect(outcome.tools).toHaveLength(1);
+      expect(lines).toEqual([
+         'Wiretap sidecar | registry warning for tool "my-mod__list": description is 300 characters, over the ' +
+            '240-character guideline',
+         'Wiretap sidecar | registry warning for tool "my-mod__list": an array schema declares no maxItems; the ' +
+            'guideline is a maxItems of at most 1000',
+      ]);
+   });
+
+   it('uses the hard cap as the budget of a plugin tool that declares more', () => {
+      const { outcome } = run([entry({
+         name: 'my-mod__echo',
+         moduleId: 'my-mod',
+         result: { budgetBytes: 50000 },
+      })]);
+      expect(outcome.tools[0].budgetBytes).toBe(16000);
+   });
+
+   it('refuses an entry whose moduleId is not a module id, naming what to change', () => {
+      const { outcome, lines } = run([entry({
+         name: 'x__echo',
+         moduleId: 5,
+      })]);
+      expect(outcome.tools).toEqual([]);
+      expect(lines[0]).toContain('moduleId must be your module');
+   });
+
+   it('refuses a plugin entry that requires none', () => {
+      const { outcome, lines } = run([entry({
+         name: 'my-mod__echo',
+         moduleId: 'my-mod',
+         requires: 'none',
+      })]);
+      expect(outcome.tools).toEqual([]);
+      expect(outcome.refused).toBe(1);
+      expect(lines[0]).toContain('requires none scripts run on the sidecar');
+   });
+
+   it('refuses a plugin schema that the converter does not support', () => {
+      const { outcome, lines } = run([entry({
+         name: 'my-mod__echo',
+         moduleId: 'my-mod',
+         inputSchema: {
+            type: 'object',
+            properties: {
+               a: {
+                  type: 'string',
+                  pattern: '(a+)+$',
+               },
+            },
+         },
+      })]);
+      expect(outcome.tools).toEqual([]);
+      expect(lines).toEqual([
+         'Wiretap sidecar | registry refused tool "my-mod__echo": unsupported schema keyword "pattern"',
+      ]);
    });
 });
 
-describe('sanitizeRegistry: tool count budget', () => {
-   it('accepts tools up to the always-listed budget less the built-ins and refuses the rest with one line', () => {
-      const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
-      const payload = Array.from({ length: room + 5 }, (_, index) => entry({ name: `tool_${index}` }));
-      const { outcome, lines } = run(payload);
-      expect(outcome.tools).toHaveLength(room);
-      expect(outcome.refused).toBe(5);
-      expect(lines).toHaveLength(1);
-      expect(lines[0]).toContain('tool count');
+describe('sanitizeRegistry: no count or total bound', () => {
+   it('accepts every entry of a large registry', () => {
+      const { outcome, lines } = run(Array.from({ length: 200 }, (_, index) => entry({ name: `tool_${index}` })));
+      expect(outcome.tools).toHaveLength(200);
+      expect(outcome.refused).toBe(0);
+      expect(lines).toEqual([]);
    });
 
-   it('does not examine every entry of an enormous payload', () => {
-      const payload = Array.from({ length: 50_000 }, () => null);
-      const { outcome, lines } = run(payload);
+   it('accepts definitions whose listed sizes add up past ALL_DEFINITIONS_MAX_BYTES', () => {
+      /** @type {object} A schema whose listed definition is close to the definition budget. */
+      const inputSchema = paddedSchema(790);
+      const { outcome } = run(Array.from({ length: 29 }, (_, index) => entry({
+         name: `padded_script_${String(index).padStart(2, '0')}`,
+         description: 'd'.repeat(20),
+         inputSchema,
+      })));
+      /** @type {number} The listed size of each definition. */
+      const each = definitionBytes('padded_script_00', 'd'.repeat(20), compileSchema(inputSchema).listed);
+      expect(29 * each).toBeGreaterThan(getBudget('ALL_DEFINITIONS_MAX_BYTES').value);
+      expect(outcome.tools).toHaveLength(29);
+   });
+
+   it('judges every entry of an enormous payload', () => {
+      const { outcome } = run(Array.from({ length: 50_000 }, () => null));
       expect(outcome.tools).toEqual([]);
       expect(outcome.refused).toBe(50_000);
-      expect(lines.length).toBeLessThan(100);
    });
 });
 

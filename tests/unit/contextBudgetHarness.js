@@ -64,7 +64,7 @@ import { reservePort } from '../portPool.js';
  * @property {string[]} warnings - Warn-budget breaches; reported only.
  * @property {object[]} listing - Per listed tool: name, nameChars, descriptionChars and definitionBytes.
  * @property {{ count: number, definitionBytes: number }} totals - The count and summed definition size of the listed
- * tools that are not test-local helpers; the tool-count and total-size budgets apply to these.
+ * tools that are not test-local helpers; reported as information, no budget applies to them.
  * @property {{ count: number, definitionBytes: number }} helperTotals - The same for the test-local helper tools,
  * which are held to the per-tool budgets and fixtures only.
  * @property {object[]} fixtureRuns - Per fixture result: tool, label, budget, bytes and limit.
@@ -1410,9 +1410,9 @@ function makeBreachRecorder(failures, warnings) {
 }
 
 /**
- * Measure a server and report every budget breach: per-tool name, definition and description sizes, the tool count and
- * total definition size, a fixture for every listed tool, each fixture result against its budget, and every tool
- * mentioned by the server instructions or a shipped skill.
+ * Measure a server and report every budget breach: per-tool name, definition and description sizes, a fixture for every
+ * listed tool, each fixture result against its budget, and every tool mentioned by the server instructions or a shipped
+ * skill. The tool count and total definition size are reported in `totals` and bound by no budget.
  * @param {object} options - What to check.
  * @param {Client} options.client - The SDK client connected to the server under test.
  * @param {(ack: GmAck) => void} options.setGmAck - Sets the fake GM client's answer.
@@ -1420,9 +1420,9 @@ function makeBreachRecorder(failures, warnings) {
  * invocations.
  * @param {Record<string, FixtureCase[]>} options.fixtures - The fixtures keyed by tool name.
  * @param {string} [options.skillsRoot] - The shipped skills directory; a missing directory holds no skills.
- * @param {string[]} [options.helperTools] - Test-local tools that are measured per tool but do not count toward the
- * tool-count and total-size budgets. Every other listed tool counts, including extra tools a test registers to
- * exercise a budget.
+ * @param {string[]} [options.helperTools] - Test-local tools that are measured per tool and counted in `helperTotals`
+ * instead of `totals`. Every other listed tool counts in `totals`, including extra tools a test registers to exercise a
+ * budget.
  * @param {boolean | string[]} [options.runFixtures] - Which fixtures to run and measure: true every one, false none,
  * or the fixtures of the named tools only. A listed tool without a fixture is reported either way. Default true.
  * @returns {Promise<BudgetReport>} The measured breaches and sizes.
@@ -1479,8 +1479,6 @@ export async function collectReport({
       breach('DESCRIPTION_MAX_CHARS', tool.description.length, subject, 'description');
       breach('DESCRIPTION_TARGET_CHARS', tool.description.length, subject, 'description');
    }
-   breach('ALWAYS_LISTED_TOOLS_MAX', report.totals.count, 'tool list', 'tool count');
-   breach('ALL_DEFINITIONS_MAX_BYTES', report.totals.definitionBytes, 'tool list', 'total definition size');
    /** @type {FixtureContext} What the fixtures receive. */
    const context = {
       client,

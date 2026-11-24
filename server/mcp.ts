@@ -672,8 +672,6 @@ export function startMcpServer(
       ...RESERVED_SCRIPT_NAMES,
       ...extraTools.map((tool) => tool.name),
    ]);
-   // Registry tools a session can list beside the fixed ones without exceeding the always-listed budget.
-   const registryRoom: number = Math.max(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - fixedNames.size, 0);
    // The limits of the HTTP server.
    const limits: McpHttpLimits = options.limits ?? {};
    // The most request body bytes read.
@@ -703,15 +701,15 @@ export function startMcpServer(
 
    /**
     * Make a session's registry tools equal to the wanted tools: remove the ones that are gone, replace the ones whose
-    * definition changed and register the new ones. A tool named like a fixed tool, or beyond the always-listed budget,
-    * is skipped. The server's own change notifications are withheld; the caller notifies once.
+    * definition changed and register the new ones. A tool named like a fixed tool is skipped; every other wanted tool
+    * is listed, however many there are. The server's own change notifications are withheld; the caller notifies once.
     * @param {McpSession} session - The session.
     * @param {RegistryTool[]} wanted - The tools of the endpoint the session routes to.
     * @returns {boolean} Whether the session's tool list changed.
     */
    function syncRegistryTools(session: McpSession, wanted: RegistryTool[]): boolean {
       // The wanted tools that may be listed.
-      const listed: RegistryTool[] = wanted.filter((tool) => !fixedNames.has(tool.name)).slice(0, registryRoom);
+      const listed: RegistryTool[] = wanted.filter((tool) => !fixedNames.has(tool.name));
       // Whether anything was added, replaced or removed.
       let changed: boolean = false;
       for (const [name, current] of [...session.registered]) {
