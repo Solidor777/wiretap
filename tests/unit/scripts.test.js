@@ -341,6 +341,24 @@ describe('validateScriptDefinition: name', () => {
    it('does not reserve the names of the shipped write scripts', () => {
       expect(shipped(script('create_documents')).ok).toBe(true);
    });
+
+   it.each([
+      'my-mod__echo',
+      'agent__saved',
+      'a__',
+   ])('refuses the shipped name %s, which holds the plugin and agent separator', (name) => {
+      expect(shipped(script('placeholder', { name }))).toEqual({
+         ok: false,
+         reason: 'a shipped tool name may not contain "__"; that form is <moduleId>__<tool> for plugin tools',
+      });
+   });
+
+   it('leaves "__" names to the plugin and agent rules on their routes', () => {
+      expect(validateScriptDefinition(script('my-mod__echo', { moduleId: 'my-mod' }), 'plugin').ok).toBe(true);
+      expect(validateScriptDefinition(script('agent__saved'), 'agent').reason).toContain(
+         'agent scripts are not supported',
+      );
+   });
 });
 
 describe('validateScriptDefinition: result budget', () => {

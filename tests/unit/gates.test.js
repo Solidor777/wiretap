@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
    GATES,
-   GATE_MODULES_MAX,
    GATE_MODULE_ID_MAX_CHARS,
    closedGateState,
    denyWiretapSettingWrite,
@@ -182,7 +181,7 @@ describe('gateDenial and isGateOpen', () => {
    });
 
    it('sanitizes the state internally, so an unsanitized module list is never open', () => {
-      for (const list of [['', 5], [5], Array.from({ length: 100 }, () => 'a'), ['Bad Id'], 'my-module', {}]) {
+      for (const list of [['', 5], [5], ['Bad Id'], 'my-module', {}]) {
          const state = { ...closedGateState(), allowedPluginModules: list };
          expect(isModuleAllowed(state, 'a')).toBe(false);
          expect(isModuleAllowed(state, '')).toBe(false);
@@ -245,11 +244,9 @@ describe('sanitizeGateState', () => {
       expect(result.allowedPluginModules).toEqual(['good-module', 'ok_2']);
    });
 
-   it('keeps an id of exactly the maximum length and a list of exactly the maximum size', () => {
+   it('keeps an id of exactly the maximum length', () => {
       const id = 'x'.repeat(GATE_MODULE_ID_MAX_CHARS);
       expect(sanitizeGateState({ allowedPluginModules: [id] }).allowedPluginModules).toEqual([id]);
-      const full = Array.from({ length: GATE_MODULES_MAX }, (_, index) => `m${index}`);
-      expect(sanitizeGateState({ allowedPluginModules: full }).allowedPluginModules).toEqual(full);
    });
 
    it('keeps only ids of lowercase letters, digits, underscore and hyphen that start with a letter or digit', () => {
@@ -267,14 +264,16 @@ describe('sanitizeGateState', () => {
       ]);
    });
 
-   it('treats a list over the maximum size as empty', () => {
-      const hundred = Array.from({ length: 100 }, () => 'a');
-      expect(sanitizeGateState({ allowedPluginModules: hundred }).allowedPluginModules).toEqual([]);
-      const huge = Array.from({ length: GATE_MODULES_MAX + 1 }, (_, index) => `m${index}`);
-      expect(sanitizeGateState({ allowedPluginModules: huge }).allowedPluginModules).toEqual([]);
-      expect(sanitizeGateState({ allowedPluginModules: new Array(5_000_000).fill('a') }).allowedPluginModules).toEqual(
-         [],
-      );
+   it('keeps a list of 1,000 module ids whole and allows a tool of the 1,000th module', () => {
+      /** @type {string[]} One thousand distinct module ids. */
+      const thousand = Array.from({ length: 1000 }, (_, index) => `m${index}`);
+      const state = sanitizeGateState({ allowedPluginModules: thousand });
+      expect(state.allowedPluginModules).toEqual(thousand);
+      expect(isModuleAllowed(state, 'm999')).toBe(true);
+   });
+
+   it('collapses a long list of one repeated id to that id', () => {
+      expect(sanitizeGateState({ allowedPluginModules: new Array(100).fill('a') }).allowedPluginModules).toEqual(['a']);
    });
 
    it('treats a non-array module list as empty', () => {

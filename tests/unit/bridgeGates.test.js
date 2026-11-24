@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { GATES, closedGateState, GATE_MODULES_MAX } from '$shared/gates.js';
+import { GATES, closedGateState } from '$shared/gates.js';
 import { GATE_DENIED } from '$shared/protocol.js';
 import { readGateState, requireGate, gateNameFromSettingKey } from '~/bridge/gates.js';
 
@@ -69,11 +69,17 @@ describe('readGateState', () => {
       ]);
    });
 
-   it('treats a non-string module list and a list over the entry limit as empty', () => {
+   it('treats a non-string module list as empty', () => {
       stored.allowedPluginModules = { toString: () => 'evil' };
       expect(readGateState().allowedPluginModules).toEqual([]);
-      stored.allowedPluginModules = Array.from({ length: GATE_MODULES_MAX + 1 }, (_, i) => `m${i}`).join(',');
-      expect(readGateState().allowedPluginModules).toEqual([]);
+   });
+
+   it('keeps a stored list of 1,000 module ids whole and allows a tool of the 1,000th module', () => {
+      /** @type {string[]} One thousand distinct module ids. */
+      const thousand = Array.from({ length: 1000 }, (_, i) => `m${i}`);
+      stored.allowedPluginModules = thousand.join(',');
+      expect(readGateState().allowedPluginModules).toEqual(thousand);
+      expect(requireGate('allowedPluginModules', 'm999')).toBeNull();
    });
 
    it('closes a gate whose read throws and keeps reading the others', () => {

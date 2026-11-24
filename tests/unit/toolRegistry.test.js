@@ -402,6 +402,14 @@ describe('sanitizeRegistry: refused tools', () => {
       expect(lines[0]).toContain('1 to 32 characters');
    });
 
+   it('refuses a "__" name without a moduleId instead of listing it as a shipped tool', () => {
+      const { outcome, lines } = run([entry({ name: 'my-mod__echo' })]);
+      expect(outcome.tools).toEqual([]);
+      expect(outcome.refused).toBe(1);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('a shipped tool name may not contain "__"');
+   });
+
    it('replaces control characters and cuts a hostile name in the log line', () => {
       const { lines } = run([entry({ name: `evil\n${'x'.repeat(200)}\u2028forged line` })]);
       expect(lines).toHaveLength(1);

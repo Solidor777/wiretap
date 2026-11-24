@@ -37,9 +37,6 @@ import { GATE_DENIED } from './protocol.js';
  * @property {string} message - Names the gate (or the refused write), at most 256 bytes.
  */
 
-// Maximum number of module ids in a snapshot's `allowedPluginModules`; a longer list is treated as empty.
-export const GATE_MODULES_MAX = 64;
-
 // Maximum length in characters of one module id in `allowedPluginModules`; a longer id is dropped.
 export const GATE_MODULE_ID_MAX_CHARS = 64;
 
@@ -139,14 +136,15 @@ export function isModuleId(value) {
 }
 
 /**
- * Reduce an untrusted value to a valid module id list: an array of at most `GATE_MODULES_MAX` entries, keeping the
- * module ids (MODULE_ID_PATTERN, 1 to `GATE_MODULE_ID_MAX_CHARS` characters) without duplicates. A longer array is
- * treated as empty without being walked.
+ * Reduce an untrusted value to a valid module id list: an array of any length, keeping the module ids
+ * (MODULE_ID_PATTERN, 1 to `GATE_MODULE_ID_MAX_CHARS` characters) without duplicates. The list has no count limit
+ * because how many modules to allow is the GM's choice; the snapshot arrives in one Socket.IO message, whose size limit
+ * bounds it.
  * @param {unknown} value - The untrusted value.
  * @returns {string[]} A fresh, valid list.
  */
 function sanitizeModuleList(value) {
-   if (!Array.isArray(value) || value.length > GATE_MODULES_MAX) {
+   if (!Array.isArray(value)) {
       return [];
    }
    /** @type {Set<string>} The accepted ids in first-seen order. */

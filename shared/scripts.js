@@ -9,8 +9,9 @@
  * Fields:
  *
  * `name`: the MCP tool name. Shipped scripts: 1 to 32 characters (`CORE_TOOL_NAME_MAX_CHARS`) of `a-z`, `0-9`, `_`
- * and `-`, starting with a letter. Plugin scripts: `<moduleId>__<tool>`, where `<tool>` uses `a-z`, `0-9`, `_` and
- * `-`, at most 50 characters in all (`PLUGIN_TOOL_NAME_MAX_CHARS`): Claude Code lists each tool as
+ * and `-`, starting with a letter, and never holding `__`, which marks plugin and agent names. Plugin scripts:
+ * `<moduleId>__<tool>`, where `<tool>` uses `a-z`, `0-9`, `_` and `-`, at most 50 characters in all
+ * (`PLUGIN_TOOL_NAME_MAX_CHARS`): Claude Code lists each tool as
  * `mcp__wiretap__<name>` and the Anthropic API refuses tool names over 64 characters. Agent-saved scripts:
  * `agent__<name>`, at most 50 characters for the same reason. The names in `RESERVED_SCRIPT_NAMES` and the names of
  * `Object.prototype` members are refused.
@@ -163,7 +164,8 @@ export const USER_INTERACTION_META_KEY = 'anthropic/requiresUserInteraction';
 export const USER_INTERACTION_TOOLS = Object.freeze(['delete_pack']);
 
 /**
- * A shipped or agent tool name: lowercase letters, digits, `_` and `-`, starting with a letter.
+ * A shipped or agent tool name: lowercase letters, digits, `_` and `-`, starting with a letter. A shipped name is
+ * further refused when it holds `NAME_SEPARATOR`.
  * @type {RegExp}
  */
 const CORE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
@@ -175,7 +177,8 @@ const CORE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
 const PLUGIN_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
 /**
- * The separator between the owner and the tool in plugin and agent tool names.
+ * The separator between the owner and the tool in plugin and agent tool names; a shipped name may not hold it, so a
+ * registry entry without a `moduleId` cannot take a plugin tool's name and escape the plugin gate.
  * @type {string}
  */
 const NAME_SEPARATOR = '__';
@@ -259,6 +262,9 @@ function nameProblem(name, source, moduleId) {
       }
    } else if (typeof name !== 'string' || name.length > max || !CORE_NAME_PATTERN.test(name)) {
       return `name must be 1 to ${max} characters of a-z, 0-9, _ or -, starting with a letter`;
+   } else if (source === 'shipped' && name.includes(NAME_SEPARATOR)) {
+      return `a shipped tool name may not contain "${NAME_SEPARATOR}"; that form is <moduleId>${NAME_SEPARATOR}<tool> `
+         + 'for plugin tools';
    }
    if (RESERVED_SCRIPT_NAMES.includes(name) || name in Object.prototype) {
       return 'name is reserved';
