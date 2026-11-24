@@ -28,7 +28,7 @@ import { GATE_DENIED } from './protocol.js';
  * @property {boolean} allowBackupAnyFolder - Backup files in a folder other than the default or the Backup folder
  * setting.
  * @property {boolean} allowAgentScripts - Saving and running agent-saved scripts (arbitrary code).
- * @property {string[]} allowedPluginModules - Ids of the modules whose plugin skills and scripts are enabled.
+ * @property {string[]} allowedPluginModules - Ids of the modules whose plugin tools are enabled.
  */
 
 /**
@@ -111,7 +111,7 @@ export const GATES = Object.freeze({
    allowedPluginModules: entry(
       'moduleList',
       Object.freeze([]),
-      'Plugin skills and scripts of the listed module ids; none by default.',
+      'Plugin tools of the listed module ids; none by default.',
    ),
 });
 
@@ -212,7 +212,7 @@ function closedDenial(name, detail) {
  * closed. `moduleId` is ignored for every other gate.
  * @param {unknown} gateState - The snapshot to judge (not required to be sanitized).
  * @param {string} name - The registry name of the gate to judge.
- * @param {string} [moduleId] - The module whose plugin skills or scripts are being run.
+ * @param {string} [moduleId] - The module whose plugin tool is being run.
  * @returns {GateDenial | null} Null when open, else a denial under 256 bytes: only a GM can enable the gate.
  */
 export function gateDenial(gateState, name, moduleId) {
