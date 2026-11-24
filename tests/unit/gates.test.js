@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
    GATES,
-   GATE_MODULE_ID_MAX_CHARS,
    closedGateState,
    denyWiretapSettingWrite,
    gateDenial,
@@ -239,21 +238,50 @@ describe('sanitizeGateState', () => {
 
    it('keeps a valid module id list and drops invalid entries', () => {
       const result = sanitizeGateState({
-         allowedPluginModules: ['good-module', 5, '', null, 'x'.repeat(GATE_MODULE_ID_MAX_CHARS + 1), 'ok_2', {}],
+         allowedPluginModules: ['good-module', 5, '', null, 'ok_2', {}],
       });
       expect(result.allowedPluginModules).toEqual(['good-module', 'ok_2']);
    });
 
-   it('keeps an id of exactly the maximum length', () => {
-      const id = 'x'.repeat(GATE_MODULE_ID_MAX_CHARS);
+   it('keeps an id over 64 characters', () => {
+      /** @type {string} A module id longer than any tool name can carry. */
+      const id = 'x'.repeat(65);
       expect(sanitizeGateState({ allowedPluginModules: [id] }).allowedPluginModules).toEqual([id]);
    });
 
-   it('keeps only ids of lowercase letters, digits, underscore and hyphen that start with a letter or digit', () => {
+   it('keeps ids of letters of either case, digits, underscore and hyphen, in any position', () => {
       const result = sanitizeGateState({
-         allowedPluginModules: ['a', '9x', 'a_b-c', 'Upper', '-lead', '_lead', 'has space', 'dot.ted', '\u00E9'],
+         allowedPluginModules: [
+            'a',
+            '9x',
+            'a_b-c',
+            'MyMod',
+            '-lead',
+            '_lead',
+            'has space',
+            'dot.ted',
+            '\u00E9',
+            'a/b',
+         ],
       });
-      expect(result.allowedPluginModules).toEqual(['a', '9x', 'a_b-c']);
+      expect(result.allowedPluginModules).toEqual([
+         'a',
+         '9x',
+         'a_b-c',
+         'MyMod',
+         '-lead',
+         '_lead',
+      ]);
+   });
+
+   it('matches module ids exactly, so ids that differ only in case are different modules', () => {
+      const state = sanitizeGateState({ allowedPluginModules: ['MyMod'] });
+      expect(isModuleAllowed(state, 'MyMod')).toBe(true);
+      expect(isModuleAllowed(state, 'mymod')).toBe(false);
+      expect(sanitizeGateState({ allowedPluginModules: ['MyMod', 'mymod'] }).allowedPluginModules).toEqual([
+         'MyMod',
+         'mymod',
+      ]);
    });
 
    it('removes duplicate module ids and keeps the first occurrence order', () => {
@@ -472,12 +500,11 @@ describe('resolveSettingKey', () => {
 });
 
 describe('isModuleId', () => {
-   it('accepts Foundry module ids and refuses everything else', () => {
-      expect(isModuleId('my-module')).toBe(true);
-      expect(isModuleId('a')).toBe(true);
-      expect(isModuleId('a'.repeat(GATE_MODULE_ID_MAX_CHARS))).toBe(true);
-      expect(isModuleId('a'.repeat(GATE_MODULE_ID_MAX_CHARS + 1))).toBe(false);
-      for (const bad of ['', 'Bad', '-lead', 'has space', 'a/b', 5, null, undefined, {}]) {
+   it('accepts every id Foundry accepts and refuses everything else', () => {
+      for (const good of ['my-module', 'a', 'Bad', 'MyMod', '-lead', '_lead', '9', 'a'.repeat(65), 'a'.repeat(500)]) {
+         expect(isModuleId(good)).toBe(true);
+      }
+      for (const bad of ['', 'has space', 'dot.ted', 'a/b', 'é', 'a\n', 5, null, undefined, {}]) {
          expect(isModuleId(bad)).toBe(false);
       }
    });

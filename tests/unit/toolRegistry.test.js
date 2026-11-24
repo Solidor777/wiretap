@@ -578,6 +578,46 @@ describe('sanitizeRegistry: plugin entries', () => {
       expect(lines[0]).toContain('moduleId must be your module');
    });
 
+   it('accepts the module ids Foundry accepts and refuses a dot or a space, as the shared plugin route does', () => {
+      const { outcome, lines } = run([
+         entry({
+            name: 'MyMod__echo',
+            moduleId: 'MyMod',
+         }),
+         entry({
+            name: '_lead__echo',
+            moduleId: '_lead',
+         }),
+         entry({
+            name: '-lead__echo',
+            moduleId: '-lead',
+         }),
+         entry({
+            name: 'my.mod__echo',
+            moduleId: 'my.mod',
+         }),
+         entry({
+            name: 'my mod__echo',
+            moduleId: 'my mod',
+         }),
+      ]);
+      expect(outcome.tools.map((tool) => tool.name)).toEqual([
+         'MyMod__echo',
+         '_lead__echo',
+         '-lead__echo',
+      ]);
+      expect(outcome.tools.map((tool) => tool.gates[0].moduleId)).toEqual([
+         'MyMod',
+         '_lead',
+         '-lead',
+      ]);
+      expect(outcome.refused).toBe(2);
+      expect(lines).toHaveLength(2);
+      for (const line of lines) {
+         expect(line).toContain('moduleId must be your module\'s id from module.json: one or more of A-Z');
+      }
+   });
+
    it('refuses a plugin entry that requires none', () => {
       const { outcome, lines } = run([entry({
          name: 'my-mod__echo',

@@ -61,12 +61,25 @@ describe('readGateState', () => {
       }
    });
 
-   it('drops invalid, oversized, padded and duplicate module ids from the stored string', () => {
-      stored.allowedPluginModules = ` good-mod ,Bad Mod,../x,,good-mod,UPPER,ok_2,${'a'.repeat(65)}`;
+   it('drops invalid, padded and duplicate module ids from the stored string', () => {
+      stored.allowedPluginModules = ' good-mod ,Bad Mod,../x,,good-mod,dot.ted,ok_2';
       expect(readGateState().allowedPluginModules).toEqual([
          'good-mod',
          'ok_2',
       ]);
+   });
+
+   it('keeps every id Foundry accepts: capitals, a leading _ or -, and over 64 characters', () => {
+      stored.allowedPluginModules = `MyMod,_lead,-lead,${'a'.repeat(65)},mymod`;
+      expect(readGateState().allowedPluginModules).toEqual([
+         'MyMod',
+         '_lead',
+         '-lead',
+         'a'.repeat(65),
+         'mymod',
+      ]);
+      expect(requireGate('allowedPluginModules', 'MyMod')).toBeNull();
+      expect(requireGate('allowedPluginModules', 'MYMOD')).not.toBeNull();
    });
 
    it('treats a non-string module list as empty', () => {

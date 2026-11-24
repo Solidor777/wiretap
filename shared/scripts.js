@@ -10,8 +10,8 @@
  *
  * `name`: the MCP tool name. Shipped scripts: 1 to 32 characters (`CORE_TOOL_NAME_MAX_CHARS`) of `a-z`, `0-9`, `_`
  * and `-`, starting with a letter, and never holding `__`, which marks plugin and agent names. Plugin scripts:
- * `<moduleId>__<tool>`, where `<tool>` uses `a-z`, `0-9`, `_` and `-`, at most 50 characters in all
- * (`PLUGIN_TOOL_NAME_MAX_CHARS`): Claude Code lists each tool as
+ * `<moduleId>__<tool>`, where `<tool>` uses `A-Z`, `a-z`, `0-9`, `_` and `-` (the alphabet of a module id), at most
+ * 50 characters in all (`PLUGIN_TOOL_NAME_MAX_CHARS`), which also bounds the module id: Claude Code lists each tool as
  * `mcp__wiretap__<name>` and the Anthropic API refuses tool names over 64 characters. Agent-saved scripts:
  * `agent__<name>`, at most 50 characters for the same reason. The names in `RESERVED_SCRIPT_NAMES` and the names of
  * `Object.prototype` members are refused.
@@ -44,7 +44,8 @@
  * the text the session's handle holds before it sends the call to the client (`server/handleInput.ts`). Each name must
  * be a declared argument of type `string`, or an array of `string`. It is not part of the listed definition.
  *
- * `moduleId`: the owning module id of a plugin script (required for that source, refused for the others).
+ * `moduleId`: the owning module id of a plugin script (required for that source, refused for the others): one or more
+ * letters of either case, digits, `_` and `-`, as Foundry accepts (`isModuleId` of `shared/gates.js`), matched exactly.
  *
  * `requiresUserInteraction`: optional, only `true`. The sidecar lists the tool with
  * `_meta[USER_INTERACTION_META_KEY]: true`, which asks the MCP client to prompt the human before every call. The
@@ -63,7 +64,7 @@
  * route the definition registered through, and the caller passes it to the validator.
  */
 import { getBudget } from './budgets.js';
-import { GATES, GATE_MODULE_ID_MAX_CHARS, isModuleId } from './gates.js';
+import { GATES, isModuleId } from './gates.js';
 import { CONTROL_PATTERN } from './logText.js';
 
 /**
@@ -171,10 +172,11 @@ export const USER_INTERACTION_TOOLS = Object.freeze(['delete_pack']);
 const CORE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
 
 /**
- * A plugin tool name: as a core name, but it may start with a digit because a module id can.
+ * A plugin tool name: letters of either case, digits, `_` and `-` in any position, the alphabet of a Foundry module id,
+ * so every plugin name is also a valid Claude tool name (`^[a-zA-Z0-9_-]{1,64}$`) once Claude Code prefixes it.
  * @type {RegExp}
  */
-const PLUGIN_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /**
  * The separator between the owner and the tool in plugin and agent tool names; a shipped name may not hold it, so a
@@ -258,7 +260,7 @@ function nameProblem(name, source, moduleId) {
          !name.startsWith(pluginPrefix) ||
          name.length === pluginPrefix.length
       ) {
-         return `name must be <moduleId>${NAME_SEPARATOR}<tool>, where <tool> uses only a-z, 0-9, _ and -`;
+         return `name must be <moduleId>${NAME_SEPARATOR}<tool>, where <tool> uses only A-Z, a-z, 0-9, _ and -`;
       }
    } else if (typeof name !== 'string' || name.length > max || !CORE_NAME_PATTERN.test(name)) {
       return `name must be 1 to ${max} characters of a-z, 0-9, _ or -, starting with a letter`;
@@ -377,8 +379,8 @@ export function validateScriptDefinition(input, source) {
       const requiresUserInteraction = ownValue(input, 'requiresUserInteraction');
       if (source === 'plugin' && !isModuleId(moduleId)) {
          return refuse(
-            `moduleId must be your module's id from module.json: 1 to ${GATE_MODULE_ID_MAX_CHARS} characters of a-z, `
-               + '0-9, _ or - (no dots or capitals), starting with a letter or digit',
+            'moduleId must be your module\'s id from module.json: one or more of A-Z, a-z, 0-9, _ and - '
+               + '(no dots or spaces)',
          );
       }
       if (source !== 'plugin' && moduleId !== undefined) {

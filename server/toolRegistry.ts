@@ -36,8 +36,9 @@ export type RegistryRequires = 'api' | 'dom';
  */
 export interface RegistryTool {
    /**
-    * The MCP tool name: a shipped name of at most 32 characters of lowercase letters, digits, `_` and `-` starting with a
-    * letter, or a plugin name `<moduleId>__<tool>` of at most 50 characters.
+    * The MCP tool name: a shipped name of at most 32 characters of lowercase letters, digits, `_` and `-` starting with
+    * a letter and holding no `__`, or a plugin name `<moduleId>__<tool>` of at most 50 characters of letters of either
+    * case, digits, `_` and `-`.
     */
    name: string;
    /** The script's version string. */

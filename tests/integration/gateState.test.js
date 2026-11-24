@@ -117,9 +117,7 @@ describe('gate state over Socket.IO', () => {
       const hostile = JSON.parse(
          '{"__proto__":{"allowMacroExecution":true},"constructor":{"prototype":{"polluted":true}},' +
             '"allowUserWrites":"true","allowFileUpload":1,"allowSettingWrites":true,"allowUndo":true,' +
-            '"nested":{"deep":[1,2,3]},"allowedPluginModules":["ok",1,null,{},"' +
-            'x'.repeat(65) +
-            '"]}',
+            '"nested":{"deep":[1,2,3]},"allowedPluginModules":["ok",1,null,{},"dot.ted"]}',
       );
       await client.emitWithAck(BRIDGE_IDENTIFY, identify({ gateState: hostile }));
       expect(server.bridge.gateState()).toEqual({
@@ -164,6 +162,34 @@ describe('gate state over Socket.IO', () => {
       });
       expect(isModuleAllowed(server.bridge.gateState(), 'm4999')).toBe(true);
       expect(isModuleAllowed(server.bridge.gateState(), 'm5000')).toBe(false);
+   });
+
+   it('keeps every module id Foundry accepts and drops a dot or a space', async () => {
+      const port = await start();
+      const client = await connectFake(port);
+      await client.emitWithAck(BRIDGE_IDENTIFY, identify());
+      /** @type {string} A module id longer than 64 characters. */
+      const long = 'l'.repeat(65);
+      await client.emitWithAck(BRIDGE_GATE_STATE, {
+         gateState: {
+            allowedPluginModules: [
+               'MyMod',
+               '_lead',
+               '-lead',
+               long,
+               'dot.ted',
+               'has space',
+            ],
+         },
+      });
+      expect(server.bridge.gateState().allowedPluginModules).toEqual([
+         'MyMod',
+         '_lead',
+         '-lead',
+         long,
+      ]);
+      expect(isModuleAllowed(server.bridge.gateState(), 'MyMod')).toBe(true);
+      expect(isModuleAllowed(server.bridge.gateState(), 'mymod')).toBe(false);
    });
 
    it('keeps a separate snapshot for each GM endpoint', async () => {
