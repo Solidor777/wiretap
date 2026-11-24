@@ -270,7 +270,7 @@ describe('createDocuments: arguments', () => {
       })).code).toBe('ARGS_INVALID');
    });
 
-   it('refuses an empty list, a non-object entry and more documents than the bound', async () => {
+   it('refuses an empty list and a non-object entry', async () => {
       expect((await failure({
          documentName: 'Actor',
          data: []
@@ -283,12 +283,17 @@ describe('createDocuments: arguments', () => {
          documentName: 'Actor',
          data: [[]]
       })).code).toBe('ARGS_INVALID');
-      const tooMany = Array.from({ length: getBudget('WRITE_DOCUMENTS_MAX').value + 1 }, () => ({ name: 'MOCK' }));
-      expect((await failure({
-         documentName: 'Actor',
-         data: tooMany
-      })).code).toBe('ARGS_INVALID');
       expect(world.calls).toEqual([]);
+   });
+
+   it('creates more documents in one call than the best-practice size', async () => {
+      const count = getBudget('WRITE_DOCUMENTS_MAX').value * 2 + 20;
+      const rows = await createDocuments({
+         documentName: 'Actor',
+         data: Array.from({ length: count }, (_, index) => ({ name: `MOCK_${index}` })),
+      });
+      expect(world.classes.Actor.createDocuments.mock.calls[0][0]).toHaveLength(count);
+      expect(rows).toHaveLength(count);
    });
 });
 

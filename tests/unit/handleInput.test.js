@@ -1,8 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
 import { getBudget } from '../../shared/budgets.js';
-import { SCHEMA_BOUND_MAX } from '../../shared/schemaValidate.js';
-import { createHandleStore, HANDLE_IDLE_MS } from '../../server/handles.ts';
+import { createHandleStore, HANDLE_IDLE_MS, HANDLE_STORE_MAX_BYTES } from '../../server/handles.ts';
 import { HANDLE_REFERENCE_PATTERN, resolveHandleArgs } from '../../server/handleInput.ts';
 
 /** @type {string} The owner key of the session that stored the handles. */
@@ -168,51 +167,61 @@ describe('resolveHandleArgs', () => {
       expect(outcome.error.code).toBe('HANDLE_NOT_FOUND');
    });
 
-   it('refuses a stored text over the per-argument bound without reading it', () => {
+   it('resolves a stored text over the best-practice document size and texts over the best-practice data size', () => {
       const { store } = makeStore();
-      const big = `{"name":"${'a'.repeat(SCHEMA_BOUND_MAX)}"}`;
-      const outcome = resolveHandleArgs(store, OWNER, { data: [reference(store, big)] }, ['data']);
-      expect(outcome.ok).toBe(false);
-      expect(outcome.error.code).toBe('HANDLE_TOO_LARGE');
-      expect(outcome.error.message).toContain(String(SCHEMA_BOUND_MAX));
-   });
-
-   it('refuses handles whose texts together pass the data bound', () => {
-      const { store } = makeStore();
-      /** @type {string} A document of about 90,000 bytes. */
-      const big = `{"name":"${'a'.repeat(90_000)}"}`;
-      /** @type {number} The data bound of one call. */
-      const bound = getBudget('WRITE_DATA_MAX_BYTES').value;
-      expect(bound).toBeLessThan(3 * big.length);
+      /** @type {string} A document of about 150,000 bytes. */
+      const big = `{"name":"${'a'.repeat(150_000)}"}`;
+      expect(big.length).toBeGreaterThan(100_000);
+      expect(2 * big.length).toBeGreaterThan(getBudget('WRITE_DATA_MAX_BYTES').value);
       const outcome = resolveHandleArgs(
          store,
          OWNER,
          {
             data: [
-               reference(store, big),
                reference(store, big),
                reference(store, big),
             ],
          },
          ['data'],
       );
+      expect(outcome.ok).toBe(true);
+      expect(outcome.args.data).toEqual([
+         big,
+         big,
+      ]);
+   });
+
+   it('refuses a call whose repeated references pass what the handle store holds', () => {
+      const { store } = makeStore();
+      /** @type {string} A document of about 7,500,000 bytes, within one stored entry. */
+      const big = `{"name":"${'a'.repeat(7_500_000)}"}`;
+      /** @type {string} The one reference repeated. */
+      const ref = reference(store, big);
+      expect(9 * big.length).toBeGreaterThan(HANDLE_STORE_MAX_BYTES);
+      const outcome = resolveHandleArgs(store, OWNER, { data: Array.from({ length: 9 }, () => ref) }, ['data']);
       expect(outcome.ok).toBe(false);
       expect(outcome.error.code).toBe('HANDLE_TOO_LARGE');
-      expect(outcome.error.message).toContain(String(bound));
+      expect(outcome.error.message).toContain(String(HANDLE_STORE_MAX_BYTES));
+      expect(resolveHandleArgs(store, OWNER, { data: Array.from({ length: 8 }, () => ref) }, ['data']).ok).toBe(true);
    });
 
    it('counts inline texts against the same total', () => {
       const { store } = makeStore();
-      /** @type {string} A document of about 90,000 bytes. */
-      const big = `{"name":"${'a'.repeat(90_000)}"}`;
+      /** @type {string} A document of about 7,500,000 bytes, within one stored entry. */
+      const big = `{"name":"${'a'.repeat(7_500_000)}"}`;
+      /** @type {string} The one reference repeated. */
+      const ref = reference(store, big);
+      /** @type {string} An inline document of about 5,000,000 bytes. */
+      const inline = `{"name":"${'b'.repeat(5_000_000)}"}`;
+      expect(8 * big.length).toBeLessThan(HANDLE_STORE_MAX_BYTES);
+      expect(8 * big.length + inline.length).toBeGreaterThan(HANDLE_STORE_MAX_BYTES);
       const outcome = resolveHandleArgs(
          store,
          OWNER,
          {
             data: [
-               big,
-               big,
-               reference(store, big),
+               inline,
+               ...Array.from({ length: 8 }, () => ref),
             ],
          },
          ['data'],
@@ -245,11 +254,11 @@ describe('resolveHandleArgs', () => {
       expect(outcome.error.message).not.toContain('MOCK_secret_text');
    });
 
-   it('reads each handle through a bounded whole-entry read', () => {
+   it('reads each handle through a whole-entry read bounded by the largest stored entry', () => {
       const { store } = makeStore();
       const spy = vi.spyOn(store, 'read');
       resolveHandleArgs(store, OWNER, { data: [reference(store, DOCUMENT)] }, ['data']);
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][2]).toBeLessThanOrEqual(SCHEMA_BOUND_MAX);
+      expect(spy.mock.calls[0][2]).toBe(getBudget('HANDLE_ENTRY_MAX_BYTES').value);
    });
 });

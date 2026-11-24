@@ -383,7 +383,8 @@ export function resolvePath(node, segments) {
 }
 
 /**
- * Resolves up to `PATHS_PER_CALL_MAX` paths against a document export. A repeated path is read once (the first
+ * Resolves any number of paths against a document export; a caller that bounds the count does so in its own schema
+ * (`read_handle` takes `PATHS_PER_CALL_MAX`). A repeated path is read once (the first
  * occurrence stays). A path that resolves to nothing, or to an ambiguous wildcard, is listed in `missing` (request
  * order) and is not an error; a call whose every path is missing still succeeds. A malformed, over-long or unsafe
  * path refuses the whole call and returns no values; the paths echoed in `values` and `missing` are each within
@@ -395,11 +396,6 @@ export function resolvePath(node, segments) {
 export function resolvePaths(documentExport, paths) {
    if (!Array.isArray(paths) || paths.length === 0) {
       return fail('PATH_INVALID', 'Paths must be a non-empty array of strings.');
-   }
-   /** @type {number} Most paths one call may carry. */
-   const pathsMax = getBudget('PATHS_PER_CALL_MAX').value;
-   if (paths.length > pathsMax) {
-      return fail('PATH_LIMIT', `At most ${pathsMax} paths are allowed per call.`);
    }
    /** @type {Array<{path: string, segments: PathSegment[]}>} The distinct paths with their segments. */
    const parsed = [];
@@ -515,18 +511,13 @@ function startsWith(prefix, names) {
  * a set or replace value with an own `__proto__`, `constructor` or `prototype` key or more than 32 levels of nesting
  * (`PATH_UNSAFE_VALUE`). Only
  * embedded collections of the document itself are grouped; a deeper embedded path stays part of the relative path.
- * @param {Patch[]} patches - The writes, at most `PATHS_PER_CALL_MAX`.
+ * @param {Patch[]} patches - The writes, any number.
  * @param {string[]} embeddedCollections - Names of the document's embedded collections, for example `['items']`.
  * @returns {GroupResult} The grouped changes, or the refusal.
  */
 export function groupWrites(patches, embeddedCollections) {
    if (!Array.isArray(patches) || patches.length === 0) {
       return fail('PATH_INVALID', 'Patches must be a non-empty array.');
-   }
-   /** @type {number} Most patches one call may carry. */
-   const pathsMax = getBudget('PATHS_PER_CALL_MAX').value;
-   if (patches.length > pathsMax) {
-      return fail('PATH_LIMIT', `At most ${pathsMax} paths are allowed per call.`);
    }
    if (!Array.isArray(embeddedCollections) || !embeddedCollections.every((name) => typeof name === 'string')) {
       return fail('PATH_INVALID', 'Embedded collections must be an array of strings.');

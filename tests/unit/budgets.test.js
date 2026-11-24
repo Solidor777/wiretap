@@ -114,7 +114,7 @@ const EXPECTED = [
       'SEARCH_MAX_LIMIT',
       100,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'SEARCH_SCAN_MAX',
@@ -138,7 +138,7 @@ const EXPECTED = [
       'SEARCH_FIELD_PATH_MAX_BYTES',
       64,
       'bytes',
-      'hard',
+      'warn',
    ],
    [
       'SEARCH_INDEX_FIELDS_MAX',
@@ -276,13 +276,13 @@ const EXPECTED = [
       'WRITE_DOCUMENTS_MAX',
       50,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'WRITE_DATA_MAX_BYTES',
       200000,
       'bytes',
-      'hard',
+      'warn',
    ],
    [
       'SHEET_RESULT_MAX_BYTES',

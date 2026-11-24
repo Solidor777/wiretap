@@ -378,17 +378,26 @@ describe('shape.project', () => {
       });
    });
 
-   it('refuses a wildcard, an unsafe segment, too many fields and a non-list', () => {
+   it('refuses a wildcard, an unsafe segment and a non-list', () => {
       expect(shape.project(mockActor(), ['items.*.name'])).toMatchObject({
          ok: false,
          error: expect.stringContaining('wildcard'),
       });
       expect(shape.project(mockActor(), ['__proto__.x']).ok).toBe(false);
       expect(shape.project(mockActor(), ['constructor']).ok).toBe(false);
-      expect(shape.project(mockActor(), Array.from({ length: 21 }, (_, index) => `system.v${index}`)).ok).toBe(false);
       expect(shape.project(mockActor(), 'name').ok).toBe(false);
       expect(shape.project(mockActor(), []).ok).toBe(false);
       expect(shape.project(mockActor(), [1]).ok).toBe(false);
+   });
+
+   it('projects more fields than the best-practice size', () => {
+      const outcome = shape.project(mockActor(), [
+         ...Array.from({ length: 30 }, (_, index) => `system.v${index}`),
+         'name',
+      ]);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.value.name).toBe(mockActor().name);
+      expect(outcome.missing).toHaveLength(30);
    });
 
    it('keeps every error within 256 bytes', () => {
@@ -445,7 +454,16 @@ describe('shape.paths', () => {
       expect(outcome.error).toMatch(/^PATH_UNSAFE_SEGMENT: /);
       expect(ENCODER.encode(outcome.error).length).toBeLessThanOrEqual(256);
       expect(shape.paths(mockActor(), []).ok).toBe(false);
-      expect(shape.paths(mockActor(), Array.from({ length: 21 }, () => 'name')).error).toMatch(/PATH_LIMIT/);
+   });
+
+   it('reads more paths than the best-practice size', () => {
+      const outcome = shape.paths(mockActor(), [
+         ...Array.from({ length: 30 }, (_, index) => `system.v${index}`),
+         'name',
+      ]);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.values.name).toBe(mockActor().name);
+      expect(outcome.missing).toHaveLength(30);
    });
 });
 

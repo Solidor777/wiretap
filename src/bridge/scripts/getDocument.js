@@ -13,6 +13,7 @@
 import { contentVersion } from '~/bridge/scripts/contentHash.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { keyPathsFor } from '~/bridge/scripts/keyFields.js';
+import { BEST_PRACTICE, SizeNotes } from '~/bridge/scripts/sizeNotes.js';
 import { shapeRefusal } from '~/bridge/scripts/writeArgs.js';
 
 /**
@@ -45,6 +46,12 @@ function checkCombination(args) {
  */
 export async function getDocumentHandler(args, ctx) {
    checkCombination(args);
+   /** @type {SizeNotes} The best-practice sizes this call passes, written as one line before the read. */
+   const notes = new SizeNotes('get_document');
+   notes.note(args.fields?.length ?? 0, 'fields in one call', BEST_PRACTICE.paths);
+   notes.note(args.paths?.length ?? 0, 'paths in one call', BEST_PRACTICE.paths);
+   notes.note(args.ifChanged?.length ?? 0, 'characters in ifChanged', BEST_PRACTICE.ifChangedChars);
+   notes.write(ctx.log);
    /** @type {{ data: Record<string, unknown>, documentName: string }} The plain export and its class. */
    const { data, documentName } = await ctx.core.readDocument(
       {

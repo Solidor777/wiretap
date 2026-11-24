@@ -47,12 +47,6 @@ const VALUE_MAX_BYTES = 64;
 const ECHO_MAX_BYTES = 48;
 
 /**
- * Most filters in one search.
- * @type {number}
- */
-export const FILTERS_MAX = 5;
-
-/**
  * Top-level filter paths a live document answers without an export.
  * @type {readonly string[]}
  */
@@ -92,11 +86,11 @@ const WORLD_ONLY = Object.freeze([
  * @property {string} documentName - The document class.
  * @property {string} [type] - Only documents of this subtype.
  * @property {string} [query] - Only documents whose name contains this text, ignoring case.
- * @property {string[]} [filters] - Up to 5 `path=value` equality filters on scalar values.
+ * @property {string[]} [filters] - `path=value` equality filters on scalar values, all of which must match.
  * @property {string} [pack] - The compendium to search.
  * @property {string} [parentUuid] - The parent whose embedded documents to search.
  * @property {string[]} [fields] - Dotted paths whose scalar values are added to each row.
- * @property {number} [limit] - Rows per page; defaults to `SEARCH_DEFAULT_LIMIT`, at most `SEARCH_MAX_LIMIT`.
+ * @property {number} [limit] - Rows per page; defaults to `SEARCH_DEFAULT_LIMIT`.
  * @property {string} [cursor] - The `nextCursor` of the previous page.
  */
 
@@ -136,20 +130,13 @@ function fail(code, message) {
 }
 
 /**
- * Parse a dotted path for a filter or a field, refusing wildcards, the password paths of a User and, for a field,
- * a path too long to echo as a row key.
+ * Parse a dotted path for a filter or a field, refusing wildcards and the password paths of a User.
  * @param {string} path - A dotted path from a filter or a field list.
  * @param {string} documentName - The searched class.
- * @param {boolean} [echoed] - Whether the path is echoed in rows (a field) and so is length-bounded.
  * @returns {ParsedPath} The parsed path.
  * @throws {ScriptError} A `PATH_*` code.
  */
-function parseSearchPath(path, documentName, echoed = false) {
-   /** @type {number} The longest echoed path, in bytes. */
-   const echoMax = getBudget('SEARCH_FIELD_PATH_MAX_BYTES').value;
-   if (echoed && utf8Bytes(path) > echoMax) {
-      throw fail('PATH_INVALID', `A field path is at most ${echoMax} bytes.`);
-   }
+function parseSearchPath(path, documentName) {
    /** @type {ReturnType<typeof parsePath>} The parse. */
    const parsed = parsePath(path);
    if (!parsed.ok) {
@@ -467,20 +454,14 @@ function passesFilters(candidate, filters, used) {
 export async function searchDocuments(params, signal) {
    /** @type {SearchParams} The class, subtype and name query of the search. */
    const { documentName, type, query } = params;
-   if ((params.filters ?? []).length > FILTERS_MAX) {
-      throw fail('ARGS_INVALID', `A search takes at most ${FILTERS_MAX} filters.`);
-   }
    /** @type {Array<{ parsed: ParsedPath, value: string }>} The parsed filters. */
    const filters = (params.filters ?? []).map((filter) => parseFilter(filter, documentName));
    /** @type {ParsedPath[]} The parsed field paths. */
-   const fields = (params.fields ?? []).map((field) => parseSearchPath(field, documentName, true));
+   const fields = (params.fields ?? []).map((field) => parseSearchPath(field, documentName));
    /** @type {string} The key a page must start after, or an empty string. */
    const after = params.cursor === undefined ? '' : decodeCursor(params.cursor);
-   /** @type {number} The rows per page. */
-   const limit = Math.min(
-      Math.max(Math.trunc(params.limit ?? getBudget('SEARCH_DEFAULT_LIMIT').value), 1),
-      getBudget('SEARCH_MAX_LIMIT').value,
-   );
+   /** @type {number} The rows per page; the page still stops at `SEARCH_PAGE_MAX_BYTES`. */
+   const limit = Math.max(Math.trunc(params.limit ?? getBudget('SEARCH_DEFAULT_LIMIT').value), 1);
    /** @type {string} The lower-cased query. */
    const needle = query === undefined ? '' : query.toLowerCase();
    /** @type {{ items: object[], live: boolean }} The candidates and whether they are live documents. */
@@ -571,8 +552,21 @@ export async function searchDocuments(params, signal) {
    }
    /** @type {Candidate[]} The candidates of this page. */
    const page = matches.slice(0, limit);
-   /** @type {unknown[][]} The rows of this page, before the page budget cuts them. */
-   const rows = page.map((candidate) => {
+   /** @type {number} The largest page. */
+   const pageMax = getBudget('SEARCH_PAGE_MAX_BYTES').value;
+   /**
+    * The rows of this page, before the page budget cuts them. Rows are built only until their bytes alone pass the
+    * page budget: a page holds every row it keeps, so no later row can be kept, and a large `limit` costs no export
+    * or fitting work past that point.
+    * @type {unknown[][]}
+    */
+   const rows = [];
+   /** @type {number} The bytes of the rows built so far. */
+   let rowBytes = 0;
+   for (const candidate of page) {
+      if (rowBytes > pageMax) {
+         break;
+      }
       /** @type {unknown[]} The row: uuid, name, type and, when fields were asked for, their values. */
       const row = [
          candidate.uuid,
@@ -582,10 +576,9 @@ export async function searchDocuments(params, signal) {
       if (fields.length > 0) {
          row.push(fieldValues(candidate, fields));
       }
-      return row;
-   });
-   /** @type {number} The largest page. */
-   const pageMax = getBudget('SEARCH_PAGE_MAX_BYTES').value;
+      rows.push(row);
+      rowBytes += utf8Bytes(JSON.stringify(row));
+   }
    /**
     * Build the result for the first `count` rows.
     * @param {number} count - How many rows to keep.

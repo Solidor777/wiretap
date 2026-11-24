@@ -431,7 +431,6 @@ describe('copyDataFromUuids', () => {
    it.each([
       [[]],
       ['MOCK'],
-      [Array.from({ length: 51 }, (_, i) => `Actor.MOCK${i}`)],
       [[42]],
    ])('refuses fromUuids %j', async (fromUuids) => {
       /** @type {Error} The refusal. */
@@ -440,7 +439,7 @@ describe('copyDataFromUuids', () => {
          fromUuids,
       });
       expect(error.code).toBe('ARGS_INVALID');
-      expect(error.message).toBe('Give 1 to 50 fromUuids.');
+      expect(error.message).toBe('Give one or more fromUuids.');
       expect(globalThis.fromUuid).not.toHaveBeenCalled();
    });
 

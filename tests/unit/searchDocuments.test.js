@@ -8,6 +8,7 @@ import { registerShippedScripts } from '~/bridge/scripts/index.js';
 import { createScriptRegistry } from '~/bridge/scripts/registry.js';
 import { searchDocuments } from '~/bridge/scripts/search.js';
 import { searchDocumentsHandler } from '~/bridge/scripts/searchDocuments.js';
+import { BEST_PRACTICE } from '~/bridge/scripts/sizeNotes.js';
 import { installWorld, mockDocument, removeWorld } from './mockDocuments.js';
 
 /** @type {TextEncoder} Measures serialized sizes in UTF-8 bytes. */
@@ -85,20 +86,22 @@ describe('search_documents definition', () => {
       expect(description.length).toBeLessThanOrEqual(getBudget('DESCRIPTION_TARGET_CHARS').value);
    });
 
-   it('requires documentName and bounds limit, filters, fields, field length, query and cursor', () => {
+   it('requires documentName and sets no use bound on limit, filters, fields, query or cursor', () => {
       /** @type {{ properties: Record<string, any>, required: string[] }} The input schema under test. */
       const { properties, required } = searchDocumentsDefinition.inputSchema;
       expect(required).toEqual(['documentName']);
-      expect(properties.limit).toMatchObject({
+      expect(properties.limit).toEqual({
          type: 'integer',
          minimum: 1,
-         maximum: getBudget('SEARCH_MAX_LIMIT').value,
       });
-      expect(properties.filters.maxItems).toBe(5);
-      expect(properties.fields.maxItems).toBe(getBudget('PATHS_PER_CALL_MAX').value);
-      expect(properties.query.maxLength).toBeLessThanOrEqual(64);
-      expect(properties.cursor.maxLength).toBeLessThanOrEqual(512);
-      expect(properties.fields.items.maxLength).toBe(getBudget('SEARCH_FIELD_PATH_MAX_BYTES').value);
+      expect(properties.filters).toEqual({
+         type: 'array',
+         maxItems: getBudget('SCHEMA_ARRAY_ITEMS_MAX').value,
+         items: { type: 'string' },
+      });
+      expect(properties.fields).toEqual(properties.filters);
+      expect(properties.query).toEqual({ type: 'string' });
+      expect(properties.cursor).toEqual({ type: 'string' });
       expect(properties.maxBytes).toBeUndefined();
    });
 
@@ -111,32 +114,32 @@ describe('search_documents definition', () => {
          },
          {
             documentName: 'Actor',
-            limit: 101,
-         },
-         {
-            documentName: 'Actor',
             limit: 2.5,
-         },
-         {
-            documentName: 'Actor',
-            cursor: 'c'.repeat(513),
-         },
-         {
-            documentName: 'Actor',
-            query: 'q'.repeat(65),
-         },
-         {
-            documentName: 'Actor',
-            filters: Array.from({ length: 6 }, (_, index) => `system.a${index}=1`),
-         },
-         {
-            documentName: 'Actor',
-            fields: ['f'.repeat(65)],
          },
          {},
       ]) {
          await expect(search(args)).rejects.toMatchObject({ code: 'ARGS_INVALID' });
       }
+   });
+
+   it('searches past every best-practice size: limit, filters, fields, field path, query and filter text', async () => {
+      installWorld({ documents: actors(130) }, vi.fn);
+      /** @type {string} A field path longer than 64 bytes that names nothing. */
+      const longField = `system.${'k'.repeat(80)}`;
+      const result = await search({
+         documentName: 'Actor',
+         query: 'MOCK_Actor_',
+         limit: 120,
+         filters: Array.from({ length: 6 }, () => 'system.rarity=common'),
+         fields: [
+            longField,
+            ...Array.from({ length: 21 }, (_, index) => `system.f${index}`),
+         ],
+      });
+      expect(result.total).toBe(44);
+      expect(ENCODER.encode(JSON.stringify(result)).length).toBeLessThanOrEqual(
+         getBudget('SEARCH_PAGE_MAX_BYTES').value,
+      );
    });
 
    it('refuses an undeclared maxBytes argument: the page budget is not a caller choice', async () => {
@@ -293,8 +296,8 @@ describe('search_documents paging', () => {
 });
 
 describe('search_documents limit clamps', () => {
-   it('clamps a limit the schema would refuse, for a caller that bypasses it', async () => {
-      // Short names and uuids keep 100 rows inside the page budget, so only the limit can stop the page.
+   it('pages past the best-practice limit, stopped only by the page budget, and clamps a limit below 1', async () => {
+      // Short names and uuids keep 150 rows inside the page budget, so the limit is the only bound reached.
       const small = actors(150, (index) => ({
          uuid: `A.${index}`,
          name: `n${String(index).padStart(3, '0')}`,
@@ -305,7 +308,11 @@ describe('search_documents limit clamps', () => {
          limit: 500,
          filters: [],
       });
-      expect(huge.rows).toHaveLength(100);
+      expect(huge.rows).toHaveLength(150);
+      expect((await searchDocuments({
+         documentName: 'Actor',
+         limit: 120,
+      })).rows).toHaveLength(120);
       expect((await searchDocuments({
          documentName: 'Actor',
          limit: 0,
@@ -322,22 +329,24 @@ describe('search_documents limit clamps', () => {
    });
 });
 
-describe('search_documents filter limit', () => {
-   it('refuses more than 5 filters for a caller that bypasses the schema, and accepts exactly 5', async () => {
+describe('search_documents filter count', () => {
+   it('applies more than 5 filters, each one narrowing the result', async () => {
       installWorld({ documents: actors(4) }, vi.fn);
       const filters = Array.from({ length: 5 }, () => 'system.rarity=common');
-      await expect(
-         searchDocuments({
-            documentName: 'Actor',
-            filters: [
-               ...filters,
-               'system.level=999',
-            ],
-         }),
-      ).rejects.toMatchObject({
-         code: 'ARGS_INVALID',
-         message: expect.stringContaining('at most 5 filters'),
-      });
+      expect((await searchDocuments({
+         documentName: 'Actor',
+         filters: [
+            ...filters,
+            'system.type=player',
+         ],
+      })).total).toBe(0);
+      expect((await searchDocuments({
+         documentName: 'Actor',
+         filters: [
+            ...filters,
+            'system.level=3',
+         ],
+      })).total).toBe(1);
       expect((await searchDocuments({
          documentName: 'Actor',
          filters,
@@ -909,6 +918,68 @@ describe('search_documents work bounds', () => {
       );
       expect(searched).toHaveBeenCalledWith({ documentName: 'Actor' }, signal);
    });
+
+   it('logs one line naming every best-practice size a call passes, and none at the sizes', async () => {
+      /**
+       * Run the handler over a stub search and return its log calls.
+       * @param {Record<string, unknown>} args - The arguments.
+       * @returns {Promise<unknown[][]>} The calls of the log sink.
+       */
+      async function logged(args) {
+         /** @type {ReturnType<typeof vi.fn>} The script log sink. */
+         const log = vi.fn();
+         await searchDocumentsHandler(args, {
+            core: {
+               searchDocuments: async () => ({
+                  rows: [],
+                  total: 0,
+               }),
+            },
+            log,
+         });
+         return log.mock.calls;
+      }
+      /**
+       * Build arguments that carry each measure at the given excess over its best-practice size.
+       * @param {number} over - 0 for exactly the sizes, 1 for one past each.
+       * @returns {Record<string, unknown>} The arguments.
+       */
+      function sized(over) {
+         return {
+            documentName: 'Actor',
+            limit: BEST_PRACTICE.searchLimit + over,
+            filters: [
+               `system.a=${'v'.repeat(BEST_PRACTICE.filterChars - 'system.a='.length + over)}`,
+               ...Array.from({ length: BEST_PRACTICE.filters - 1 + over }, () => 'system.b=1'),
+            ],
+            fields: [
+               `system.${'k'.repeat(BEST_PRACTICE.fieldPathBytes - 'system.'.length + over)}`,
+               ...Array.from({ length: BEST_PRACTICE.paths - 1 + over }, () => 'name'),
+            ],
+            query: 'q'.repeat(BEST_PRACTICE.queryChars + over),
+            cursor: 'c'.repeat(BEST_PRACTICE.cursorChars + over),
+         };
+      }
+      expect(await logged(sized(0))).toEqual([]);
+      expect(await logged(sized(1))).toEqual([
+         [
+            [
+               `Wiretap | search_documents: ${BEST_PRACTICE.searchLimit + 1} results per page, over the ` +
+                  `${BEST_PRACTICE.searchLimit} best-practice size`,
+               `${BEST_PRACTICE.filters + 1} filters in one call, over the ${BEST_PRACTICE.filters} best-practice size`,
+               `${BEST_PRACTICE.filterChars + 1} characters in one filter, over the ${BEST_PRACTICE.filterChars} ` +
+                  'best-practice size',
+               `${BEST_PRACTICE.paths + 1} fields in one call, over the ${BEST_PRACTICE.paths} best-practice size`,
+               `${BEST_PRACTICE.fieldPathBytes + 1} bytes in one field path, over the ` +
+                  `${BEST_PRACTICE.fieldPathBytes} best-practice size`,
+               `${BEST_PRACTICE.queryChars + 1} characters in the query, over the ${BEST_PRACTICE.queryChars} ` +
+                  'best-practice size',
+               `${BEST_PRACTICE.cursorChars + 1} characters in the cursor, over the ${BEST_PRACTICE.cursorChars} ` +
+                  'best-practice size',
+            ].join('; '),
+         ],
+      ]);
+   });
 });
 
 describe('search_documents compendium index', () => {
@@ -995,7 +1066,7 @@ describe('search_documents compendium secrets and cursor size', () => {
       ).resolves.toBeDefined();
    });
 
-   it('issues a cursor that fits the schema bound for the worst-case name and uuid', async () => {
+   it('issues a cursor within the best-practice cursor size for the worst-case name and uuid', async () => {
       const worst = Array.from({ length: 2 }, (_, index) =>
          mockDocument(
             {
@@ -1008,7 +1079,8 @@ describe('search_documents compendium secrets and cursor size', () => {
          ),
       );
       installWorld({ documents: worst }, vi.fn);
-      const max = searchDocumentsDefinition.inputSchema.properties.cursor.maxLength;
+      // A cursor the tool issues never draws the size warning when it is passed back.
+      const max = BEST_PRACTICE.cursorChars;
       const first = await search({ documentName: 'Actor', limit: 1 });
       expect(first.nextCursor.length).toBeLessThanOrEqual(max);
       const second = await search({ documentName: 'Actor', limit: 1, cursor: first.nextCursor });
@@ -1018,7 +1090,7 @@ describe('search_documents compendium secrets and cursor size', () => {
 });
 
 describe('search_documents row size', () => {
-   /** @type {string[]} Twenty field paths at the echo bound. */
+   /** @type {string[]} Twenty field paths of 59 bytes each. */
    const fields = Array.from(
       { length: 20 },
       (_, field) => `system.${'k'.repeat(50)}${String(field).padStart(2, '0')}`,
@@ -1089,13 +1161,26 @@ describe('search_documents row size', () => {
       expect(seen).toHaveLength(3);
    });
 
-   it('refuses a field path longer than the echo bound', async () => {
+   it('reads a field path longer than the best-practice size, and the page stays within its budget', async () => {
+      installWorld({ documents: actors(1) }, vi.fn);
+      const page = await searchDocuments({
+         documentName: 'Actor',
+         fields: [`system.${'k'.repeat(getBudget('SEARCH_FIELD_PATH_MAX_BYTES').value)}`],
+      });
+      expect(page.total).toBe(1);
+      expect(ENCODER.encode(JSON.stringify(page)).length).toBeLessThanOrEqual(getBudget('SEARCH_PAGE_MAX_BYTES').value);
+   });
+
+   it('refuses a field path past the path byte protection with a message that says so', async () => {
       installWorld({ documents: actors(1) }, vi.fn);
       await expect(
          searchDocuments({
             documentName: 'Actor',
-            fields: [`system.${'k'.repeat(getBudget('SEARCH_FIELD_PATH_MAX_BYTES').value)}`],
+            fields: [`system.${'k'.repeat(getBudget('PATH_BYTES_MAX').value)}`],
          }),
-      ).rejects.toMatchObject({ code: 'PATH_INVALID' });
+      ).rejects.toMatchObject({
+         code: 'PATH_LIMIT',
+         message: expect.stringContaining(String(getBudget('PATH_BYTES_MAX').value)),
+      });
    });
 });

@@ -156,13 +156,22 @@ describe('deleteDocuments: deleting', () => {
       expect(world.calls).toEqual([]);
    });
 
-   it('refuses an empty list, a repeated uuid and a list over the bound', async () => {
+   it('refuses an empty list and a repeated uuid', async () => {
       expect((await failure({ uuids: [] })).code).toBe('ARGS_INVALID');
       expect((await failure({ uuids: [actor.uuid, actor.uuid] })).code).toBe('ARGS_INVALID');
-      const limit = getBudget('WRITE_DOCUMENTS_MAX').value;
-      const tooMany = Array.from({ length: limit + 1 }, (_, index) => `Actor.${index}`);
-      expect((await failure({ uuids: tooMany })).code).toBe('ARGS_INVALID');
       expect(world.calls).toEqual([]);
+   });
+
+   it('deletes more documents in one call than the best-practice size', async () => {
+      const count = getBudget('WRITE_DOCUMENTS_MAX').value + 1;
+      const actors = Array.from({ length: count }, (_, index) => world.add('Actor', {
+         name: `MOCK_actor_${index}`,
+         type: 'npc',
+      }));
+      const rows = await deleteDocuments({ uuids: actors.map((entry) => entry.uuid) });
+      expect(world.classes.Actor.deleteDocuments).toHaveBeenCalledTimes(1);
+      expect(world.classes.Actor.deleteDocuments.mock.calls[0][0]).toHaveLength(count);
+      expect(rows).toHaveLength(count);
    });
 
    it('reports a shortfall when a hook cancelled the deletion', async () => {

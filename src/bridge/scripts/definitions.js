@@ -4,14 +4,14 @@
  */
 
 import { getBudget } from '../../../shared/budgets.js';
-import { SCHEMA_BOUND_MAX } from '../../../shared/schemaValidate.js';
 
 /**
- * Most patch entries one `update_documents` call carries: up to 50 documents with 4 patches each on average. The
- * write operation separately bounds the documents (50) and the patches of one document (20).
+ * The `maxItems` of every list argument: the largest the argument-schema guideline lets a shipped schema declare (every
+ * shipped array declares one). The scripts set no lower count; past a best-practice size (`sizeNotes.js`) a call runs
+ * and the client logs one warning line, and the value-node bound of the argument validator still bounds the call.
  * @type {number}
  */
-const UPDATE_ENTRIES_MAX = 200;
+const ITEMS_MAX = getBudget('SCHEMA_ARRAY_ITEMS_MAX').value;
 
 /**
  * The script definition.
@@ -57,19 +57,16 @@ export const getDocumentDefinition = {
          },
          fields: {
             type: 'array',
-            maxItems: 20,
+            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          paths: {
             type: 'array',
-            maxItems: 20,
+            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          derived: { type: 'boolean' },
-         ifChanged: {
-            type: 'string',
-            maxLength: 32,
-         },
+         ifChanged: { type: 'string' },
          maxBytes: {
             type: 'integer',
             minimum: 128,
@@ -97,37 +94,24 @@ export const searchDocumentsDefinition = {
       properties: {
          documentName: { type: 'string' },
          type: { type: 'string' },
-         query: {
-            type: 'string',
-            maxLength: 64,
-         },
+         query: { type: 'string' },
          filters: {
             type: 'array',
-            maxItems: 5,
-            items: {
-               type: 'string',
-               maxLength: 256,
-            },
+            maxItems: ITEMS_MAX,
+            items: { type: 'string' },
          },
          pack: { type: 'string' },
          parentUuid: { type: 'string' },
          fields: {
             type: 'array',
-            maxItems: 20,
-            items: {
-               type: 'string',
-               maxLength: getBudget('SEARCH_FIELD_PATH_MAX_BYTES').value,
-            },
+            maxItems: ITEMS_MAX,
+            items: { type: 'string' },
          },
          limit: {
             type: 'integer',
             minimum: 1,
-            maximum: 100,
          },
-         cursor: {
-            type: 'string',
-            maxLength: 512,
-         },
+         cursor: { type: 'string' },
       },
       required: ['documentName'],
       additionalProperties: false,
@@ -182,20 +166,14 @@ export const createDocumentsDefinition = {
          documentName: { type: 'string' },
          data: {
             type: 'array',
-            maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
-            items: {
-               type: 'string',
-               maxLength: SCHEMA_BOUND_MAX,
-            },
+            maxItems: ITEMS_MAX,
+            items: { type: 'string' },
          },
          fromUuids: {
             type: 'array',
             minItems: 1,
-            maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
-            items: {
-               type: 'string',
-               maxLength: 256,
-            },
+            maxItems: ITEMS_MAX,
+            items: { type: 'string' },
          },
          parentUuid: { type: 'string' },
          pack: { type: 'string' },
@@ -208,7 +186,7 @@ export const createDocumentsDefinition = {
          actAs: { type: 'string' },
          paths: {
             type: 'array',
-            maxItems: getBudget('PATHS_PER_CALL_MAX').value,
+            maxItems: ITEMS_MAX,
             items: {
                type: 'string',
                maxLength: getBudget('PATH_BYTES_MAX').value,
@@ -240,7 +218,7 @@ export const updateDocumentsDefinition = {
       properties: {
          updates: {
             type: 'array',
-            maxItems: UPDATE_ENTRIES_MAX,
+            maxItems: ITEMS_MAX,
             items: {
                type: 'object',
                properties: {
@@ -249,10 +227,7 @@ export const updateDocumentsDefinition = {
                      type: 'string',
                      maxLength: getBudget('PATH_BYTES_MAX').value,
                   },
-                  value: {
-                     type: 'string',
-                     maxLength: SCHEMA_BOUND_MAX,
-                  },
+                  value: { type: 'string' },
                   op: {
                      type: 'string',
                      enum: [
@@ -273,7 +248,7 @@ export const updateDocumentsDefinition = {
          actAs: { type: 'string' },
          paths: {
             type: 'array',
-            maxItems: getBudget('PATHS_PER_CALL_MAX').value,
+            maxItems: ITEMS_MAX,
             items: {
                type: 'string',
                maxLength: getBudget('PATH_BYTES_MAX').value,
@@ -303,7 +278,7 @@ export const deleteDocumentsDefinition = {
       properties: {
          uuids: {
             type: 'array',
-            maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
+            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          dryRun: { type: 'boolean' },
@@ -331,15 +306,12 @@ export const replaceDocumentDefinition = {
       type: 'object',
       properties: {
          uuid: { type: 'string' },
-         data: {
-            type: 'string',
-            maxLength: SCHEMA_BOUND_MAX,
-         },
+         data: { type: 'string' },
          dryRun: { type: 'boolean' },
          actAs: { type: 'string' },
          paths: {
             type: 'array',
-            maxItems: getBudget('PATHS_PER_CALL_MAX').value,
+            maxItems: ITEMS_MAX,
             items: {
                type: 'string',
                maxLength: getBudget('PATH_BYTES_MAX').value,
@@ -374,7 +346,7 @@ export const batchDefinition = {
       properties: {
          creates: {
             type: 'array',
-            maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
+            maxItems: ITEMS_MAX,
             items: {
                type: 'object',
                properties: {
@@ -386,7 +358,7 @@ export const batchDefinition = {
          },
          updates: {
             type: 'array',
-            maxItems: UPDATE_ENTRIES_MAX,
+            maxItems: ITEMS_MAX,
             items: {
                type: 'object',
                properties: {
@@ -403,7 +375,7 @@ export const batchDefinition = {
          },
          deletes: {
             type: 'array',
-            maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
+            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          dryRun: { type: 'boolean' },

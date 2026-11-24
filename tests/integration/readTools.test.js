@@ -181,7 +181,8 @@ describe('the core read tools over the bridge', () => {
             name: 'get_document',
             arguments: {
                uuid: 'Actor.MOCKACTOR0000001',
-               paths: Array.from({ length: 21 }, (_, index) => `p${index}`),
+               // One past the item bound every shipped list schema declares.
+               paths: Array.from({ length: 1001 }, (_, index) => `p${index}`),
             },
          })
          .catch((error) => error);
@@ -298,8 +299,10 @@ describe('the core read tools over the bridge', () => {
          name: 'search_documents',
          arguments: {
             documentName: 'Actor',
-            filters: ['system.rarity=common'],
-            limit: 100,
+            filters: Array.from({ length: 6 }, () => 'system.rarity=common'),
+            fields: [`system.${'f'.repeat(65)}`],
+            cursor: 'c'.repeat(513),
+            limit: 150,
          },
       });
       expect(JSON.parse(textOf(result))).toEqual({
@@ -310,8 +313,10 @@ describe('the core read tools over the bridge', () => {
          name: 'search_documents',
          arguments: {
             documentName: 'Actor',
-            filters: ['system.rarity=common'],
-            limit: 100,
+            filters: Array.from({ length: 6 }, () => 'system.rarity=common'),
+            fields: [`system.${'f'.repeat(65)}`],
+            cursor: 'c'.repeat(513),
+            limit: 150,
          },
       });
       const before = gm.invokes.length;
@@ -320,47 +325,11 @@ describe('the core read tools over the bridge', () => {
             'search_documents',
             {
                documentName: 'Actor',
-               limit: 101,
+               limit: 0,
             },
             {
-               code: 'too_big',
+               code: 'too_small',
                path: ['limit'],
-            },
-         ],
-         [
-            'search_documents',
-            {
-               documentName: 'Actor',
-               cursor: 'c'.repeat(513),
-            },
-            {
-               code: 'too_big',
-               path: ['cursor'],
-            },
-         ],
-         [
-            'search_documents',
-            {
-               documentName: 'Actor',
-               filters: Array.from({ length: 6 }, () => 'a=1'),
-            },
-            {
-               code: 'too_big',
-               path: ['filters'],
-            },
-         ],
-         [
-            'search_documents',
-            {
-               documentName: 'Actor',
-               fields: ['f'.repeat(65)],
-            },
-            {
-               code: 'too_big',
-               path: [
-                  'fields',
-                  0,
-               ],
             },
          ],
          [
