@@ -13,8 +13,8 @@
  * Server protection, for every source: object and array nesting deeper than `SCHEMA_PLUGIN_DEPTH_MAX` (32) levels is
  * refused, so a hostile schema cannot overflow the stack of either side; and a schema whose walk expands past
  * `SCHEMA_EXPANDED_NODES_MAX` (60,000) nodes is refused, each reused object counted every time it appears, so a
- * schema built in code that reuses one object at several levels costs bounded work. Each object's names are held in
- * sets, so the compile and every validation take time linear in the schema and the value.
+ * schema built in code that reuses one object at several levels costs bounded work. The name lookups use sets, so the
+ * compile takes time linear in the schema.
  *
  * Plugin switch: the complexity guidelines (`SCHEMA_GUIDELINES`: nesting of 4 levels, the root being level 1; 64
  * schema nodes; 32 properties per object; 32 enum values of at most 64 characters; string and item-count bounds of at

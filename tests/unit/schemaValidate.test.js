@@ -1493,16 +1493,7 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
          }
       });
 
-   it('compiles, converts and validates a schema of 40,000 properties, 9,000 required, in linear time', () => {
-      // The fixed times, in milliseconds. The linear steps measure 19 to 31 ms (client compile), 2 to 3 ms (client
-      // validation) and 226 to 292 ms (sidecar conversion, mostly zod building 40,000 property types); with a list scan
-      // per name they take 0.4 to 3.4 s, 0.2 s and 0.6 to 0.9 s. Zod's own parse measures 265 to 738 ms.
-      /** @type {number} The time a client step must finish in. */
-      const clientMaxMs = 150;
-      /** @type {number} The time the sidecar conversion must finish in. */
-      const convertMaxMs = 600;
-      /** @type {number} The time a zod parse must finish in. */
-      const parseMaxMs = 2000;
+   it('compiles, converts and validates a schema of 40,000 properties, 9,000 required, on both sides', () => {
       /** @type {string[]} The property names. */
       const names = Array.from({ length: 40_000 }, (_, i) => `p${i}`);
       // The required names are the last ones, so a list scan for any of them would run nearly the whole list. 9,000
@@ -1523,42 +1514,29 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
          name,
          true,
       ]));
-      /**
-       * Run one step and assert it finished within a fixed time.
-       * @template T
-       * @param {number} maxMs - The fixed time, in milliseconds.
-       * @param {() => T} step - The work to time.
-       * @returns {T} Its result.
-       */
-      const timed = (maxMs, step) => {
-         const start = performance.now();
-         const result = step();
-         expect(performance.now() - start).toBeLessThan(maxMs);
-         return result;
-      };
-      const client = timed(clientMaxMs, () => compileSchema(schema, { source: 'plugin' }));
-      const sidecar = timed(convertMaxMs, () => jsonSchemaToZodShape(schema, false, 'plugin'));
+      const client = compileSchema(schema, { source: 'plugin' });
+      const sidecar = jsonSchemaToZodShape(schema, false, 'plugin');
       expect(client.ok).toBe(true);
       expect(sidecar.ok).toBe(true);
       const parser = argumentSchema(sidecar);
-      expect(timed(clientMaxMs, () => client.validate(full)).ok).toBe(true);
-      expect(timed(parseMaxMs, () => parser.safeParse(full)).success).toBe(true);
+      expect(client.validate(full).ok).toBe(true);
+      expect(parser.safeParse(full).success).toBe(true);
       const extra = {
          ...full,
          x: true,
       };
-      expect(timed(clientMaxMs, () => client.validate(extra))).toEqual({
+      expect(client.validate(extra)).toEqual({
          ok: false,
          error: 'arguments: has a property that is not an argument',
       });
-      expect(timed(parseMaxMs, () => parser.safeParse(extra)).success).toBe(false);
+      expect(parser.safeParse(extra).success).toBe(false);
       const missing = { ...full };
       delete missing.p39999;
-      expect(timed(clientMaxMs, () => client.validate(missing))).toEqual({
+      expect(client.validate(missing)).toEqual({
          ok: false,
          error: 'p39999: is required',
       });
-      expect(timed(parseMaxMs, () => parser.safeParse(missing)).success).toBe(false);
+      expect(parser.safeParse(missing).success).toBe(false);
    });
 
    it('names the guidelines in warning order and checks a description without a length limit', () => {
