@@ -572,6 +572,84 @@ describe('validateScriptDefinition: plugin route', () => {
       expect(validateScriptDefinition(script('tool', { result: { budgetBytes: 50000 } }), 'shipped').ok).toBe(false);
    });
 
+   it('warns once for a plugin version over 32 characters and not at 32; refuses it when shipped', () => {
+      /** @type {string} A valid version of exactly 32 characters. */
+      const atLimit = `1.0.0-${'a'.repeat(26)}`;
+      /** @type {string} A valid version of 33 characters. */
+      const overLimit = `${atLimit}b`;
+      expect(plugin('my-module__tool', { version: atLimit }).warnings).toEqual([]);
+      /** @type {ReturnType<typeof validateScriptDefinition>} The outcome past the best practice. */
+      const outcome = plugin('my-module__tool', { version: overLimit });
+      expect(outcome.ok).toBe(true);
+      expect(outcome.definition.version).toBe(overLimit);
+      expect(outcome.warnings).toEqual([
+         'version is 33 characters, over the 32-character best practice',
+      ]);
+      expect(validateScriptDefinition(script('tool', { version: overLimit }), 'shipped').reason).toContain('version');
+   });
+
+   it('refuses a plugin version that is not semver-like at any length', () => {
+      expect(plugin('my-module__tool', { version: `v${'1'.repeat(40)}` }).ok).toBe(false);
+   });
+
+   /** @type {string[]} Five text argument names, one past the four-name best practice. */
+   const FIVE_NAMES = [
+      'a',
+      'b',
+      'c',
+      'd',
+      'e',
+   ];
+
+   /** @type {object} An argument schema declaring each of `FIVE_NAMES` as a text property. */
+   const fiveTexts = {
+      type: 'object',
+      properties: Object.fromEntries(FIVE_NAMES.map((key) => [
+         key,
+         { type: 'string' },
+      ])),
+   };
+
+   it('warns once for more than four plugin handleArgs names and not at four; refuses them when shipped', () => {
+      expect(plugin('my-module__tool', {
+         inputSchema: fiveTexts,
+         handleArgs: FIVE_NAMES.slice(0, 4),
+      }).warnings).toEqual([]);
+      /** @type {ReturnType<typeof validateScriptDefinition>} The outcome past the best practice. */
+      const outcome = plugin('my-module__tool', {
+         inputSchema: fiveTexts,
+         handleArgs: FIVE_NAMES,
+      });
+      expect(outcome.ok).toBe(true);
+      expect(outcome.definition.handleArgs).toEqual(FIVE_NAMES);
+      expect(outcome.warnings).toEqual([
+         'handleArgs lists 5 names, over the 4-name best practice',
+      ]);
+      expect(validateScriptDefinition(script('tool', {
+         inputSchema: fiveTexts,
+         handleArgs: FIVE_NAMES,
+      }), 'shipped').reason).toBe('handleArgs must list 1 to 4 argument names');
+   });
+
+   it('refuses an empty, repeated or undeclared plugin handleArgs list whatever its length', () => {
+      for (const handleArgs of [
+         [],
+         [
+            ...FIVE_NAMES.slice(0, 4),
+            'a',
+         ],
+         [
+            ...FIVE_NAMES.slice(0, 4),
+            'nope',
+         ],
+      ]) {
+         expect(plugin('my-module__tool', {
+            inputSchema: fiveTexts,
+            handleArgs,
+         }).ok, JSON.stringify(handleArgs)).toBe(false);
+      }
+   });
+
    it('does not refuse or warn for a plugin definition over 800 raw bytes; refuses it for a shipped script', () => {
       const inputSchema = {
          type: 'object',
