@@ -161,6 +161,75 @@ describe('callTool: gate enforcement on this client', () => {
    });
 });
 
+describe('callTool: plugin tool gates', () => {
+   /** @type {ReturnType<typeof vi.fn>} The plugin tool's handler. */
+   let handler;
+
+   beforeEach(() => {
+      handler = vi.fn(async () => 'ran');
+      registry.register(
+         script('my-mod__tool', {
+            moduleId: 'my-mod',
+            gate: 'allowDelete',
+         }),
+         handler,
+         'plugin',
+      );
+   });
+
+   it('denies a plugin tool whose module allowedPluginModules does not list, before validating or running',
+      async () => {
+         stored.allowDelete = true;
+         const error = await failure({
+            name: 'my-mod__tool',
+            arguments: { text: 'x' },
+         });
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowedPluginModules');
+         const invalid = await failure({
+            name: 'my-mod__tool',
+            arguments: { text: 5 },
+         });
+         expect(invalid.code).toBe(GATE_DENIED);
+         expect(handler).not.toHaveBeenCalled();
+      });
+
+   it('denies a plugin tool whose declared gate is closed while its module is listed', async () => {
+      stored.allowedPluginModules = 'my-mod';
+      const error = await failure({
+         name: 'my-mod__tool',
+         arguments: { text: 'x' },
+      });
+      expect(error.code).toBe(GATE_DENIED);
+      expect(error.message).toContain('allowDelete');
+      expect(handler).not.toHaveBeenCalled();
+   });
+
+   it('judges the module gate before the declared gate, so a module not allowed reveals nothing of its gate',
+      async () => {
+         const error = await failure({
+            name: 'my-mod__tool',
+            arguments: { text: 'x' },
+         });
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowedPluginModules');
+         expect(error.message).not.toContain('allowDelete');
+         expect(handler).not.toHaveBeenCalled();
+      });
+
+   it('runs a plugin tool when its module is listed and its declared gate is open', async () => {
+      stored.allowedPluginModules = 'my-mod';
+      stored.allowDelete = true;
+      await expect(
+         callTool({
+            name: 'my-mod__tool',
+            arguments: { text: 'x' },
+         }),
+      ).resolves.toBe('ran');
+      expect(handler).toHaveBeenCalledTimes(1);
+   });
+});
+
 describe('callTool: argument validation', () => {
    it('refuses invalid arguments with ARGS_INVALID naming the path and never runs the handler', async () => {
       const handler = vi.fn(async () => 'ran');

@@ -1,7 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { getBudget } from '$shared/budgets.js';
-import { compileSchema } from '$shared/schemaValidate.js';
-import { RESERVED_SCRIPT_NAMES, definitionBytes } from '$shared/scripts.js';
+import { definitionBytes } from '$shared/scripts.js';
 import { createScriptRegistry, registerScript, scriptRegistry, ScriptError } from '~/bridge/scripts/registry.js';
 import { paddedSchema, script } from './scriptFixtures.js';
 
@@ -197,45 +195,101 @@ describe('script registry: refusals', () => {
       expect(registry.definitions()[0].version).toBe('1.0.0');
    });
 
-   it('refuses the script past the always-listed tool budget, leaving room for the sidecar built-ins', () => {
+   it('accepts more scripts than any former cap', () => {
       const { registry } = make();
-      const room = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
-      for (let index = 0; index < room; index += 1) {
-         expect(registry.register(script(`tool_${index}`), noop).ok).toBe(true);
+      for (let index = 0; index < 100; index += 1) {
+         expect(registry.register(script(`tool_${index}`), () => null).ok).toBe(true);
       }
-      const outcome = registry.register(script('one_too_many'), noop);
-      expect(outcome.ok).toBe(false);
-      expect(outcome.reason).toContain(`at most ${30 - RESERVED_SCRIPT_NAMES.length} scripts`);
-      expect(registry.definitions()).toHaveLength(room);
+      expect(registry.definitions()).toHaveLength(100);
    });
 
-   it('refuses the script that would take all definitions, as listed, past the total budget', () => {
-      const { registry } = make();
-      /** @type {object} A schema whose listed definition is close to the definition budget. */
-      const inputSchema = paddedSchema(790);
-      /** @type {number} The listed size of each padded definition. */
-      const each = definitionBytes('padded_script', 'd'.repeat(20), compileSchema(inputSchema).listed);
-      expect(each).toBeGreaterThan(740);
-      /** @type {number} How many fit beside the room kept for the sidecar built-ins. */
-      const fits = Math.floor(
-         (getBudget('ALL_DEFINITIONS_MAX_BYTES').value
-            - getBudget('DEFINITION_MAX_BYTES').value * RESERVED_SCRIPT_NAMES.length) / each,
-      );
-      expect(fits).toBeLessThan(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length);
-      for (let index = 0; index < fits; index += 1) {
-         const outcome = registry.register(
-            script(`padded_script_${String(index).padStart(2, '0')}`, { description: 'd'.repeat(20), inputSchema }),
-            noop,
-         );
-         expect(outcome.ok, `${index}: ${outcome.reason}`).toBe(true);
-      }
+   it('registers a plugin script and logs one warning line per guideline', () => {
+      const { registry, lines } = make();
       const outcome = registry.register(
-         script(`padded_script_${fits}`, { description: 'd'.repeat(20), inputSchema }),
-         noop,
+         script('my-mod__big', {
+            moduleId: 'my-mod',
+            description: 'd'.repeat(200),
+            inputSchema: paddedSchema(1500),
+         }),
+         () => null,
+         'plugin',
       );
-      expect(outcome.ok).toBe(false);
-      expect(outcome.reason).toMatch(/definitions/);
-      expect(registry.definitions()).toHaveLength(fits);
+      expect(outcome).toEqual({
+         ok: true,
+         name: 'my-mod__big',
+      });
+      expect(lines).toEqual([
+         'Wiretap | script registry warning for "my-mod__big": description is 200 characters, over the ' +
+            '160-character target',
+         expect.stringMatching(
+            new RegExp(
+               '^Wiretap \\| script registry warning for "my-mod__big": listed definition is \\d+ bytes, over the ' +
+                  '800-byte guideline$',
+            ),
+         ),
+      ]);
+   });
+
+   it('logs schema warnings between the validator warnings and the listed-size warning', () => {
+      const { registry, lines } = make();
+      /**
+       * @type {object} A schema of 40 short properties: over both the 32-property guideline and the 800-byte listed
+       * guideline.
+       */
+      const inputSchema = {
+         type: 'object',
+         properties: Object.fromEntries(
+            Array.from({ length: 40 }, (unused, index) => [
+               `p${index}`,
+               { type: 'string' },
+            ]),
+         ),
+      };
+      const outcome = registry.register(
+         script('my-mod__wide', {
+            moduleId: 'my-mod',
+            description: 'd'.repeat(200),
+            inputSchema,
+         }),
+         () => null,
+         'plugin',
+      );
+      expect(outcome.ok).toBe(true);
+      expect(lines).toEqual([
+         'Wiretap | script registry warning for "my-mod__wide": description is 200 characters, over the ' +
+            '160-character target',
+         'Wiretap | script registry warning for "my-mod__wide": an object schema has 40 properties, over the ' +
+            '32-property guideline',
+         expect.stringMatching(/listed definition is \d+ bytes, over the 800-byte guideline$/),
+      ]);
+   });
+
+   it('refuses on the plugin route what a plugin cannot work without', () => {
+      const { registry } = make();
+      const def = script('my-mod__tool', { moduleId: 'my-mod' });
+      expect(registry.register(def, 'not a function', 'plugin').reason).toBe('handler must be a function');
+      expect(
+         registry.register(
+            {
+               ...def,
+               requires: 'none',
+            },
+            () => null,
+            'plugin',
+         ).ok,
+      ).toBe(false);
+      expect(registry.register(script('my-mod__tool'), () => null, 'plugin').reason).toContain('moduleId must be');
+      expect(registry.register(def, () => null, 'plugin').ok).toBe(true);
+      expect(registry.register(def, () => null, 'plugin').reason).toBe(
+         'name "my-mod__tool" is already registered: choose another tool name',
+      );
+   });
+
+   it('keeps the hard refusals of the shipped route', () => {
+      const { registry } = make();
+      expect(registry.register(script('big', { inputSchema: paddedSchema(1500) }), () => null).reason).toMatch(
+         /definition is \d+ bytes, at most 800 bytes/,
+      );
    });
 
    it('refuses a definition that is within the budget as received but over it as listed', () => {
