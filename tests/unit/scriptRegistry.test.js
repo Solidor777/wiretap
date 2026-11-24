@@ -232,7 +232,10 @@ describe('script registry: refusals', () => {
 
    it('logs schema warnings between the validator warnings and the listed-size warning', () => {
       const { registry, lines } = make();
-      /** @type {object} A schema of 40 short properties: over the 32-property guideline, within 800 listed bytes. */
+      /**
+       * @type {object} A schema of 40 short properties: over both the 32-property guideline and the 800-byte listed
+       * guideline.
+       */
       const inputSchema = {
          type: 'object',
          properties: Object.fromEntries(

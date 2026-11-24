@@ -205,6 +205,18 @@ describe('callTool: plugin tool gates', () => {
       expect(handler).not.toHaveBeenCalled();
    });
 
+   it('judges the module gate before the declared gate, so a module not allowed reveals nothing of its gate',
+      async () => {
+         const error = await failure({
+            name: 'my-mod__tool',
+            arguments: { text: 'x' },
+         });
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowedPluginModules');
+         expect(error.message).not.toContain('allowDelete');
+         expect(handler).not.toHaveBeenCalled();
+      });
+
    it('runs a plugin tool when its module is listed and its declared gate is open', async () => {
       stored.allowedPluginModules = 'my-mod';
       stored.allowDelete = true;

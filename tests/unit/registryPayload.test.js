@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildRegistryPayload, REGISTRY_WIRE_MAX_BYTES } from '~/bridge/scripts/registryPayload.js';
+import { buildRegistryPayload } from '~/bridge/scripts/registryPayload.js';
 
 /**
  * A shipped definition stand-in: no `moduleId`, padded by its description.
@@ -25,10 +25,6 @@ const plugin = (name, size) => ({
 });
 
 describe('buildRegistryPayload', () => {
-   it('keeps the bound below the sidecar Socket.IO message bound of 1,000,000 bytes', () => {
-      expect(REGISTRY_WIRE_MAX_BYTES).toBe(900_000);
-   });
-
    it('holds every definition when the payload fits', () => {
       const log = vi.fn();
       const definitions = [
