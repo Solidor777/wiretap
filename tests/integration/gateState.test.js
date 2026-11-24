@@ -5,7 +5,7 @@ import { io as ioClient } from 'socket.io-client';
 import { createWiretapServer } from '../../server/server.ts';
 import { mcpCall } from './mcpHttp.js';
 import { createDocumentsArgs, createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
-import { GATES, closedGateState } from '../../shared/gates.js';
+import { GATES, closedGateState, isModuleAllowed } from '../../shared/gates.js';
 import {
    BRIDGE_GATE_STATE,
    BRIDGE_IDENTIFY,
@@ -145,17 +145,25 @@ describe('gate state over Socket.IO', () => {
       expect(server.bridge.gateState()).toEqual(closedGateState());
    });
 
-   it('treats a module list over 64 entries as empty', async () => {
+   it('keeps a 5,000-entry module list whole and allows a plugin of any of its modules', async () => {
       const port = await start();
       const client = await connectFake(port);
       await client.emitWithAck(BRIDGE_IDENTIFY, identify());
+      /** @type {string[]} The allowed module ids pushed as gate state. */
+      const modules = Array.from({ length: 5000 }, (_, index) => `m${index}`);
       await client.emitWithAck(BRIDGE_GATE_STATE, {
          gateState: {
             allowMacroExecution: true,
-            allowedPluginModules: Array.from({ length: 5000 }, (_, index) => `m${index}`),
+            allowedPluginModules: modules,
          },
       });
-      expect(server.bridge.gateState()).toEqual({ ...closedGateState(), allowMacroExecution: true });
+      expect(server.bridge.gateState()).toEqual({
+         ...closedGateState(),
+         allowMacroExecution: true,
+         allowedPluginModules: modules,
+      });
+      expect(isModuleAllowed(server.bridge.gateState(), 'm4999')).toBe(true);
+      expect(isModuleAllowed(server.bridge.gateState(), 'm5000')).toBe(false);
    });
 
    it('keeps a separate snapshot for each GM endpoint', async () => {
