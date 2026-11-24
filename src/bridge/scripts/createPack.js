@@ -8,8 +8,13 @@ import { cleanForLog } from '$shared/logText.js';
 import { fitPackAck, requireOpenGate } from '~/bridge/scripts/packCommon.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 
-/** @type {number} The most characters a pack name may hold; the name becomes a folder name on the Foundry server. */
-const PACK_NAME_MAX_CHARS = 64;
+/**
+ * The pack name length past which a call logs one warning line. Foundry sets no length on a pack name
+ * (`BasePackage.validateId` and the pack `name` field, `common/packages/base-package.mjs:369,583-590`), so a longer
+ * name is created; the name becomes a folder name on the Foundry server, where a long path may fail.
+ * @type {number}
+ */
+const PACK_NAME_GUIDELINE_CHARS = 64;
 
 /** @type {number} The most bytes of caller text echoed in a refusal message. */
 const ECHO_MAX_BYTES = 64;
@@ -29,17 +34,16 @@ const PACK_NAME_PATTERN = /^[A-Za-z0-9-_]+$/;
 const RESERVED_NAME_PATTERN = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
 
 /**
- * Check a pack name, given or derived from the label, against the rules the Foundry server applies.
+ * Check a pack name, given or derived from the label, against the rules the Foundry server applies, and log one
+ * warning line when it is longer than `PACK_NAME_GUIDELINE_CHARS`.
  * @param {string} name - The pack name.
+ * @param {(line: string) => void} log - The call's log sink.
  * @returns {void}
- * @throws {ScriptError} `ARGS_INVALID` for an empty, long, malformed or reserved name.
+ * @throws {ScriptError} `ARGS_INVALID` for an empty, malformed or reserved name.
  */
-function checkName(name) {
+function checkName(name, log) {
    if (name.length === 0) {
       throw new ScriptError('ARGS_INVALID', 'label has no letters or digits to name the pack; give a name.');
-   }
-   if (name.length > PACK_NAME_MAX_CHARS) {
-      throw new ScriptError('ARGS_INVALID', `name is over ${PACK_NAME_MAX_CHARS} characters.`);
    }
    if (!PACK_NAME_PATTERN.test(name)) {
       throw new ScriptError(
@@ -50,13 +54,19 @@ function checkName(name) {
    if (RESERVED_NAME_PATTERN.test(name)) {
       throw new ScriptError('ARGS_INVALID', `name is a reserved name: '${cleanForLog(name, ECHO_MAX_BYTES)}'.`);
    }
+   if (name.length > PACK_NAME_GUIDELINE_CHARS) {
+      log(
+         `Wiretap | create_pack warning: name characters ${name.length} is over the ${PACK_NAME_GUIDELINE_CHARS} ` +
+            'guideline',
+      );
+   }
 }
 
 /**
  * Create the pack, or preview it on a dry run. A real run checks `allowCompendiumWrites` first, so a closed gate
  * reveals nothing about the world's packs; a dry run skips the gate and creates nothing.
  * @param {{ label: string, type: string, name?: string, dryRun?: boolean }} args - The validated arguments.
- * @param {import('~/bridge/scripts/ctx.js').ScriptContext} ctx - The call context (unused).
+ * @param {import('~/bridge/scripts/ctx.js').ScriptContext} ctx - The call context; its `log` takes the name warning.
  * @returns {Promise<{ id: string, label: string, type: string } | { dryRun: true, id: string, label: string,
  * type: string }>} The ack of the new pack, or the preview of the pack a real run would create.
  * @throws {ScriptError} `GATE_DENIED` while the gate is closed on a real run; `ARGS_INVALID` for a blank label, a type
@@ -86,7 +96,7 @@ export async function createPackHandler(args, ctx) {
    // The Foundry server derives a missing name the same way (`label.slugify({ strict: true })`).
    /** @type {string} The bare pack name. */
    const name = args.name ?? label.slugify({ strict: true });
-   checkName(name);
+   checkName(name, ctx.log);
    /** @type {string} The id the pack has once created. */
    const id = `world.${name}`;
    // The server checks a collision only against world packs, so a system or module pack of the same bare name is free.
