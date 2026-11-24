@@ -106,6 +106,16 @@ allowed is not listed to the agent. Whether the client filters it out of the pus
 by the snapshot is left to the builder; the result must be that the listing follows a settings change without a
 reload.
 
+## Schema protection limits (owner's decisions, 2026-11-23, after the first schema review)
+
+- **Depth:** a schema nested deeper than 32 levels is refused for every source. It is server protection against
+  stack exhaustion, not a "needed to work" rule; the 4-level guideline still only warns for plugins.
+- **Expanded nodes:** a schema passed in code may reuse one object in several places. Reuse is allowed and each reused
+  piece is counted every time it appears. A schema that expands past about 60,000 nodes (what one 900,000-byte
+  registry message can carry) is refused for every source, on both sides, as protection; the walk stops as soon as it
+  passes the limit. The 64-node guideline still only warns for plugins.
+- Linear work: schema checks cost time linear in the schema's size on both sides (no per-property list scans).
+
 ## Settled points (from the builder check)
 
 - **Name length is needed to work (owner's decision, 2026-11-23).** Claude Code lists each tool as
