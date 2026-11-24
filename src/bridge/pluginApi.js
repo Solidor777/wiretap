@@ -60,7 +60,8 @@ const OPTIONAL_FIELDS = Object.freeze([
 const LOG_LABEL_BYTES = 48;
 
 /**
- * Longest module id echoed in a refusal reason, in UTF-8 bytes.
+ * Longest module id echoed in the inactive-module reason, in UTF-8 bytes. The short-name reasons echo the whole id:
+ * it names an active module, and the author needs the exact prefix.
  * @type {number}
  */
 const ID_ECHO_BYTES = 64;

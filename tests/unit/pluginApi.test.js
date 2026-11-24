@@ -150,8 +150,8 @@ describe('plugin API', () => {
       const name = 'a'.repeat(51 - 'my-mod__'.length);
       expect(api.registerTool(tool({ name }))).toEqual({
          ok: false,
-         reason: 'name is 51 characters; Claude Code lists it as mcp__wiretap__<name> and the API accepts at most 64, ' +
-            'so <moduleId>__<tool> may be at most 50 characters',
+         reason: 'name is 51 characters; Claude Code lists it as mcp__wiretap__<name> and the API ' +
+            'accepts at most 64, so <moduleId>__<tool> may be at most 50 characters',
       });
       expect(registry.definitions()).toEqual([]);
       expect(api.registerTool(tool({ name: 'a'.repeat(50 - 'my-mod__'.length) })).ok).toBe(true);
