@@ -8,14 +8,14 @@ import {
    TERMINAL_DATA,
    TERMINAL_STATE,
    TERMINAL_EXIT,
+   TERMINAL_SCROLLBACK_DEFAULT,
+   TERMINAL_SCROLLBACK_WARN,
+   scrollbackChars,
 } from '../shared/protocol.js';
 import { resolvePtyOptions } from './ptyOptions.ts';
 import { resolveSpawn } from './spawnCommand.ts';
 import { isSafeConfigPath, planMcpWiring, wireMcpConfig, type McpWiringPlan } from './mcpWiring.ts';
 import { writeMcpConfig } from './mcpConfigFile.ts';
-
-// Maximum bytes of recent PTY output retained for reattach replay.
-const SCROLLBACK_LIMIT: number = 64 * 1024;
 
 // Largest accepted terminal dimension in columns or rows; bounds what an untrusted client can hand to node-pty.
 const MAX_TERMINAL_DIMENSION: number = 1000;
@@ -24,6 +24,7 @@ interface LaunchPayload {
    command?: string;
    cols?: number;
    rows?: number;
+   scrollback?: unknown;
 }
 
 /** Options for the terminal manager. */
@@ -65,6 +66,8 @@ export function createTerminalManager(
    let term: pty.IPty | null = null;
    // Recent PTY output replayed to a reattaching client.
    let scrollback: string = '';
+   // Characters of output kept in `scrollback`, set by each launch from the GM's scrollback setting.
+   let scrollbackLimit: number = TERMINAL_SCROLLBACK_DEFAULT;
    // The last known terminal dimensions.
    let size: ResizePayload = { cols: 80, rows: 24 };
    /**
@@ -125,20 +128,22 @@ export function createTerminalManager(
    }
 
    /**
-    * Append a chunk to the scrollback buffer, trimming to the byte cap.
+    * Append a chunk to the scrollback buffer, keeping its last `scrollbackLimit` characters (UTF-16 code units).
     * @param {string} chunk - The output chunk to retain.
     */
    function appendScrollback(chunk: string): void {
       scrollback += chunk;
-      if (scrollback.length > SCROLLBACK_LIMIT) {
-         scrollback = scrollback.slice(scrollback.length - SCROLLBACK_LIMIT);
+      if (scrollback.length > scrollbackLimit) {
+         scrollback = scrollback.slice(scrollback.length - scrollbackLimit);
       }
    }
 
    /**
     * Spawn the PTY if none is running. A payload that is not an object, whose `command` is neither absent nor a
     * string, or whose `cols` or `rows` is present but not an integer within 1..MAX_TERMINAL_DIMENSION, launches
-    * nothing: the payload comes from an untrusted socket event. An absent `cols` or `rows` keeps the stored size.
+    * nothing: the payload comes from an untrusted socket event. An absent `cols` or `rows` keeps the stored size. The
+    * payload's `scrollback` sets the replay size for this PTY (any value that is not a positive integer gives the
+    * default); a size past `TERMINAL_SCROLLBACK_WARN` is kept and logged once.
     * @param {LaunchPayload} payload - The launch parameters.
     */
    function launch(payload: LaunchPayload): void {
@@ -163,6 +168,13 @@ export function createTerminalManager(
       const command: string = withMcpWiring(payload.command ?? 'claude');
       size = { cols: payload.cols ?? size.cols, rows: payload.rows ?? size.rows };
       scrollback = '';
+      scrollbackLimit = scrollbackChars(payload.scrollback);
+      if (scrollbackLimit > TERMINAL_SCROLLBACK_WARN) {
+         console.warn(
+            `Wiretap sidecar | terminal scrollback of ${scrollbackLimit} characters is more than the ` +
+               `${TERMINAL_SCROLLBACK_WARN} recommended; a reattach replays all of it in one message`,
+         );
+      }
       // The spawn executable and arguments for the host platform.
       const { file, args }: { file: string; args: string[] | string } = resolveSpawn(
          command,

@@ -7,7 +7,6 @@ import {
    BRIDGE_PING,
    BRIDGE_REGISTRY,
    BRIDGE_RESTORE_PIECE,
-   ENDPOINT_LIMIT,
    NOT_GM,
    OP_FAILED,
    PIECE_REFUSED,
@@ -286,7 +285,7 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       noun: 'backup piece refusals',
    });
    // The registry of identified GM endpoints.
-   const registry: EndpointRegistry = createEndpointRegistry();
+   const registry: EndpointRegistry = createEndpointRegistry(Date.now, log);
    // The sinks waiting for backup pieces, keyed by socket id and then by requestId.
    const sinks: Map<string, Map<string, SinkEntry>> = new Map();
 
@@ -616,18 +615,11 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       handleConnection(socket: Socket): void {
          sockets.set(socket.id, socket);
          socket.on(BRIDGE_IDENTIFY, (payload: unknown, ack?: unknown) => {
-            // The validation outcome, replaced by an ENDPOINT_LIMIT refusal when the registry is full.
-            let result: IdentifyResult = validateIdentify(payload);
-            if (result.ok && !registry.register(socket.id, result.identity)) {
-               result = {
-                  ok: false,
-                  error: {
-                     code: ENDPOINT_LIMIT,
-                     message: 'Too many Foundry endpoints are registered.',
-                  },
-               };
-            }
-            if (!result.ok) {
+            // The validation outcome; a valid identify always registers.
+            const result: IdentifyResult = validateIdentify(payload);
+            if (result.ok) {
+               registry.register(socket.id, result.identity);
+            } else {
                // A refused identify also drops any earlier registration of this socket, so a stale GM entry cannot
                // outlive an identify that no longer qualifies.
                dropEndpoint(socket.id);

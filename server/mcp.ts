@@ -16,7 +16,6 @@ import { createHandleStore, type HandleStore, type SliceResult } from './handles
 import {
    LIST_CHANGED_MAX_WAIT_MS,
    LIST_CHANGED_QUIET_MS,
-   MCP_SESSION_SWEEP_MS,
    createDebouncer,
    createSessionManager,
    type Debouncer,
@@ -68,8 +67,8 @@ export interface ToolRegistration {
 
 /** Injectable settings of the MCP sessions. */
 export interface McpSessionSettings {
-   /** Most sessions held at once (default: the `MCP_SESSIONS_MAX` budget). */
-   maxSessions?: number;
+   /** Open sessions past which each new session logs one line (default: the `MCP_SESSIONS_MAX` budget). */
+   warnSessions?: number;
    /** Idle milliseconds before a session expires (default 30 minutes). */
    idleMs?: number;
    /** Milliseconds between idle-expiry sweeps (default one minute). */
@@ -151,7 +150,8 @@ const MCP_HEADERS_TIMEOUT_MS: number = 10_000;
 // Milliseconds between the HTTP server's checks for requests past the timeouts (Node's own default is 30 s).
 const MCP_TIMEOUT_CHECK_MS: number = 1_000;
 
-// Most simultaneous connections: the session cap of event streams plus room for in-flight requests.
+// Most simultaneous connections, open event streams and in-flight requests together. Each session with an open event
+// stream holds one, so this also bounds how many sessions can stream at once.
 const MCP_CONNECTIONS_MAX: number = 128;
 
 // Milliseconds a connection may go without sending a request before it is closed. Node's own timeouts only start with
@@ -493,7 +493,6 @@ function rejectRequest(
  * @param {number} status - The HTTP status.
  * @param {number} code - The JSON-RPC error code.
  * @param {string} message - The error message.
- * @param {Record<string, string>} [headers] - Extra response headers.
  * @returns {void}
  */
 function sendError(
@@ -502,16 +501,12 @@ function sendError(
    status: number,
    code: number,
    message: string,
-   headers: Record<string, string> = {},
 ): void {
    rejectRequest(
       req,
       res,
       status,
-      {
-         'Content-Type': 'application/json',
-         ...headers,
-      },
+      { 'Content-Type': 'application/json' },
       JSON.stringify({
          jsonrpc: '2.0',
          error: {
@@ -676,19 +671,12 @@ export function startMcpServer(
    const limits: McpHttpLimits = options.limits ?? {};
    // The most request body bytes read.
    const bodyMaxBytes: number = limits.bodyMaxBytes ?? getBudget('MCP_BODY_MAX_BYTES').value;
-   // Seconds a refused initialize should wait before retrying: the idle sweep is what frees a slot.
-   const retryAfterSeconds: number = Math.max(1, Math.ceil((settings.sweepMs ?? MCP_SESSION_SWEEP_MS) / 1000));
-   // The session cap.
-   const maxSessions: number = settings.maxSessions ?? getBudget('MCP_SESSIONS_MAX').value;
-   // Slots reserved by initialize requests the manager does not hold yet; they count against the session cap until the
-   // manager holds (or refuses) their session.
-   let opening: number = 0;
    // The port the server is bound to; differs from `port` when 0 requested an ephemeral port. The Host check reads it.
    let boundPort: number = port;
 
    // The open sessions; ending one releases the result handles it owns.
    const manager: SessionManager = createSessionManager({
-      maxSessions,
+      warnSessions: settings.warnSessions,
       idleMs: settings.idleMs,
       sweepMs: settings.sweepMs,
       now: settings.now,
@@ -863,8 +851,6 @@ export function startMcpServer(
     * @param {http.ServerResponse} res - The response.
     * @param {unknown} body - The parsed initialize body.
     * @param {EndpointKind | undefined} endpoint - The endpoint kind the session routes to.
-    * @param {() => void} release - Gives back the session slot reserved for this initialize; called as soon as the
-    *        manager holds the session (or refused it), so the slot is never counted twice.
     * @returns {Promise<void>} Resolves when the transport answered; rejects when the session could not be held, which
     *          makes the transport answer with an error status and no session id.
     */
@@ -873,17 +859,14 @@ export function startMcpServer(
       res: http.ServerResponse,
       body: unknown,
       endpoint: EndpointKind | undefined,
-      release: () => void,
    ): Promise<void> {
       // Whether the transport accepted the initialize and assigned the id.
       let initialized: boolean = false;
       const session: McpSession = createSession(randomUUID(), endpoint, () => {
          initialized = true;
-         const held: boolean = manager.add(session);
-         release();
-         if (!held) {
-            log(`Wiretap sidecar | MCP session ${session.id} refused: the session cap was reached`);
-            throw new Error('the session cap was reached');
+         // The manager holds every session except while the server closes, when it closes the session instead.
+         if (!manager.add(session)) {
+            throw new Error('the MCP server is closing');
          }
          // The registry may have changed between creating the session and holding it, when no change reached it. A
          // failure ends the session and fails the initialize, so the client never keeps an id the server dropped.
@@ -956,28 +939,7 @@ export function startMcpServer(
          sendError(req, res, 400, -32000, 'Bad Request: Mcp-Session-Id header is required');
          return;
       }
-      if (manager.isFull(opening)) {
-         // No held session is ended to make room: a flood of initialize requests must not end other clients' sessions.
-         log(`Wiretap sidecar | MCP session cap of ${maxSessions} reached: initialize refused`);
-         sendError(req, res, 503, -32000, 'Service Unavailable: too many MCP sessions', {
-            'Retry-After': String(retryAfterSeconds),
-         });
-         return;
-      }
-      opening += 1;
-      // Whether this initialize still holds its reserved slot.
-      let reserved: boolean = true;
-      const release = (): void => {
-         if (reserved) {
-            reserved = false;
-            opening -= 1;
-         }
-      };
-      try {
-         await openSession(req, res, read.body, (choice ?? undefined) as EndpointKind | undefined, release);
-      } finally {
-         release();
-      }
+      await openSession(req, res, read.body, (choice ?? undefined) as EndpointKind | undefined);
    }
 
    /**

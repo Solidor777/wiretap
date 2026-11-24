@@ -3,7 +3,6 @@ import http from 'node:http';
 import net from 'node:net';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { INITIALIZE, raw } from './mcpHttp.js';
 import { createHarness, entry, rawSocket } from './mcpHarness.js';
@@ -267,9 +266,9 @@ describe('MCP HTTP hardening and session robustness', () => {
       });
    });
 
-   describe('session cap', () => {
-      it('counts initializes still being opened against the cap', async () => {
-         await harness.start({ sessions: { maxSessions: 3 } });
+   describe('no session cap', () => {
+      it('opens every overlapping initialize and logs one line per session held over the warning count', async () => {
+         await harness.start({ sessions: { warnSessions: 3 } });
          // Slow every session's connect so the initializes overlap.
          const original = McpServer.prototype.connect;
          vi.spyOn(McpServer.prototype, 'connect').mockImplementation(async function (...args) {
@@ -279,46 +278,9 @@ describe('MCP HTTP hardening and session robustness', () => {
          const results = await Promise.all(
             Array.from({ length: 10 }, () => raw(harness.mcp().port(), { body: INITIALIZE })),
          );
-         expect(results.filter((res) => res.status === 200)).toHaveLength(3);
-         expect(results.filter((res) => res.status === 503)).toHaveLength(7);
-         expect(harness.mcp().sessions()).toBe(3);
-         expect(harness.logs().some((line) => line.includes('the session cap was reached'))).toBe(false);
-      });
-
-      it('stops counting a held session as a pending one while its response is still being written', async () => {
-         await harness.start({ sessions: { maxSessions: 2 } });
-         const original = StreamableHTTPServerTransport.prototype.handleRequest;
-         // The session is held by the time the original resolves; the response then lingers for a while.
-         vi.spyOn(StreamableHTTPServerTransport.prototype, 'handleRequest').mockImplementation(
-            async function (...args) {
-               await original.apply(this, args);
-               await sleep(300);
-            },
-         );
-         const first = raw(harness.mcp().port(), { body: INITIALIZE });
-         await expect.poll(() => harness.mcp().sessions(), { timeout: 1000 }).toBe(1);
-         const second = await raw(harness.mcp().port(), { body: INITIALIZE });
-         expect(second.status).toBe(200);
-         expect((await first).status).toBe(200);
-         expect(harness.mcp().sessions()).toBe(2);
-      });
-
-      it('names the sweep period in Retry-After', async () => {
-         await harness.start({ sessions: { maxSessions: 1 } });
-         await harness.connectClient();
-         const refused = await raw(harness.mcp().port(), { body: INITIALIZE });
-         expect(refused.status).toBe(503);
-         expect(refused.headers['retry-after']).toBe('60');
-      });
-
-      it('rounds a sweep period up to whole seconds in Retry-After', async () => {
-         await harness.start({ sessions: {
-            maxSessions: 1,
-            sweepMs: 2500,
-         } });
-         await harness.connectClient();
-         const refused = await raw(harness.mcp().port(), { body: INITIALIZE });
-         expect(refused.headers['retry-after']).toBe('3');
+         expect(results.filter((res) => res.status === 200)).toHaveLength(10);
+         expect(harness.mcp().sessions()).toBe(10);
+         expect(harness.logs().filter((line) => line.includes('more than the 3 recommended'))).toHaveLength(7);
       });
    });
 

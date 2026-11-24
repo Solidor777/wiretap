@@ -54,7 +54,7 @@ const EXPECTED = [
       'MCP_SESSIONS_MAX',
       32,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'MCP_BODY_MAX_BYTES',

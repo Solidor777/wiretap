@@ -83,8 +83,9 @@ export const BUDGETS = table([
    budget('DESCRIPTION_MAX_CHARS', 240, 'chars', BUDGET_SEVERITY.HARD),
    // Server `instructions` text sent to the client at session start; it names the tool families.
    budget('INSTRUCTIONS_MAX_CHARS', 600, 'chars', BUDGET_SEVERITY.HARD),
-   // MCP sessions held at once; an initialize beyond it is refused until the idle sweep frees a slot.
-   budget('MCP_SESSIONS_MAX', 32, 'count', BUDGET_SEVERITY.HARD),
+   // Best-practice number of MCP sessions open at once; every initialize opens a session, and the sidecar logs one
+   // line for each new session that takes the open count past it.
+   budget('MCP_SESSIONS_MAX', 32, 'count', BUDGET_SEVERITY.WARN),
    // Request body bytes the MCP endpoint reads; a larger body is refused with 413 and the request is destroyed.
    budget('MCP_BODY_MAX_BYTES', 1_048_576, 'bytes', BUDGET_SEVERITY.HARD),
    // Acknowledgement of a write, per document.

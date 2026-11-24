@@ -2,6 +2,7 @@ import { bridgeState, reidentifyBridge } from '~/bridge/foundryBridge.js';
 import WiretapSidebarTab from '~/apps/WiretapSidebarTab.js';
 import { registerGateSettings } from '~/settings/gates.js';
 import { registerBridgeSettings } from '~/settings/bridgeSettings.js';
+import { registerTerminalSettings } from '~/settings/terminalSettings.js';
 import { registerSheetQueries } from '~/bridge/sheetQuery.js';
 import { TERMINAL_THEME_CHOICES, terminalTheme } from '~/components/terminalThemes.svelte.js';
 import {
@@ -93,6 +94,9 @@ export default function onceInit() {
 
    // Seed the reactive store from the stored value (covers a non-default saved size on load).
    terminalFontSize.size = game.settings.get('wiretap', 'terminalFontSize');
+
+   // The GM-only world setting for the terminal scrollback size, applied to the shared terminal connection.
+   registerTerminalSettings();
 
    // The risk gates: one GM-only world setting per entry of the shared GATES registry, all closed by default.
    registerGateSettings();

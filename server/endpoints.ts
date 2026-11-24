@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import {
    ENDPOINT_GONE,
    ENDPOINT_KINDS,
-   ENDPOINT_LIMIT,
    ENDPOINT_TIMEOUT,
    ENDPOINT_UNAVAILABLE,
    NOT_GM,
@@ -101,8 +100,8 @@ export interface ToolInvokeOptions {
 /** The registry of identified GM endpoints. */
 export interface EndpointRegistry {
    // Adds a new socket's endpoint as healthy, or updates an already-registered socket's identity while keeping its
-   // health; returns false (registering nothing) when a new socket exceeds the limit.
-   register: (socketId: string, identity: EndpointIdentity) => boolean;
+   // health; a new socket past the warning count is registered and logged.
+   register: (socketId: string, identity: EndpointIdentity) => void;
    remove: (socketId: string) => void;
    // Lists every endpoint, unresponsive ones included, in registration order.
    list: () => Endpoint[];
@@ -223,8 +222,9 @@ const DEFAULT_TIMERS: RouterTimers = {
    clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
 };
 
-// Maximum number of registered endpoints; an identify from a new socket beyond it is refused with ENDPOINT_LIMIT.
-export const MAX_ENDPOINTS: number = 64;
+// Best-practice number of registered endpoints; every identify that passes validation registers, and each new socket
+// that takes the count past it logs one line.
+export const ENDPOINTS_WARN: number = 64;
 
 // Maximum UTF-8 byte length of an identify `userId`.
 const MAX_USER_ID_BYTES: number = 64;
@@ -256,7 +256,6 @@ const RESERVED_CODES: ReadonlySet<string> = new Set([
    NO_ENDPOINT,
    ENDPOINT_TIMEOUT,
    ENDPOINT_GONE,
-   ENDPOINT_LIMIT,
    ENDPOINT_UNAVAILABLE,
    PROTOCOL_MISMATCH,
    NOT_GM,
@@ -365,9 +364,13 @@ export class EndpointTimeoutError extends Error {
 /**
  * Create the endpoint registry. Entries keep insertion order, which is the tiebreak between endpoints of one kind.
  * @param {() => number} [now] - The clock used for `registeredAt` (default: `Date.now`).
+ * @param {(line: string) => void} [log] - Receives one sidecar log line (default: `console.log`).
  * @returns {EndpointRegistry} An empty registry.
  */
-export function createEndpointRegistry(now: () => number = Date.now): EndpointRegistry {
+export function createEndpointRegistry(
+   now: () => number = Date.now,
+   log: (line: string) => void = (line) => console.log(line),
+): EndpointRegistry {
    // Endpoints keyed by socket id; Map iteration order is insertion order and re-setting a key keeps its position.
    const endpoints: Map<string, Endpoint> = new Map();
    // Listeners told about changes, in subscription order.
@@ -387,17 +390,14 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
       /**
        * Add an endpoint, or update the identity of the socket's existing entry (its registration time, position and
        * health are kept, so a client cannot clear an unresponsive state by identifying again; only a ping ack, through
-       * `setHealth`, restores it). A new socket starts healthy and is refused when the registry already holds
-       * `MAX_ENDPOINTS` endpoints.
+       * `setHealth`, restores it). A new socket starts healthy; the number of endpoints is the GM's choice, and a new
+       * socket that takes the count past `ENDPOINTS_WARN` logs one line.
        * @param {string} socketId - The socket id.
        * @param {EndpointIdentity} identity - The validated identity.
-       * @returns {boolean} True when the endpoint is registered, false when the limit refused it.
+       * @returns {void}
        */
-      register(socketId: string, identity: EndpointIdentity): boolean {
+      register(socketId: string, identity: EndpointIdentity): void {
          const existing: Endpoint | undefined = endpoints.get(socketId);
-         if (!existing && endpoints.size >= MAX_ENDPOINTS) {
-            return false;
-         }
          endpoints.set(socketId, {
             ...identity,
             socketId,
@@ -405,8 +405,13 @@ export function createEndpointRegistry(now: () => number = Date.now): EndpointRe
             health: existing?.health ?? 'healthy',
             registeredAt: existing?.registeredAt ?? now(),
          });
+         if (!existing && endpoints.size > ENDPOINTS_WARN) {
+            log(
+               `Wiretap sidecar | Foundry endpoint ${socketId} registered: ${endpoints.size} endpoints are registered, ` +
+                  `more than the ${ENDPOINTS_WARN} recommended`,
+            );
+         }
          notify();
-         return true;
       },
 
       /**
