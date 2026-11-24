@@ -131,10 +131,12 @@ reload.
 - **Trusting `moduleId` to pick the source** is accepted: the pushing client is an identified GM browser, a shipped
   definition can never carry `moduleId` (`shared/scripts.js:350`), and choosing the plugin route only makes the checks
   less strict for that one tool, never another.
-- **Push size (Claude's call).** The registry message is bounded by Socket.IO `maxHttpBufferSize` (1,000,000 B); an
-  over-size message is dropped whole, which would take Wiretap's own tools down with it. The client therefore measures
-  the payload before pushing. If it would exceed the bound, it leaves out plugin tools, most recently registered
-  first, until it fits, and logs one warning per tool left out that names the message bound. Shipped tools are always
+- **Push size (Claude's call; order and notice confirmed by the owner, 2026-11-23).** The registry message is bounded
+  by Socket.IO `maxHttpBufferSize` (1,000,000 B); an over-size message is dropped whole, which would take Wiretap's own
+  tools down with it. The client therefore measures the payload before pushing. If it would exceed the bound, it leaves
+  out plugin tools, largest listed definition first (the most recently registered first among equal sizes), until it
+  fits, so one oversized tool cannot push out many small ones. It logs one console warning per tool left out that
+  names the message bound; there is no other notice. Shipped tools are always
   included. This is server protection (group 3), not a guideline. At about 800 B per definition it starts near 1,200
   plugin tools.
 - **Non-GM clients (Claude's call).** The hook fires and `api.registerTool` works on every client, so a plugin needs no
