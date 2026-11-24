@@ -341,6 +341,24 @@ describe('validateScriptDefinition: name', () => {
    it('does not reserve the names of the shipped write scripts', () => {
       expect(shipped(script('create_documents')).ok).toBe(true);
    });
+
+   it.each([
+      'my-mod__echo',
+      'agent__saved',
+      'a__',
+   ])('refuses the shipped name %s, which holds the plugin and agent separator', (name) => {
+      expect(shipped(script('placeholder', { name }))).toEqual({
+         ok: false,
+         reason: 'a shipped tool name may not contain "__"; that form is <moduleId>__<tool> for plugin tools',
+      });
+   });
+
+   it('leaves "__" names to the plugin and agent rules on their routes', () => {
+      expect(validateScriptDefinition(script('my-mod__echo', { moduleId: 'my-mod' }), 'plugin').ok).toBe(true);
+      expect(validateScriptDefinition(script('agent__saved'), 'agent').reason).toContain(
+         'agent scripts are not supported',
+      );
+   });
 });
 
 describe('validateScriptDefinition: result budget', () => {
@@ -570,24 +588,50 @@ describe('validateScriptDefinition: plugin route', () => {
    });
 
    it('names what to change when a plugin moduleId is not a module id', () => {
-      expect(plugin('my.module__tool', { moduleId: 'my.module' }).reason).toBe(
-         'moduleId must be your module\'s id from module.json: 1 to 64 characters of a-z, 0-9, _ or - (no dots or ' +
-            'capitals), starting with a letter or digit',
+      /** @type {string} The refusal every invalid module id gets. */
+      const reason = 'moduleId must be your module\'s id from module.json: one or more of A-Z, a-z, 0-9, _ and - '
+         + '(no dots or spaces)';
+      expect(plugin('my.module__tool', { moduleId: 'my.module' }).reason).toBe(reason);
+      expect(plugin('my module__tool', { moduleId: 'my module' }).reason).toBe(reason);
+      expect(plugin('__tool', { moduleId: '' }).reason).toBe(reason);
+      expect(plugin('my-module__tool', { moduleId: undefined }).reason).toBe(reason);
+   });
+
+   it('accepts every module id Foundry accepts: capitals, a leading _ and a leading -', () => {
+      for (const moduleId of [
+         'MyMod',
+         '_lead',
+         '-lead',
+      ]) {
+         /** @type {ReturnType<typeof validateScriptDefinition>} The outcome for a tool of this module. */
+         const outcome = plugin(`${moduleId}__Tool-1`, { moduleId });
+         expect(outcome.ok, moduleId).toBe(true);
+         expect(outcome.definition.moduleId).toBe(moduleId);
+         expect(outcome.definition.name).toBe(`${moduleId}__Tool-1`);
+      }
+   });
+
+   it('matches the module prefix exactly, so a name of another case is refused', () => {
+      expect(plugin('mymod__tool', { moduleId: 'MyMod' }).reason).toBe(
+         'name must be <moduleId>__<tool>, where <tool> uses only A-Z, a-z, 0-9, _ and -',
       );
-      expect(plugin('my-module__tool', { moduleId: undefined }).reason).toBe(
-         plugin('my.module__tool', { moduleId: 'my.module' }).reason,
-      );
+   });
+
+   it('bounds a long module id by the 50-character name limit', () => {
+      /** @type {string} A module id of 65 characters, which Foundry accepts. */
+      const moduleId = 'm'.repeat(65);
+      expect(plugin(`${moduleId}__tool`, { moduleId }).reason).toMatch(/^name is 71 characters;/);
    });
 
    it('names the <moduleId>__<tool> form when a plugin name breaks it', () => {
       for (const name of [
          'other__tool',
          'my-module__',
-         'my-module__Tool',
          'my-module__a.b',
+         'my-module__a b',
       ]) {
          expect(plugin(name).reason, name).toBe(
-            'name must be <moduleId>__<tool>, where <tool> uses only a-z, 0-9, _ and -',
+            'name must be <moduleId>__<tool>, where <tool> uses only A-Z, a-z, 0-9, _ and -',
          );
       }
    });
@@ -850,7 +894,7 @@ describe('validateScriptDefinition: requiresUserInteraction', () => {
       [
          'plugin',
          { moduleId: 'my-module' },
-         'name must be <moduleId>__<tool>, where <tool> uses only a-z, 0-9, _ and -',
+         'name must be <moduleId>__<tool>, where <tool> uses only A-Z, a-z, 0-9, _ and -',
       ],
       [
          'agent',

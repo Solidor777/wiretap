@@ -14,7 +14,7 @@ import {
    PROTOCOL_VERSION,
    TOOL_GONE,
 } from '../shared/protocol.js';
-import { closedGateState, gateDenial, isModuleAllowed, sanitizeGateState, type GateState } from '../shared/gates.js';
+import { closedGateState, gateDenial, sanitizeGateState, type GateState } from '../shared/gates.js';
 import { sanitizeBridgeSettings, type BridgeSettings } from '../shared/bridgeSettings.js';
 import { BACKUP_SIDECAR_CODES } from '../shared/backup.js';
 import type { RegistryTool } from './toolRegistry.ts';
@@ -1023,7 +1023,8 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
       /**
        * Copy the tool list of the endpoint a call with the same options would reach now, leaving out every plugin tool
        * whose module that endpoint's snapshot does not allow. A listing aid only: a later `invoke` picks its endpoint
-       * again and judges the gates there.
+       * again and judges the gates there. The snapshot is sanitized once and its module list put in a Set, so a listing
+       * costs time linear in the tools plus the list length.
        * @param {InvokeOptions} [options] - `endpoint` restricts the choice to one kind with no fallback.
        * @returns {RegistryTool[]} A copy of the endpoint's listable tools; empty when no healthy endpoint is eligible.
        */
@@ -1032,9 +1033,11 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
          if (!endpoint) {
             return [];
          }
+         // The module ids the endpoint's sanitized snapshot allows, matched exactly.
+         const allowed: Set<string> = new Set(sanitizeGateState(endpoint.gateState).allowedPluginModules);
          return endpoint.tools.filter((tool) => {
             return tool.gates.every((required) => {
-               return required.gate !== 'allowedPluginModules' || isModuleAllowed(endpoint.gateState, required.moduleId);
+               return required.gate !== 'allowedPluginModules' || allowed.has(required.moduleId as string);
             });
          });
       },
