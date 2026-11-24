@@ -115,7 +115,7 @@ describe('get_document definition', () => {
       expect(description.length).toBeLessThanOrEqual(getBudget('DESCRIPTION_TARGET_CHARS').value);
    });
 
-   it('declares maxBytes as an optional integer up to 16000 and bounds both path lists at 20', () => {
+   it('declares maxBytes as an optional integer up to 16000 and both path lists at the schema item guideline', () => {
       /** @type {{ properties: Record<string, any>, required: string[] }} The input schema under test. */
       const { properties, required } = getDocumentDefinition.inputSchema;
       expect(properties.maxBytes).toMatchObject({
@@ -123,35 +123,46 @@ describe('get_document definition', () => {
          maximum: getBudget('RESULT_HARD_CAP_MAX_BYTES').value,
       });
       expect(required ?? []).not.toContain('maxBytes');
-      expect(properties.paths.maxItems).toBe(getBudget('PATHS_PER_CALL_MAX').value);
-      expect(properties.fields.maxItems).toBe(getBudget('PATHS_PER_CALL_MAX').value);
+      expect(properties.paths.maxItems).toBe(getBudget('SCHEMA_ARRAY_ITEMS_MAX').value);
+      expect(properties.fields.maxItems).toBe(getBudget('SCHEMA_ARRAY_ITEMS_MAX').value);
    });
 
-   it('declares ifChanged with maxLength 32 and no ifModifiedSince, within 800 B listed', () => {
+   it('declares ifChanged with no length bound and no ifModifiedSince, within 800 B listed', () => {
       /** @type {{ name: string, description: string, inputSchema: Record<string, any> }} The get_document script. */
       const { name, description, inputSchema } = getDocumentDefinition;
-      expect(inputSchema.properties.ifChanged).toEqual({
-         type: 'string',
-         maxLength: 32,
-      });
+      expect(inputSchema.properties.ifChanged).toEqual({ type: 'string' });
       expect(Object.hasOwn(inputSchema.properties, 'ifModifiedSince')).toBe(false);
       expect(definitionBytes(name, description, compileSchema(inputSchema).listed)).toBeLessThanOrEqual(800);
    });
 });
 
 describe('get_document argument validation', () => {
+   it('reads more paths or fields than the best-practice size', async () => {
+      worldWithActor();
+      const many = Array.from({ length: getBudget('PATHS_PER_CALL_MAX').value + 1 }, (_, index) => `name${index}`);
+      const sliced = await get({
+         uuid: 'Actor.MOCKACTOR0000001',
+         paths: [
+            ...many,
+            'name',
+         ],
+      });
+      expect(sliced.values).toEqual({ name: 'MOCK_Actor' });
+      expect(sliced.missing).toEqual(many);
+      const projected = await get({
+         uuid: 'Actor.MOCKACTOR0000001',
+         fields: [
+            ...many,
+            'name',
+         ],
+      });
+      expect(projected.fields).toEqual({ name: 'MOCK_Actor' });
+      expect(projected.missing).toEqual(many);
+   });
+
    it('refuses what the schema bounds before any document is read', async () => {
       worldWithActor();
-      const twentyOne = Array.from({ length: 21 }, (_, index) => `name${index}`);
       for (const args of [
-         {
-            uuid: 'Actor.MOCKACTOR0000001',
-            paths: twentyOne,
-         },
-         {
-            uuid: 'Actor.MOCKACTOR0000001',
-            fields: twentyOne,
-         },
          {
             uuid: 'Actor.MOCKACTOR0000001',
             maxBytes: 16001,
@@ -574,12 +585,50 @@ describe('get_document version and ifChanged', () => {
       })).rejects.toMatchObject({ code: 'ARGS_INVALID' });
    });
 
-   it('refuses an ifChanged longer than 32 characters', async () => {
+   it('logs one line for fields, paths and an ifChanged past their sizes, and none at them', async () => {
+      /** @type {string[]} The lines the script log received. */
+      const lines = [];
+      const registry = createScriptRegistry({ log: (line) => lines.push(line) });
+      registerShippedScripts(registry);
+      lines.length = 0;
+      /** @type {(params: unknown) => Promise<any>} The callTool handler whose log is recorded. */
+      const logged = createCallTool({ registry });
       worldWithActor();
-      await expect(get({
+      /** @type {number} The best-practice path count. */
+      const paths = getBudget('PATHS_PER_CALL_MAX').value;
+      for (const over of [
+         0,
+         1,
+      ]) {
+         for (const args of [
+            { fields: Array.from({ length: paths + over }, (_, index) => `name${index}`) },
+            { paths: Array.from({ length: paths + over }, (_, index) => `name${index}`) },
+            { ifChanged: 'a'.repeat(32 + over) },
+         ]) {
+            await logged({
+               name: 'get_document',
+               arguments: {
+                  uuid,
+                  ...args,
+               },
+            });
+         }
+      }
+      expect(lines).toEqual([
+         `Wiretap | get_document: ${paths + 1} fields in one call, over the ${paths} best-practice size`,
+         `Wiretap | get_document: ${paths + 1} paths in one call, over the ${paths} best-practice size`,
+         'Wiretap | get_document: 33 characters in ifChanged, over the 32 best-practice size',
+      ]);
+   });
+
+   it('reads the document for an ifChanged longer than any version', async () => {
+      worldWithActor();
+      const result = await get({
          uuid,
          ifChanged: 'a'.repeat(33),
-      })).rejects.toMatchObject({ code: 'ARGS_INVALID' });
+      });
+      expect(result.uuid).toBe(uuid);
+      expect(result.unchanged).toBeUndefined();
    });
 });
 

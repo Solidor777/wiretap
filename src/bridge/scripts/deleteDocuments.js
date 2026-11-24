@@ -4,6 +4,7 @@
  * irreversible. The definition is in `definitions.js`.
  */
 
+import { BEST_PRACTICE, SizeNotes } from '~/bridge/scripts/sizeNotes.js';
 import { ackDocuments, fitPreview } from '~/bridge/scripts/writeAck.js';
 
 /**
@@ -16,6 +17,10 @@ import { ackDocuments, fitPreview } from '~/bridge/scripts/writeAck.js';
  * `DELETE_REFUSED` or `WRITE_NOT_APPLIED`.
  */
 export async function deleteDocumentsHandler(args, ctx) {
+   /** @type {SizeNotes} The best-practice sizes this call passes, written as one line. */
+   const notes = new SizeNotes('delete_documents');
+   notes.note(args.uuids.length, 'documents in one call', BEST_PRACTICE.documents);
+   notes.write(ctx.log);
    /** @type {Awaited<ReturnType<typeof ctx.core.deleteDocuments>>} The deleted documents, or the preview. */
    const result = await ctx.core.deleteDocuments({
       uuids: args.uuids,

@@ -4,7 +4,8 @@
  */
 
 import { ScriptError } from '~/bridge/scripts/registry.js';
-import { checkDataBytes, checkReadbackPaths, parseJson, shapeRefusal } from '~/bridge/scripts/writeArgs.js';
+import { BEST_PRACTICE, SizeNotes, totalBytes } from '~/bridge/scripts/sizeNotes.js';
+import { checkReadbackPaths, parseJson, shapeRefusal } from '~/bridge/scripts/writeArgs.js';
 import { ackReplaced, attachReadback } from '~/bridge/scripts/writeAck.js';
 
 /**
@@ -17,7 +18,12 @@ import { ackReplaced, attachReadback } from '~/bridge/scripts/writeAck.js';
  * `ACT_AS_DENIED`, `WRITE_NOT_APPLIED` or a `PATH_*` code.
  */
 export async function replaceDocumentHandler(args, ctx) {
-   checkDataBytes([args.data]);
+   /** @type {SizeNotes} The best-practice sizes this call passes, written as one line. */
+   const notes = new SizeNotes('replace_document');
+   notes.note(totalBytes([args.data]), 'bytes of data in one call', BEST_PRACTICE.dataBytes);
+   notes.note(args.data.length, 'characters in one document text', BEST_PRACTICE.textChars);
+   notes.note(args.paths?.length ?? 0, 'paths in one call', BEST_PRACTICE.paths);
+   notes.write(ctx.log);
    /** @type {unknown} The parsed data. */
    const data = parseJson(args.data, 'data');
    if (typeof data !== 'object' || data === null || Array.isArray(data)) {

@@ -87,6 +87,8 @@ const FAILURE_TEXT_MAX_BYTES = 160;
  * @property {string} [actAs] - The id of a user whose permission to create is checked in advance (advisory).
  * @property {unknown} [requestData] - The request as the caller gave it, hashed for `idempotencyKey` in place of
  * `data` when `data` was built from it (a copy's `{ fromUuids }`), so a source edited between two calls is no conflict.
+ * @property {import('~/bridge/scripts/sizeNotes.js').SizeNotes} [sizeNotes] - The call's best-practice size notes;
+ * the `idempotencyKey` lookup adds the size of the collection it reads.
  */
 
 /**
@@ -248,17 +250,15 @@ export function validationError(failures, invalid, total) {
 }
 
 /**
- * Check the list a call carries: a non-empty array of at most `WRITE_DOCUMENTS_MAX` plain objects.
+ * Check the list a call carries: a non-empty array of plain objects.
  * @param {unknown} data - The list.
  * @param {string} label - What the entries are called in the error.
  * @returns {void}
  * @throws {ScriptError} `ARGS_INVALID`.
  */
 function checkObjects(data, label) {
-   /** @type {number} The most entries one call may carry. */
-   const max = getBudget('WRITE_DOCUMENTS_MAX').value;
-   if (!Array.isArray(data) || data.length === 0 || data.length > max) {
-      throw new ScriptError('ARGS_INVALID', `Give 1 to ${max} ${label}.`);
+   if (!Array.isArray(data) || data.length === 0) {
+      throw new ScriptError('ARGS_INVALID', `Give one or more ${label}.`);
    }
    for (const [index, entry] of data.entries()) {
       if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
@@ -432,6 +432,8 @@ export function rowOf(document, dryRun) {
  * @param {unknown} [params.requestData] - What the idempotency hash reads in place of `data`, when given.
  * @param {object | null} [params.actAsUser] - The user whose permission is checked in advance, if any.
  * @param {string} [params.prefix] - The path prefix of reported failures, for example `creates[1]`.
+ * @param {import('~/bridge/scripts/sizeNotes.js').SizeNotes} [params.sizeNotes] - The call's best-practice size
+ * notes, given to the idempotency lookup.
  * @returns {Promise<CreatePlan>} The plan to run.
  * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED`, `ACT_AS_DENIED` or
  * `IDEMPOTENCY_CONFLICT`.
@@ -446,6 +448,7 @@ export async function prepareCreate({
    requestData,
    actAsUser = null,
    prefix = '',
+   sizeNotes,
 }) {
    checkObjects(data, 'documents');
    for (const item of data) {
@@ -487,6 +490,7 @@ export async function prepareCreate({
          ],
          data,
          keepId,
+         sizeNotes,
       });
       if (idempotent.replay !== null) {
          checkActAs(
@@ -644,7 +648,7 @@ export async function runCreate(plan, readback = false) {
  * @param {CreateParams} params - What to create.
  * @returns {Promise<CreatedRow[]>} One row per document, in the order of `data`.
  * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED`, `ACT_AS_DENIED`,
- * `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_UNAVAILABLE` or `WRITE_NOT_APPLIED`.
+ * `IDEMPOTENCY_CONFLICT` or `WRITE_NOT_APPLIED`.
  */
 export async function createDocuments(params) {
    if (params.idempotencyKey === undefined) {
@@ -673,6 +677,7 @@ async function createChecked({
    idempotencyKey,
    actAs,
    requestData,
+   sizeNotes,
 }) {
    /** @type {CreatePlan} The checked plan. */
    const plan = await prepareCreate({
@@ -684,6 +689,7 @@ async function createChecked({
       idempotencyKey,
       requestData,
       actAsUser: resolveActAs(actAs),
+      sizeNotes,
    });
    if (plan.replay !== null) {
       return plan.replay.map((row, index) => {
@@ -1190,10 +1196,8 @@ export async function resolveWritable(uuid) {
  * @throws {ScriptError} `ARGS_INVALID` or `DOC_NOT_FOUND`.
  */
 async function resolveDeletions(uuids) {
-   /** @type {number} The most uuids one call may carry. */
-   const max = getBudget('WRITE_DOCUMENTS_MAX').value;
-   if (!Array.isArray(uuids) || uuids.length === 0 || uuids.length > max) {
-      throw new ScriptError('ARGS_INVALID', `Give 1 to ${max} uuids.`);
+   if (!Array.isArray(uuids) || uuids.length === 0) {
+      throw new ScriptError('ARGS_INVALID', 'Give one or more uuids.');
    }
    /** @type {object[]} The live documents the uuids resolve to. */
    const documents = [];

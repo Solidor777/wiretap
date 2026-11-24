@@ -290,20 +290,37 @@ describe('batchDocuments: validated before anything is written', () => {
       expect(world.calls).toEqual([]);
    });
 
-   it('refuses an empty batch and one over the document limit', async () => {
+   it('refuses an empty batch', async () => {
       expect((await failure({})).code).toBe('ARGS_INVALID');
+      expect(world.calls).toEqual([]);
+   });
+
+   it('runs a batch that touches more documents than the best-practice size', async () => {
       const max = getBudget('WRITE_DOCUMENTS_MAX').value;
-      const error = await failure({
+      const result = await batchDocuments({
          creates: [
             {
                documentName: 'Actor',
-               data: Array.from({ length: max }, (_, index) => ({ name: `MOCK_${index}` })),
+               data: Array.from({ length: max + 10 }, (_, index) => ({ name: `MOCK_${index}` })),
             },
          ],
          deletes: [other.uuid],
       });
-      expect(error.code).toBe('ARGS_INVALID');
-      expect(world.calls).toEqual([]);
+      expect(world.calls).toEqual(['modifyBatch']);
+      const operations = foundry.documents.modifyBatch.mock.calls[0][0];
+      expect(operations.map((operation) => [operation.action, operation.data?.length ?? operation.ids?.length]))
+         .toEqual([
+            [
+               'create',
+               max + 10,
+            ],
+            [
+               'delete',
+               1,
+            ],
+         ]);
+      expect(result.created).toHaveLength(max + 10);
+      expect(result.deleted).toHaveLength(1);
    });
 
    it('refuses operations that touch one document twice', async () => {

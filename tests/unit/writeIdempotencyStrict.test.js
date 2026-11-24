@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createDocuments } from '~/bridge/scripts/writes.js';
-import { IDEMPOTENCY_SCAN_MAX } from '~/bridge/scripts/writeIdempotency.js';
+import { BEST_PRACTICE, SizeNotes } from '~/bridge/scripts/sizeNotes.js';
 import { installWriteWorld } from './mockWriteWorld.js';
 
 /** @type {ReturnType<typeof installWriteWorld>} The mocked world. */
@@ -122,41 +122,50 @@ describe('the record names its writer and its document', () => {
    });
 });
 
-describe('the lookup fails closed', () => {
-   it('refuses a keyed create when the collection is larger than the lookup covers', async () => {
+describe('the lookup reads a collection of any size', () => {
+   /**
+    * Make the Actor collection report a size and hold the given documents.
+    * @param {number} size - The reported size.
+    * @param {object[]} documents - The documents it holds.
+    * @returns {void}
+    */
+   function collectionOf(size, documents) {
       globalThis.game.collections.get = () => ({
-         size: IDEMPOTENCY_SCAN_MAX + 1,
-         values: () => [],
+         size,
+         values: () => documents,
       });
-      const error = await failure(oneActor('key-1'));
-      expect(error.code).toBe('IDEMPOTENCY_UNAVAILABLE');
-      expect(error.message).toContain(String(IDEMPOTENCY_SCAN_MAX));
-      expect(world.calls).toEqual([]);
-   });
+   }
 
-   it('looks up a collection of exactly the bound', async () => {
-      globalThis.game.collections.get = () => ({
-         size: IDEMPOTENCY_SCAN_MAX,
-         values: () => [],
-      });
-      await createDocuments(oneActor('key-1'));
+   it('creates in a collection past the best-practice size and notes its size once', async () => {
+      collectionOf(BEST_PRACTICE.idempotencyLookup + 1, []);
+      const notes = new SizeNotes('create_documents');
+      await createDocuments(oneActor('key-1', { sizeNotes: notes }));
       expect(world.classes.Actor.createDocuments).toHaveBeenCalledTimes(1);
+      const log = vi.fn();
+      notes.write(log);
+      expect(log.mock.calls).toEqual([
+         [
+            `Wiretap | create_documents: ${BEST_PRACTICE.idempotencyLookup + 1} documents read by the ` +
+               `idempotencyKey lookup, over the ${BEST_PRACTICE.idempotencyLookup} best-practice size`,
+         ],
+      ]);
    });
 
-   it('does not apply the bound to a create without a key', async () => {
-      globalThis.game.collections.get = () => ({
-         size: IDEMPOTENCY_SCAN_MAX + 1,
-         values: () => [],
-      });
-      await createDocuments({
-         documentName: 'Actor',
-         data: [
-            {
-               name: 'MOCK_one',
-               type: 'npc',
-            },
-         ],
-      });
+   it('notes nothing for a collection of exactly the best-practice size', async () => {
+      collectionOf(BEST_PRACTICE.idempotencyLookup, []);
+      const notes = new SizeNotes('create_documents');
+      await createDocuments(oneActor('key-1', { sizeNotes: notes }));
+      const log = vi.fn();
+      notes.write(log);
+      expect(log).not.toHaveBeenCalled();
+   });
+
+   it('replays a record found in a collection past the best-practice size', async () => {
+      const first = await createDocuments(oneActor('key-1'));
+      const live = world.byUuid.get(first[0].uuid);
+      collectionOf(BEST_PRACTICE.idempotencyLookup + 1, [live]);
+      const second = await createDocuments(oneActor('key-1'));
+      expect(second).toEqual(first);
       expect(world.classes.Actor.createDocuments).toHaveBeenCalledTimes(1);
    });
 });

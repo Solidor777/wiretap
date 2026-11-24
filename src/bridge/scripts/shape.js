@@ -474,23 +474,21 @@ function startsWith(prefix, names) {
 }
 
 /**
- * Project a document export onto up to 20 field paths: the result holds only those fields, nested as in the export, so
- * `system.attributes.hp.value` returns `{ system: { attributes: { hp: { value } } } }`. An embedded element addressed
- * by `_id` keeps that id as an object key. A field that resolves to nothing is listed in `missing`. A field that lies
- * inside an earlier one is skipped and a field that contains earlier ones replaces them. A wildcard is refused (use
- * `paths`), as is any path `shared/docPath.js` refuses.
+ * Project a document export onto one or more field paths: the result holds only those fields, nested as in the
+ * export, so `system.attributes.hp.value` returns `{ system: { attributes: { hp: { value } } } }`. An embedded element
+ * addressed by `_id` keeps that id as an object key. A field that resolves to nothing is listed in `missing`. A field
+ * that lies inside an earlier one is skipped and a field that contains earlier ones replaces them. A wildcard is
+ * refused (use `paths`), as is any path `shared/docPath.js` refuses.
  * @param {unknown} doc - The canonical document export (plain data).
  * @param {unknown} fields - The field paths.
  * @returns {ProjectOutcome} The projection and the missing fields, or the refusal.
  */
 function project(doc, fields) {
    try {
-      /** @type {number} The most fields per call. */
-      const fieldsMax = getBudget('PATHS_PER_CALL_MAX').value;
-      if (!Array.isArray(fields) || fields.length === 0 || fields.length > fieldsMax) {
+      if (!Array.isArray(fields) || fields.length === 0) {
          return {
             ok: false,
-            error: `PATH_LIMIT: fields must be a list of 1 to ${fieldsMax} paths.`,
+            error: 'PATH_INVALID: fields must be a list of one or more paths.',
          };
       }
       /** @type {Array<{ field: string, names: string[], found: boolean, value: unknown }>} The resolved fields. */
@@ -560,7 +558,7 @@ function project(doc, fields) {
 }
 
 /**
- * Read up to 20 paths from a document export with the shared path grammar, wildcards included: the result is
+ * Read one or more paths from a document export with the shared path grammar, wildcards included: the result is
  * `{ values: { <path>: value }, missing: [<path>] }`.
  * @param {unknown} doc - The canonical document export (plain data).
  * @param {unknown} list - The path strings to read.

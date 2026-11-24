@@ -4,9 +4,10 @@
  */
 
 import { ScriptError } from '~/bridge/scripts/registry.js';
-import { checkDataBytes, parseDataObject } from '~/bridge/scripts/writeArgs.js';
+import { BEST_PRACTICE, SizeNotes, totalBytes } from '~/bridge/scripts/sizeNotes.js';
+import { parseDataObject } from '~/bridge/scripts/writeArgs.js';
 import { ackBatch } from '~/bridge/scripts/writeAck.js';
-import { groupPatches } from '~/bridge/scripts/updateDocuments.js';
+import { groupPatches, notePatchesPerDocument } from '~/bridge/scripts/updateDocuments.js';
 
 /**
  * @typedef {object} CreateGroup
@@ -17,7 +18,6 @@ import { groupPatches } from '~/bridge/scripts/updateDocuments.js';
 
 /**
  * Group the flat create entries (one document each) by class and parent, in first-use order, parsing each data text.
- * The caller bounds the size of the texts.
  * @param {Array<{ documentName?: string, data?: string, parentUuid?: string }>} entries - The validated entries.
  * @returns {{ groups: CreateGroup[], rowOrder: number[] }} One create per class and parent, and for each entry the
  * position of its row among the created rows, which come group by group, each group in data order.
@@ -78,20 +78,39 @@ function groupCreates(entries) {
 export async function batchHandler(args, ctx) {
    /** @type {Array<{ data?: string }>} The create entries. */
    const creates = args.creates ?? [];
-   /** @type {Array<{ value?: string }>} The patch entries. */
+   /** @type {Array<{ uuid: string, path: string, value?: string }>} The patch entries. */
    const updates = args.updates ?? [];
-   // One total for every text of the call, so the creates and the updates share the data bound.
-   checkDataBytes([
-      ...creates.map((entry) => entry.data ?? ''),
-      ...updates.map((entry) => entry.value ?? ''),
-   ]);
+   /** @type {string[]} The uuids to delete. */
+   const deletes = args.deletes ?? [];
+   /** @type {SizeNotes} The best-practice sizes this call passes, written as one line before the batch runs. */
+   const notes = new SizeNotes('batch');
+   notes.note(updates.length, 'update entries in one call', BEST_PRACTICE.updateEntries);
+   // One total for every text of the call: the creates and the updates share the data size.
+   notes.note(
+      totalBytes([
+         ...creates.map((entry) => entry.data),
+         ...updates.map((entry) => entry.value),
+      ]),
+      'bytes of data in one call',
+      BEST_PRACTICE.dataBytes,
+   );
    /** @type {ReturnType<typeof groupCreates>} The create groups and the entry order of their rows. */
-   const grouped = groupCreates(creates);
+   let grouped;
+   /** @type {ReturnType<typeof groupPatches>} The updates, one per uuid. */
+   let patched;
+   try {
+      grouped = groupCreates(creates);
+      patched = groupPatches(updates);
+      notes.note(creates.length + patched.length + deletes.length, 'documents in one call', BEST_PRACTICE.documents);
+      notePatchesPerDocument(notes, patched);
+   } finally {
+      notes.write(ctx.log);
+   }
    /** @type {Awaited<ReturnType<typeof ctx.core.batchDocuments>>} The rows by kind, created rows group by group. */
    const result = await ctx.core.batchDocuments({
       creates: grouped.groups,
-      updates: groupPatches(updates),
-      deletes: args.deletes ?? [],
+      updates: patched,
+      deletes,
       dryRun: args.dryRun === true,
       actAs: args.actAs,
    });

@@ -21,9 +21,9 @@
  * message names which case it is and the remedy (a new key).
  * - Retention: a record older than `IDEMPOTENCY_RETENTION_MS` (by `_stats.createdTime`) is ignored, so a key can be
  * reused after a day. The flag itself stays on the document.
- * - Bound: the lookup reads at most `IDEMPOTENCY_SCAN_MAX` documents of the collection. A larger collection is refused
- * with `IDEMPOTENCY_UNAVAILABLE` rather than searched in part, because a record beyond the bound would be missed and
- * the documents created twice.
+ * - Size: the lookup reads every document of the collection, one property read each, because a record it skipped
+ * would be missed and the documents created twice. A collection over `BEST_PRACTICE.idempotencyLookup` documents is
+ * read whole and noted in the call's one warning line; the script time limit still bounds the call.
  * - Concurrency: calls with one key (per class, parent and key) run one after another in this client, so the second
  * call finds the first call's records. Two clients calling at once are not coordinated.
  * - Safety: the `flags.wiretap` scope is refused by the write guard in every create, update and replace, so a caller
@@ -32,6 +32,7 @@
 
 import { hashText } from '~/bridge/scripts/contentHash.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
+import { BEST_PRACTICE } from '~/bridge/scripts/sizeNotes.js';
 import { createId } from '~/bridge/scripts/writeArgs.js';
 
 /**
@@ -45,13 +46,6 @@ export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
  * @type {number}
  */
 export const IDEMPOTENCY_RETENTION_MS = 86_400_000;
-
-/**
- * The most documents of one collection the key lookup reads. One document costs one property read, so the bound is
- * far above the search scan bound; a collection past it is refused.
- * @type {number}
- */
-export const IDEMPOTENCY_SCAN_MAX = 20_000;
 
 /**
  * @typedef {object} IdempotencyRecord
@@ -179,12 +173,13 @@ function recordsOf(documents, key) {
  * @param {unknown} params.request - Everything that identifies the request, hashed to tell requests apart.
  * @param {Record<string, unknown>[]} params.data - The data of each document.
  * @param {boolean} params.keepId - Whether the caller asked to keep the `_id` of the data.
+ * @param {import('~/bridge/scripts/sizeNotes.js').SizeNotes} [params.sizeNotes] - The call's best-practice size
+ * notes; the size of the collection read is noted there.
  * @returns {{ replay: object[] | null, records: Record<string, unknown>[] }} The documents of the earlier call in
  * data order, or null and the data with the records and ids added.
- * @throws {ScriptError} `ARGS_INVALID` for a malformed key or a class with no collection, `IDEMPOTENCY_UNAVAILABLE`
- * for a collection past the lookup bound, `IDEMPOTENCY_CONFLICT`.
+ * @throws {ScriptError} `ARGS_INVALID` for a malformed key or a class with no collection, `IDEMPOTENCY_CONFLICT`.
  */
-export function applyIdempotency({ key, documentName, parent, request, data, keepId }) {
+export function applyIdempotency({ key, documentName, parent, request, data, keepId, sizeNotes }) {
    if (typeof key !== 'string' || !IDEMPOTENCY_KEY_PATTERN.test(key)) {
       throw new ScriptError('ARGS_INVALID', 'An idempotencyKey is 1 to 64 letters, digits, dots, colons, dashes or _.');
    }
@@ -193,13 +188,7 @@ export function applyIdempotency({ key, documentName, parent, request, data, kee
    if (collection === undefined) {
       throw new ScriptError('ARGS_INVALID', `${documentName} has no collection to hold an idempotency record.`);
    }
-   if (collection.size > IDEMPOTENCY_SCAN_MAX) {
-      throw new ScriptError(
-         'IDEMPOTENCY_UNAVAILABLE',
-         `This collection holds ${collection.size} documents; the idempotencyKey lookup covers at most ` +
-            `${IDEMPOTENCY_SCAN_MAX}. Create without a key.`,
-      );
-   }
+   sizeNotes?.note(collection.size, 'documents read by the idempotencyKey lookup', BEST_PRACTICE.idempotencyLookup);
    /** @type {string} The hash of this request. */
    const hash = requestHash(request);
    /** @type {ReturnType<typeof recordsOf>} The documents the key already marks. */
