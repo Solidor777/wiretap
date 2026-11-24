@@ -248,6 +248,50 @@ describe('bridge:registry push', () => {
       expect(socket.registries).toHaveLength(1);
    });
 
+   it('pushes a plugin tool registered while disconnected with the next identify', async () => {
+      registry.register(script('alpha'), async () => 'a');
+      const socket = makeFakeSocket(false);
+      wire(socket);
+      expect(
+         registry.register(
+            script('my-mod__tool', { moduleId: 'my-mod' }),
+            async () => 'p',
+            'plugin',
+         ).ok,
+      ).toBe(true);
+      await Promise.resolve();
+      expect(socket.registries).toHaveLength(0);
+      socket.connected = true;
+      socket.fire('connect');
+      acceptIdentify(socket);
+      expect(socket.registries).toHaveLength(1);
+      expect(socket.registries[0].payload.scripts.map((definition) => definition.name)).toEqual([
+         'alpha',
+         'my-mod__tool',
+      ]);
+   });
+
+   it('leaves a plugin tool with a very large description out of the push, and keeps the shipped tools', () => {
+      registry.register(script('alpha'), async () => 'a');
+      expect(
+         registry.register(
+            script('my-mod__huge', {
+               moduleId: 'my-mod',
+               description: 'd'.repeat(950_000),
+            }),
+            async () => 'p',
+            'plugin',
+         ).ok,
+      ).toBe(true);
+      const socket = makeFakeSocket(true);
+      wire(socket);
+      acceptIdentify(socket);
+      expect(socket.registries[0].payload).toEqual({
+         apiVersion: SCRIPT_API_VERSION,
+         scripts: [script('alpha')],
+      });
+   });
+
    it('pushes a change once per wiring when the bridge is wired twice', async () => {
       const socket = makeFakeSocket(true);
       wire(socket);

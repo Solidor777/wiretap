@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { GATES } from '$shared/gates.js';
 import { GATE_DENIED } from '$shared/protocol.js';
+import { createCallTool } from '~/bridge/scripts/callTool.js';
 import { deletePackHandler } from '~/bridge/scripts/deletePack.js';
+import { createScriptRegistry } from '~/bridge/scripts/registry.js';
 import { executeMacroDefinition } from '~/bridge/scripts/macroDefinitions.js';
 import { batchDocuments } from '~/bridge/scripts/writeBatch.js';
 import { replaceDocument } from '~/bridge/scripts/writeReplace.js';
 import { deleteDocuments, updateDocuments } from '~/bridge/scripts/writes.js';
-import { shippedScripts } from './scriptFixtures.js';
+import { script, shippedScripts } from './scriptFixtures.js';
 import { installWriteWorld } from './mockWriteWorld.js';
 
 /** @type {ReturnType<typeof installWriteWorld>} The mocked world. */
@@ -165,6 +167,36 @@ describe('the delete and replace gates', () => {
       gates.allowReplace = true;
       expect((await outcome(() => RISKY.delete_documents.run(false)))?.code).toBe(GATE_DENIED);
    });
+
+   it(
+      'a plugin tool whose handler deletes is denied naming allowDelete while it is closed, though its module is ' +
+         'listed',
+      async () => {
+         gates.allowedPluginModules = 'mock-plugin';
+         /** @type {ReturnType<typeof createScriptRegistry>} A registry holding only the plugin tool. */
+         const registry = createScriptRegistry({ log: () => undefined });
+         expect(
+            registry.register(
+               script('mock-plugin__wipe', {
+                  moduleId: 'mock-plugin',
+                  mutates: true,
+                  inputSchema: {
+                     type: 'object',
+                     properties: {},
+                  },
+               }),
+               (args, ctx) => ctx.core.deleteDocuments({ uuids: [actor.uuid] }),
+               'plugin',
+            ).ok,
+         ).toBe(true);
+         const error = await outcome(() => createCallTool({ registry })({ name: 'mock-plugin__wipe' }));
+         expect(error?.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowDelete');
+         expect(world.byUuid.has(actor.uuid)).toBe(true);
+         expect(actor.update).not.toHaveBeenCalled();
+         expect(foundry.documents.modifyBatch).not.toHaveBeenCalled();
+      },
+   );
 
    it('does not gate a batch that deletes nothing', async () => {
       expect(
