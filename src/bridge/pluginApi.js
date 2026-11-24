@@ -1,7 +1,7 @@
 import { getBudget } from '$shared/budgets.js';
 import { isModuleId } from '$shared/gates.js';
 import { cleanForLog } from '$shared/logText.js';
-import { SCRIPT_API_VERSION } from '$shared/scripts.js';
+import { PLUGIN_NAME_PATTERN, SCRIPT_API_VERSION } from '$shared/scripts.js';
 import { scriptRegistry } from '~/bridge/scripts/registry.js';
 
 /**
@@ -15,7 +15,8 @@ import { scriptRegistry } from '~/bridge/scripts/registry.js';
 /**
  * @typedef {object} PluginToolInput
  * @property {string} moduleId - The registering module's id from its `module.json`; the module must be active.
- * @property {string} name - The short tool name; Wiretap registers `<moduleId>__<name>`.
+ * @property {string} name - The short tool name, one or more of `A-Z`, `a-z`, `0-9`, `_` and `-`, without the
+ * `<moduleId>__` prefix; Wiretap registers `<moduleId>__<name>`.
  * @property {string} version - A semver-like version of at most 32 characters.
  * @property {string} description - One line that tells the agent what the tool does.
  * @property {Record<string, unknown>} inputSchema - The argument schema (the subset the sidecar converts).
@@ -145,6 +146,24 @@ export function createPluginApi({ registry, isModuleActive }) {
                `moduleId "${cleanForLog(moduleId, ID_ECHO_BYTES)}" is not an active module in this world: pass your ` +
                   'own module\'s id and enable the module',
             );
+         }
+         if (wellFormed) {
+            /** @type {string} The prefix Wiretap puts before the short name. */
+            const prefix = `${moduleId}__`;
+            // The short name is judged here, not by the validator, whose reason describes the built name.
+            if (typeof name === 'string' && name.startsWith(prefix)) {
+               return refuse(
+                  label,
+                  `name already starts with "${prefix}"; pass only the short name, Wiretap adds the prefix`,
+               );
+            }
+            if (typeof name !== 'string' || !PLUGIN_NAME_PATTERN.test(name)) {
+               return refuse(
+                  label,
+                  `name is your tool's short name: one or more of A-Z, a-z, 0-9, _ and -; Wiretap adds "${prefix}" ` +
+                     'itself',
+               );
+            }
          }
          /** @type {unknown} The declared result limits, or undefined. */
          const result = ownValue(input, 'result');

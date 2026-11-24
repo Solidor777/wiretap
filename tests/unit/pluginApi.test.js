@@ -102,9 +102,59 @@ describe('plugin API', () => {
 
    it('refuses a malformed module id with the validator\'s message', () => {
       expect(api.registerTool(tool({ moduleId: 'My.Mod' })).reason).toBe(
-         'moduleId must be your module\'s id from module.json: 1 to 64 characters of a-z, 0-9, _ or - (no dots or ' +
-            'capitals), starting with a letter or digit',
+         'moduleId must be your module\'s id from module.json: one or more of A-Z, a-z, 0-9, _ and - (no dots or ' +
+            'spaces)',
       );
+   });
+
+   it('refuses a bad short name with a short-name reason and registers nothing', () => {
+      /** @type {string} The reason every bad short name gets. */
+      const reason = 'name is your tool\'s short name: one or more of A-Z, a-z, 0-9, _ and -; Wiretap adds ' +
+         '"my-mod__" itself';
+      for (const name of [
+         'my tool',
+         'my.tool',
+         '',
+         undefined,
+         42,
+      ]) {
+         expect(api.registerTool(tool({ name }))).toEqual({
+            ok: false,
+            reason,
+         });
+      }
+      expect(registry.definitions()).toEqual([]);
+      expect(lines.join('\n')).toContain(reason);
+   });
+
+   it('refuses a short name that already carries the module id prefix and registers nothing', () => {
+      expect(api.registerTool(tool({ name: 'my-mod__echo' }))).toEqual({
+         ok: false,
+         reason: 'name already starts with "my-mod__"; pass only the short name, Wiretap adds the prefix',
+      });
+      expect(registry.get('my-mod__my-mod__echo')).toBeUndefined();
+      expect(registry.get('my-mod__echo')).toBeUndefined();
+      expect(registry.definitions()).toEqual([]);
+   });
+
+   it('registers a short name with capitals', () => {
+      expect(api.registerTool(tool({ name: 'Echo' }))).toEqual({
+         ok: true,
+         name: 'my-mod__Echo',
+      });
+      expect(registry.get('my-mod__Echo').definition.moduleId).toBe('my-mod');
+   });
+
+   it('refuses a built name over 50 characters with the validator\'s reason', () => {
+      /** @type {string} A short name that makes the built name 51 characters. */
+      const name = 'a'.repeat(51 - 'my-mod__'.length);
+      expect(api.registerTool(tool({ name }))).toEqual({
+         ok: false,
+         reason: 'name is 51 characters; Claude Code lists it as mcp__wiretap__<name> and the API accepts at most 64, ' +
+            'so <moduleId>__<tool> may be at most 50 characters',
+      });
+      expect(registry.definitions()).toEqual([]);
+      expect(api.registerTool(tool({ name: 'a'.repeat(50 - 'my-mod__'.length) })).ok).toBe(true);
    });
 
    it('refuses a built name two modules collide on, keeping the first module\'s gate', () => {

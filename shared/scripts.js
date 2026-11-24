@@ -176,7 +176,7 @@ const CORE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
  * so every plugin name is also a valid Claude tool name (`^[a-zA-Z0-9_-]{1,64}$`) once Claude Code prefixes it.
  * @type {RegExp}
  */
-const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+export const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /**
  * The separator between the owner and the tool in plugin and agent tool names; a shipped name may not hold it, so a
