@@ -259,8 +259,9 @@ describe('createFoundryBridge registry event', () => {
       expect(ack.error.code).toBe(OP_FAILED);
       expect(bridge.tools()).toEqual([]);
       expect(lines.some((line) => line.includes('hostile length'))).toBe(true);
-      expect(lines.some((line) => /^Wiretap sidecar \| registry from a failed: .*hostile length.*; its tools were cleared$/
-         .test(line))).toBe(true);
+      expect(lines.some((line) =>
+         /^Wiretap sidecar \| registry from a failed: .*hostile length.*; its tools were cleared$/
+            .test(line))).toBe(true);
    });
 
    it('throttles refusal lines to 10 per minute with one summary line after the window', () => {

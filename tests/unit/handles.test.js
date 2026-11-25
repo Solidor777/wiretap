@@ -196,6 +196,29 @@ describe('put', () => {
       ]);
    });
 
+   it('writes a bounded number of eviction lines when many puts evict, then one summary line', () => {
+      /** @type {string[]} The store's log lines. */
+      const lines = [];
+      const { store, advance } = makeStore({
+         maxCount: 2,
+         log: (line) => lines.push(line),
+      });
+      putOk(store, OWNER_A, 'x');
+      putOk(store, OWNER_A, 'x');
+      for (let index = 0; index < 50; index += 1) {
+         putOk(store, OWNER_A, 'y');
+      }
+      /** @type {string} The line each evicting put reports. */
+      const evicted = 'Wiretap sidecar | handle store evicted 1 least recently used handle at the 2-handle bound';
+      expect(lines).toEqual(Array(10).fill(evicted));
+      advance(60_000);
+      putOk(store, OWNER_A, 'z');
+      expect(lines.slice(10)).toEqual([
+         'Wiretap sidecar | 40 further handle eviction lines suppressed',
+         evicted,
+      ]);
+   });
+
    it('logs how many handles a put evicted at the byte bound', () => {
       /** @type {string[]} The store's log lines. */
       const lines = [];

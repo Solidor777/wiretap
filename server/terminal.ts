@@ -16,6 +16,7 @@ import { resolvePtyOptions } from './ptyOptions.ts';
 import { resolveSpawn } from './spawnCommand.ts';
 import { isSafeConfigPath, planMcpWiring, wireMcpConfig, type McpWiringPlan } from './mcpWiring.ts';
 import { writeMcpConfig } from './mcpConfigFile.ts';
+import { createLogThrottle } from './logThrottle.ts';
 
 // Largest accepted terminal dimension in columns or rows; bounds what an untrusted client can hand to node-pty.
 const MAX_TERMINAL_DIMENSION: number = 1000;
@@ -23,6 +24,12 @@ const MAX_TERMINAL_DIMENSION: number = 1000;
 // The output chunk sent only to a socket whose launch is ignored because a terminal already runs; the client shows
 // terminal output as it arrives, so the GM sees why nothing new started.
 const LAUNCH_IGNORED_NOTICE: string = '\r\n[Wiretap] A terminal is already running; the launch was ignored.\r\n';
+
+// Length of one window of the ignored-launch log throttle, in milliseconds.
+const LAUNCH_IGNORED_LOG_WINDOW_MS: number = 60_000;
+
+// Most ignored-launch lines written per window; any socket can send launches in a loop.
+const LAUNCH_IGNORED_LOG_LIMIT: number = 10;
 
 interface LaunchPayload {
    command?: string;
@@ -74,6 +81,14 @@ export function createTerminalManager(
    let scrollbackLimit: number = TERMINAL_SCROLLBACK_DEFAULT;
    // The last known terminal dimensions.
    let size: ResizePayload = { cols: 80, rows: 24 };
+   // Writes an ignored-launch line subject to the per-window limit, with one summary line per window.
+   const logLaunchIgnored: (line: string) => void = createLogThrottle({
+      log: (line) => console.warn(line),
+      now: Date.now,
+      limit: LAUNCH_IGNORED_LOG_LIMIT,
+      windowMs: LAUNCH_IGNORED_LOG_WINDOW_MS,
+      noun: 'ignored terminal launch lines',
+   });
    /**
     * Auto-wire the MCP endpoint into an allowlisted `claude` command. The config file is (re)written on every
     * wired launch. Returns the command unchanged (and logs why when the cause is a skipped command line, an
@@ -143,10 +158,11 @@ export function createTerminalManager(
    }
 
    /**
-    * Spawn the PTY if none is running; a launch while one runs is ignored with one log line, and the launching socket
-    * alone is sent `LAUNCH_IGNORED_NOTICE` as terminal output (it is not kept in the scrollback). A payload that is
-    * not an object, whose `command` is neither absent nor a string, or whose `cols` or `rows` is present but not an
-    * integer within 1..MAX_TERMINAL_DIMENSION, launches nothing: the payload comes from an untrusted socket event. An absent `cols` or `rows` keeps the stored size. The
+    * Spawn the PTY if none is running; a launch while one runs is ignored with one throttled log line, and the
+    * launching socket alone is sent `LAUNCH_IGNORED_NOTICE` as terminal output every time (it is not kept in the
+    * scrollback). A payload that is not an object, whose `command` is neither absent nor a string, or whose `cols` or
+    * `rows` is present but not an integer within 1..MAX_TERMINAL_DIMENSION, launches nothing: the payload comes from
+    * an untrusted socket event. An absent `cols` or `rows` keeps the stored size. The
     * payload's `scrollback` sets the replay size for this PTY (any value that is not a positive integer gives the
     * default); a size past `TERMINAL_SCROLLBACK_WARN` is kept and logged once.
     * @param {Socket} socket - The socket that asked for the launch.
@@ -154,7 +170,7 @@ export function createTerminalManager(
     */
    function launch(socket: Socket, payload: LaunchPayload): void {
       if (term) {
-         console.warn('Wiretap sidecar | terminal launch ignored: a terminal is already running');
+         logLaunchIgnored('Wiretap sidecar | terminal launch ignored: a terminal is already running');
          socket.emit(TERMINAL_DATA, { chunk: LAUNCH_IGNORED_NOTICE });
          return;
       }

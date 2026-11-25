@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { getBudget } from '../shared/budgets.js';
 import { resolvePaths } from '../shared/docPath.js';
+import { createLogThrottle } from './logThrottle.ts';
 
 // Total accounted bytes the store holds across all owners (1 MB is 1,000,000 bytes, as in the 1 KB = 1000 B budgets).
 export const HANDLE_STORE_MAX_BYTES: number = 64_000_000;
@@ -13,6 +14,12 @@ export const HANDLE_ENTRY_OVERHEAD_BYTES: number = 256;
 
 // Number of random bytes behind one handle id (128 bits, unguessable; base64url gives 22 characters).
 const HANDLE_ID_BYTES: number = 16;
+
+// Length of one window of the eviction log throttle, in milliseconds of the store's clock.
+const EVICTION_LOG_WINDOW_MS: number = 60_000;
+
+// Most eviction lines written per window.
+const EVICTION_LOG_LIMIT: number = 10;
 
 /**
  * A short, bounded failure. Store codes are HANDLE_NOT_FOUND, HANDLE_TOO_LARGE, HANDLE_NOT_JSON, HANDLE_BAD_RANGE and
@@ -92,7 +99,7 @@ export interface HandleStoreOptions {
    maxEntryBytes?: number;
    /** Most handles held at once (default: the `HANDLE_MAX_COUNT` budget). */
    maxCount?: number;
-   /** Receives the sidecar log line a put that evicts handles writes (default: `console.log`). */
+   /** Receives the throttled eviction lines and their summary lines (default: `console.log`). */
    log?: (line: string) => void;
 }
 
@@ -311,7 +318,8 @@ export function boundedStringify(value: unknown, maxUnits: number): BoundedText 
  * size plus a fixed overhead; the oldest-used handles are evicted when the accounted capacity or the handle count is
  * exceeded, and a handle unread for the idle limit expires. A handle is readable only by the owner key that stored it.
  * The store has no timers; expired entries are released on the next `put` or `slice`. A put that evicts handles
- * writes one log line naming the bound and the count, and the not-found answer names the idle, count and byte bounds.
+ * writes one log line naming the bound and the count, at most `EVICTION_LOG_LIMIT` per window on the store's clock,
+ * and the not-found answer names the idle, count and byte bounds.
  * @param {HandleStoreOptions} [options] - Clock, capacity, entry limit, count limit, idle limit and log overrides.
  * @returns {HandleStore} An empty store.
  */
@@ -327,7 +335,16 @@ export function createHandleStore(options: HandleStoreOptions = {}): HandleStore
    // The most handles held at once.
    const maxCount: number = options.maxCount ?? getBudget('HANDLE_MAX_COUNT').value;
    // The sidecar log sink.
-   const log: (line: string) => void = options.log ?? ((line) => console.log(line));
+   const sink: (line: string) => void = options.log ?? ((line) => console.log(line));
+   // Writes an eviction line subject to the per-window limit, with one summary line per window: once the store is
+   // full, every large result evicts.
+   const log: (line: string) => void = createLogThrottle({
+      log: sink,
+      now,
+      limit: EVICTION_LOG_LIMIT,
+      windowMs: EVICTION_LOG_WINDOW_MS,
+      noun: 'handle eviction lines',
+   });
    // The default window bound.
    const defaultMaxBytes: number = getBudget('RESULT_HARD_CAP_DEFAULT_BYTES').value;
    // The largest window bound a caller may ask for.
