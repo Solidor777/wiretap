@@ -71,9 +71,12 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   (`_migrateDeletionKey` in `common/utils/helpers.mjs`). Status: Superseded by "Three spellings of one operator" below:
   the tools refuse every operator spelling in a key, path or value and accept an operator only through `op`.
 
-- Title: `keepId` overwrites an existing document. Summary: MEASURED on 14.364 by the e2e probe: creating with `keepId`
-  and the `_id` of an existing document, world or embedded, does not fail; the server stores the new data under that id
-  (the old document is gone) while the client keeps its old embedded copy. Status: `create_documents` refuses a `keepId`
+- Title: `keepId` overwrites an existing world document. Summary: MEASURED on 14.364 (two runs of a live probe):
+  creating a world document with `keepId` and the `_id` of an existing one does not fail; the server stores the new
+  data under that id (the old document is gone), and the client's collection holds the new document after the call
+  and after a reload (only a JavaScript reference held to the old object still reads the old data). An embedded
+  document with a taken id is refused by the server ("The _id [..] already exists within the parent collection"), and
+  nothing is overwritten. Status: `create_documents` refuses a `keepId`
   that is taken (`ARGS_INVALID`); a pack is checked through its index.
 
 - Title: Operator keys remove embedded documents. Summary: MEASURED on 14.364: `{'==items': []}` removes every item of an
@@ -152,7 +155,7 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
 
 - Title: Backup restore throughput and two restore targets are not covered live. Summary: only the piece transport
   (`tests/integration/backupTools.test.js`) and an export dry run of the largest live pack (`backupTools.spec.js`) were
-  timed; how long a restore of 10,000 documents (the backup bound) takes, each document a replace or create through
+  timed; how long a restore of 10,000 documents (the backup guideline) takes, each document a replace or create through
   the write path, is not measured. No live e2e restores into a compendium pack or re-creates Folders: the unit tests
   over mocked `game` (`tests/unit/restoreBackup.test.js`) re-create a Folder and refuse a gone or locked pack, but
   have no case that restores a document into an unlocked pack. Status: NOT MEASURED.
@@ -210,3 +213,14 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   uses one builder (`toCompendium`, then every `ownership` deleted) for every target. The stored document still gets the
   creating user as OWNER from the server's `_preCreate` (`dist/database/backend/server-document.mjs`). Status: READ in
   the v14 tree; the stored ownership MEASURED by `tests/e2e/copyTools.spec.js`.
+
+- Title: Nested `__` in module ids can build the same plugin tool name. Summary: a module id may itself contain `__`
+  (Foundry's id alphabet allows `_`), so module `a` with tool `b__c` and module `a__b` with tool `c` both build
+  `a__b__c`. Read in `src/bridge/scripts/registry.js` (`register`): a name already registered is refused with
+  `name "<name>" is already registered: choose another tool name`, so the first registration wins and the second
+  module gets that reason; the sidecar refuses a repeated name in one payload too (`server/toolRegistry.ts`
+  `sanitizeTool`). The tool keeps the `moduleId` it registered with, so the module gate of the module that won is the
+  one judged. Status: Accepted (no gate escapes; the author guide says names must be unique).
+
+- Title: `scripts/` is linted by nothing. Summary: `eslint.config.js` lists `scripts/` among its ignores, so
+  `npm run eslint` never checks `scripts/e2e-foundry-server.mjs` (or any other launcher there). Status: Needs review.
