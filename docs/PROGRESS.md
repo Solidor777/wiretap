@@ -664,10 +664,12 @@ on `get_document` with `contentHash.js`, the copy, actor-build and change-only r
   three. `tests/e2e/copyTools.spec.js` 2 passed in each of three runs (1.0 min with the e2e build, 32.0 s, 33.2 s): a
   two-item embedded copy acked in 245 B (bound 4,000 B) with rows in `fromUuids` order; embedded copies, a plain GM
   create and a world copy of a pack Item all stored `{ default: 0, <GM id>: 3 }`; the world copy stored `folder: null`,
-  `sort: 0` and `_stats.compendiumSource` equal to the pack document's uuid. Census 0 and gates restored after each run.
+  `sort: 0` and `_stats.compendiumSource` equal to the pack document's uuid. Census 0 after each run is INFERRED from
+  the exit code (the global teardown fails the run on a non-empty census); gates restored after each run.
   `tests/e2e/writeTools.spec.js` ran after `batch` began sending client-chosen ids: 25 passed (3.0 min); after the
   final-review fixes, which add the batch row-order assertion (interleaved Actor, embedded Item, world Item and Actor
-  creates; row i names entry i and its uuid stores that name), 25 passed (2.1 min), census 0 and gates restored.
+  creates; row i names entry i and its uuid stores that name), 25 passed (2.1 min), census 0 (inferred from the exit
+  code) and gates restored.
 - `skills/wiretap/SKILL.md` is 82 lines; its cap in `tests/unit/shippedSkill.test.js` is 82 (raised from 75 to fit the
   recipes; the limit is agent-set).
 - Unit test limits raised with a measured reason in each comment: `tests/unit/backups.test.js` "stops reading headers
@@ -705,11 +707,12 @@ on `get_document` with `contentHash.js`, the copy, actor-build and change-only r
   - Create rows follow input order: `runCreate` sends every document with a client-chosen id under `keepId: true` and
     matches the answer by id (owner's ruling 2026-11-22, "Keep the fix"). Rejected: creating one document at a time,
     or dropping the order promise.
-  - `batch` created rows follow entry order (option B): ids under `keepId` per group, rows put back in flat entry order.
-    Rejected: order within each group only, and one create operation per entry.
+  - `batch` created rows follow entry order (option B): ids under `keepId` per group, rows put back in flat entry order
+    (owner confirmed 2026-11-25). Rejected: order within each group only, and one create operation per entry.
   - With `keepId`, `refuseTakenIds` runs after the key lookup, so a keyed retry replays; a call with no matching
     record still meets it before any write.
-  - The user-facing skill's line cap was raised from 75 to 82 rather than rewording other bullets.
+  - The user-facing skill's line cap was raised from 75 to 82 rather than rewording other bullets (owner confirmed
+    2026-11-25).
   - The fake GM client of the integration harness may answer asynchronously, so a test can run the real handlers.
   - The backups 1,000-header test limit (60 s) and the exportBackup 10,000-document test limit (15 s) were raised with
     measured reasons after the owner fixed a filling disk.
