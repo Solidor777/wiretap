@@ -86,11 +86,13 @@
 - [ ] The executing client's own gate check is covered by unit tests only: through the sidecar a closed gate is denied
       by the sidecar's snapshot before anything is sent (e2e `scripts.spec.js` shows that path). An e2e that reaches the
       client check needs a way to hold the sidecar's snapshot stale, for example a test-only observer command
-- [ ] Compact view: the per-subtype key-field lists (`src/bridge/scripts/keyFields.json`) exist for the `titan` system
-      only; a document of any other system is shown with the default key-name pattern of `ctx.shape`. Generate and review
-      lists for other systems with `tests/e2e/keyFields.measure.spec.js` (it reads the live world; run it per system), or
-      derive them at run time by the same rules. With 16-character ids and 18-character names 40 tuples do not fit the
-      2 KB budget (35 fit in the fixture, asserted by `tests/unit/scriptShape.test.js`), so the byte budget trims them
+- [ ] Wiretap holds system-specific data, but must stay system agnostic and be testable without any game system's data
+      (owner). Titan parts: the per-subtype key-field lists in `src/bridge/scripts/keyFields.json` (the compact view);
+      the e2e world `test-titan` (`scripts/e2e-foundry-server.mjs:32`, `tests/e2e/registryCore.js:15`); titan-like unit
+      fixtures (`tests/unit/getDocument.test.js`, `tests/unit/scriptShape.test.js`). Move what is worth keeping to the
+      add-on module `wiretap-titan-vttrpg` (folder `Data/modules/wiretap-titan-vttrpg`, repo
+      `https://github.com/Solidor777/wiretap-titan-vttrpg.git`), which depends on Wiretap. Needs a design walkthrough:
+      how the compact view picks key fields with no list, and which system the e2e world runs on.
 - [ ] owner: decide whether non-core Settings are readable at all. Today every Setting outside the `wiretap.` namespace
       and the credential denylist is returned with secret-named keys dropped from its value (docs/PLAN.md section 4.4),
       so another module's setting that stores a secret under a name the pattern does not match is exposed. Options: a
@@ -143,6 +145,25 @@
       beforeAll/afterAll); `global-setup` only builds the bundle. Also rewrote 2 stale `terminal.spec` pop-out
       tests that asserted the pre-popout-takeover fan-out behavior (now assert takeover + return-on-close, via
       a new `closePopout` probe). FULL `npm run test:e2e` now GREEN — 3/3 runs (11/11) under Node 22.
+
+## After M7: ideas from the foundry-vtt-mcp survey
+
+Accepted by the owner; each needs a design walkthrough when picked up. Survey:
+`C:\Users\emper\.claude\work\fvttmcp-survey\comparison-wiretap.md`. Every item stays system agnostic; game-system
+support goes in separate add-on modules that depend on Wiretap, after Wiretap is done.
+
+- [ ] Audit log of agent writes: one line per mutating call (time, tool, endpoint kind, uuids, changed paths, result
+      code), no document contents, readable by the GM. File growth is handled by moving a full file to the recycle bin
+      (no permanent delete).
+- [ ] One central guard on every `CONFIG.queries` handler Wiretap or a plugin registers, refusing a sender who is not a
+      GM, plus a test that lists every registered `wiretap.*` handler and asserts each refuses a non-GM (with a count
+      floor). foundry-vtt-mcp `packages/foundry-module/src/query-guard.ts` (MIT) may be adapted; keep its MIT notice.
+- [ ] Range comparisons and a sort path in `search_documents` filters, over any document path (system agnostic), within
+      the 800 B definition limit.
+- [ ] A condition toggle script through Foundry core `Actor#toggleStatusEffect` (`client/documents/actor.mjs:547`).
+      Item use is not in Foundry core, so it belongs in a system add-on, not Wiretap.
+- [ ] Low priority: a player roll-request chat card, chat spoken as a token with whispers that fail on an ambiguous
+      name, installers, and a Foundry hosted over HTTPS (M10).
 
 ## Deferred (later)
 
