@@ -28,6 +28,8 @@ Goals:
 - **G2 Plugin skills.** Modules that depend on Wiretap register their own MCP tools; handlers run in the Foundry
   client.
 - **G3 No human seat.** Skills work when no human has a GM tab open, on a headless server.
+- **G4 System agnostic.** Built and shipped code references no game system and works in any system. Game-system
+  support comes from add-on modules that depend on Wiretap (G2). Test machinery may run on an installed system.
 
 What "no seat" means (see §4.3): a Foundry *client* must still run for anything that needs system or module
 code, sheets, derived data or plugin handlers. The seat is taken by a headless agent browser, not by a human. A
