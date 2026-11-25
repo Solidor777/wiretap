@@ -873,3 +873,49 @@ describe('get_document exclusions', () => {
       })).values.value).toBe('1');
    });
 });
+
+describe('get_document: the partial notice', () => {
+   it('says so in every mode when the export leaves part of the document out', async () => {
+      /** @type {Record<string, unknown>} A subtree nested deeper than the redaction walk enters. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 30; level += 1) {
+         deep = { next: deep };
+      }
+      worldWithActor({
+         source: {
+            ...actorSource(),
+            flags: { mock: { deep } },
+         },
+      });
+      /** @type {string} The actor uuid. */
+      const uuid = 'Actor.MOCKACTOR0000001';
+      expect((await get({ uuid })).partial).toBe(true);
+      expect((await get({
+         uuid,
+         mode: 'full',
+      })).partial).toBe(true);
+      expect((await get({
+         uuid,
+         paths: ['name'],
+      })).partial).toBe(true);
+      expect((await get({
+         uuid,
+         fields: ['name'],
+      })).partial).toBe(true);
+   });
+
+   it('adds no notice for a whole export', async () => {
+      worldWithActor();
+      /** @type {string} The actor uuid. */
+      const uuid = 'Actor.MOCKACTOR0000001';
+      expect((await get({ uuid })).partial).toBeUndefined();
+      expect((await get({
+         uuid,
+         mode: 'full',
+      })).partial).toBeUndefined();
+      expect((await get({
+         uuid,
+         paths: ['name'],
+      })).partial).toBeUndefined();
+   });
+});

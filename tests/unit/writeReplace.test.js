@@ -447,3 +447,24 @@ describe('replaceDocument: actAs', () => {
       ]);
    });
 });
+
+describe('replaceDocument: the partial read-back notice', () => {
+   it('marks the read-back row partial when the export leaves part of the document out', async () => {
+      /** @type {Record<string, unknown>} A subtree past the redaction depth and within the write depth bound. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 26; level += 1) {
+         deep = { next: deep };
+      }
+      const row = await replaceDocument({
+         uuid: actor.uuid,
+         data: {
+            name: 'MOCK_replaced',
+            type: 'npc',
+            flags: { mock: { deep } },
+         },
+         readback: true,
+      });
+      expect(row.exported).toBeDefined();
+      expect(row.partial).toBe(true);
+   });
+});

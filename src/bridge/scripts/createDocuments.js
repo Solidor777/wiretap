@@ -94,7 +94,12 @@ async function create(args, ctx, notes) {
          if (!sliced.ok) {
             throw shapeRefusal(sliced.error);
          }
-         return sliced;
+         return document.partial === true
+            ? {
+               ...sliced,
+               partial: true,
+            }
+            : sliced;
       }),
    );
 }

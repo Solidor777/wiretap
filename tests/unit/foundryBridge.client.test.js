@@ -207,4 +207,29 @@ describe('the write scripts through the client bridge', () => {
       expect(ack.error.failures).toHaveLength(10);
       expect(ack.error.failureCount).toBe(30);
    });
+
+   it('marks a read-back row partial when the export leaves part of the created document out', async () => {
+      /** @type {Record<string, unknown>} A subtree past the redaction depth and within the write depth bound. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 26; level += 1) {
+         deep = { next: deep };
+      }
+      const ack = await callShipped({
+         name: 'create_documents',
+         arguments: {
+            documentName: 'Actor',
+            data: [JSON.stringify({
+               name: 'Bob',
+               type: 'npc',
+               flags: { mock: { deep } },
+            })],
+            paths: ['name'],
+         },
+      });
+      expect(ack.ok).toBe(true);
+      expect(ack.result[0]).toMatchObject({
+         values: { name: 'Bob' },
+         partial: true,
+      });
+   });
 });

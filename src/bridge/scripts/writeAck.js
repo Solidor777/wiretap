@@ -241,10 +241,11 @@ export function ackBatch(result) {
 
 /**
  * Add read-back values to acknowledgement rows while each row stays within `ACK_MAX_BYTES` and the batch within
- * `ACK_BATCH_MAX_BYTES`; a row whose values do not fit gets `cut: true` when that fits.
+ * `ACK_BATCH_MAX_BYTES`; a row whose values do not fit gets `cut: true` when that fits. A read-back whose export
+ * left part of the document out adds `partial: true` to its row, values or not.
  * @param {Record<string, unknown>[]} rows - The rows from `ackDocuments` or `ackUpdates`, one per read-back.
- * @param {Array<{ values: Record<string, unknown>, missing: string[] } | null>} readbacks - The slices of each
- * document, null for a document that could not be read back.
+ * @param {Array<{ values: Record<string, unknown>, missing: string[], partial?: true } | null>} readbacks - The
+ * slices of each document, null for a document that could not be read back.
  * @returns {Record<string, unknown>[]} The rows with values added where they fit.
  */
 export function attachReadback(rows, readbacks) {
@@ -265,11 +266,13 @@ export function attachReadback(rows, readbacks) {
          ...result[index],
          values: readback.values,
          ...(readback.missing.length > 0 ? { missing: readback.missing } : {}),
+         ...(readback.partial === true ? { partial: true } : {}),
       };
       /** @type {Record<string, unknown>} The row marked cut. */
       const cut = {
          ...result[index],
          cut: true,
+         ...(readback.partial === true ? { partial: true } : {}),
       };
       for (const candidate of [
          full,

@@ -23,7 +23,7 @@ export const SCHEMA_DEPTH_MAX = 3;
 export const SCHEMA_NODES_MAX = 150;
 
 /**
- * Most entries of an outline.
+ * Most entries of an outline; an outline that stops here marks its walk state cut.
  * @type {number}
  */
 export const OUTLINE_MAX = 80;
@@ -41,7 +41,7 @@ const CHOICES_MAX = 16;
 const CHOICE_MAX_BYTES = 32;
 
 /**
- * Most file categories or typed-schema type names listed.
+ * Most file categories or typed-schema type names listed; the rest are counted in `categoriesMore` or `typesMore`.
  * @type {number}
  */
 const NAMES_MAX = 12;
@@ -242,6 +242,9 @@ function addConstraints(field, node) {
       node.categories = field.categories
          .slice(0, NAMES_MAX)
          .map((category) => truncateUtf8(String(category), CHOICE_MAX_BYTES));
+      if (field.categories.length > NAMES_MAX) {
+         node.categoriesMore = field.categories.length - NAMES_MAX;
+      }
    }
 }
 
@@ -318,7 +321,12 @@ export function describeField(field, state, depth = 0) {
       }
    } else if (kind === 'typed') {
       node.free = true;
-      node.types = Object.keys(field.types ?? {}).slice(0, NAMES_MAX);
+      /** @type {string[]} The names of every type of the field. */
+      const types = Object.keys(field.types ?? {});
+      node.types = types.slice(0, NAMES_MAX);
+      if (types.length > NAMES_MAX) {
+         node.typesMore = types.length - NAMES_MAX;
+      }
    } else if (kind === 'array') {
       if (depth >= state.depthMax) {
          node.more = true;
@@ -360,7 +368,8 @@ export function describeField(field, state, depth = 0) {
  * List the fields of a schema one level deep as `[name, class]`, with the referenced document name as a third entry
  * for a collection, document or foreign key.
  * @param {{ fields: Record<string, object> }} schema - A SchemaField.
- * @param {WalkState} state - The walk state; its `topLevel` flag skips the excluded fields of a User.
+ * @param {WalkState} state - The walk state; its `topLevel` flag skips the excluded fields of a User, and its `cut`
+ * flag is set when a field past `OUTLINE_MAX` is left out.
  * @returns {Array<[string, string] | [string, string, string]>} At most `OUTLINE_MAX` entries.
  */
 export function outlineFields(schema, state) {
@@ -371,6 +380,7 @@ export function outlineFields(schema, state) {
          continue;
       }
       if (entries.length >= OUTLINE_MAX) {
+         state.cut = true;
          break;
       }
       /** @type {string | undefined} The document the field refers to. */

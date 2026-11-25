@@ -914,3 +914,21 @@ describe('updateDocuments: read-back', () => {
       expect(rows[0].exported).toMatchObject({ name: 'MOCK_x' });
    });
 });
+
+describe('updateDocuments: the partial read-back notice', () => {
+   it('marks a read-back row partial when the export leaves part of the document out', async () => {
+      /** @type {Record<string, unknown>} A subtree past the redaction depth and within the write depth bound. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 26; level += 1) {
+         deep = { next: deep };
+      }
+      const rows = await updateDocuments({
+         updates: [update(actor, [{
+            path: 'flags.mock.deep',
+            value: deep,
+         }])],
+         readback: true,
+      });
+      expect(rows[0].partial).toBe(true);
+   });
+});

@@ -98,6 +98,7 @@ const FAILURE_TEXT_MAX_BYTES = 160;
  * @property {string} type - The subtype, or an empty text.
  * @property {boolean} [dryRun] - True when nothing was written.
  * @property {Record<string, unknown>} [exported] - The canonical export, only when read-back was requested.
+ * @property {true} [partial] - Set with `exported` when the export left part of the document out at a redaction bound.
  */
 
 /**
@@ -634,6 +635,9 @@ export async function runCreate(plan, readback = false) {
          const exported = exportDocument(document, {});
          if (exported.ok) {
             row.exported = exported.data;
+            if (exported.partial === true) {
+               row.partial = true;
+            }
          }
       }
       return row;
@@ -704,6 +708,7 @@ async function createChecked({
                }
                : {}),
             ...(exported.ok ? { exported: exported.data } : {}),
+            ...(exported.ok && exported.partial === true ? { partial: true } : {}),
          };
       });
    }
@@ -742,6 +747,7 @@ async function createChecked({
  * a hook cancelled the update). For a dry run, the paths that would be written.
  * @property {boolean} [dryRun] - True when nothing was written.
  * @property {Record<string, unknown>} [exported] - The canonical export, only when read-back was requested.
+ * @property {true} [partial] - Set with `exported` when the export left part of the document out at a redaction bound.
  */
 
 /**
@@ -1095,6 +1101,9 @@ export async function runUpdates(plans, { dryRun = false, readback = false } = {
          const exported = exportDocument(plan.document, {});
          if (exported.ok) {
             row.exported = exported.data;
+            if (exported.partial === true) {
+               row.partial = true;
+            }
          }
       }
       rows.push(row);

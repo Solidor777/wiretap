@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { registerBridgeSettings } from '~/settings/bridgeSettings.js';
 import { isBridgeSettingKey, readBridgeSettings } from '~/bridge/bridgeSettings.js';
 import { defaultBridgeSettings } from '$shared/bridgeSettings.js';
@@ -64,6 +64,34 @@ describe('bridge settings on the client', () => {
          5,
       ]) {
          expect(isBridgeSettingKey(key), String(key)).toBe(false);
+      }
+   });
+});
+
+describe('the unusable Backup folder notice', () => {
+   it('logs once per stored value why the setting is unused and names the default folder', () => {
+      /** @type {unknown} The stored value the fake settings return. */
+      let stored = `C:\\${'a'.repeat(1100)}`;
+      globalThis.game = { settings: { get: () => stored } };
+      /** @type {import('vitest').MockInstance} The console warning spy. */
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+         expect(readBridgeSettings()).toEqual(defaultBridgeSettings());
+         readBridgeSettings();
+         stored = 'C:\\MOCK\tfolder';
+         expect(readBridgeSettings()).toEqual(defaultBridgeSettings());
+         stored = 'C:\\MOCK_backups';
+         readBridgeSettings();
+         stored = '';
+         readBridgeSettings();
+         expect(warn.mock.calls.map(([line]) => line)).toEqual([
+            'Wiretap | The Backup folder setting is over 1024 bytes, so backups use the default folder '
+               + '(.wiretap/backups in the module folder) instead.',
+            'Wiretap | The Backup folder setting holds a control character, so backups use the default folder '
+               + '(.wiretap/backups in the module folder) instead.',
+         ]);
+      } finally {
+         warn.mockRestore();
       }
    });
 });

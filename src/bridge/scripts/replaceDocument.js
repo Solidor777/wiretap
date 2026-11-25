@@ -48,5 +48,12 @@ export async function replaceDocumentHandler(args, ctx) {
    if (!sliced.ok) {
       throw shapeRefusal(sliced.error);
    }
-   return attachReadback(rows, [sliced])[0];
+   return attachReadback(rows, [
+      replaced.partial === true
+         ? {
+            ...sliced,
+            partial: true,
+         }
+         : sliced,
+   ])[0];
 }
