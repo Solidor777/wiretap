@@ -32,8 +32,8 @@ export interface ManagedSession {
 
 /** Injectable settings of the session manager. */
 export interface SessionManagerOptions {
-   /** Most sessions held at once (default: the `MCP_SESSIONS_MAX` budget). */
-   maxSessions?: number;
+   /** Open sessions past which each new session logs one line (default: the `MCP_SESSIONS_MAX` budget). */
+   warnSessions?: number;
    /** Idle milliseconds before a session expires (default `MCP_SESSION_IDLE_MS`). */
    idleMs?: number;
    /** Milliseconds between expiry sweeps (default `MCP_SESSION_SWEEP_MS`). */
@@ -48,12 +48,11 @@ export interface SessionManagerOptions {
    log?: (line: string) => void;
 }
 
-/** The set of live sessions with idle expiry and a size cap. */
+/** The set of live sessions with idle expiry and no cap on their number. */
 export interface SessionManager {
    /**
-    * Hold a session. Returns false, holding nothing and closing nothing, when the cap is reached; a disposed manager
-    * closes the session at once and returns false. No held session is ever ended to make room: the idle sweep frees
-    * slots.
+    * Hold a session and return true, logging one line when the open count is then past the warning count; a
+    * disposed manager closes the session at once and returns false.
     */
    add: (session: ManagedSession) => boolean;
    /** Look a session up without counting it as activity. */
@@ -64,8 +63,6 @@ export interface SessionManager {
    end: (id: string) => Promise<void>;
    /** The number of sessions held. */
    size: () => number;
-   /** Whether the held sessions plus `reserved` pending ones have reached the cap. */
-   isFull: (reserved?: number) => boolean;
    /** Every held session in least-recently-active-first order. */
    list: () => ManagedSession[];
    /** End every session, which stops the sweep; sessions added afterwards are closed at once. */
@@ -123,13 +120,14 @@ const DEFAULT_TIMERS: SessionTimers = {
  * for every request that carries the session id (POST, the GET that opens the event stream, DELETE, and so a client
  * `ping`). An open event stream refreshes nothing by itself and the server writes no keepalive of its own, so a client
  * that holds a stream open but sends nothing expires after the idle limit. One interval runs only while a session
- * exists; no per-session timer exists.
- * @param {SessionManagerOptions} [options] - Cap, idle limit, sweep period, clock, timers, end hook and logger.
+ * exists; no per-session timer exists. The number of sessions is the GM's choice: none is ever refused for the count.
+ * @param {SessionManagerOptions} [options] - Warning count, idle limit, sweep period, clock, timers, end hook and
+ *        logger.
  * @returns {SessionManager} An empty manager.
  */
 export function createSessionManager(options: SessionManagerOptions = {}): SessionManager {
-   // The session cap.
-   const maxSessions: number = options.maxSessions ?? getBudget('MCP_SESSIONS_MAX').value;
+   // The open-session count past which each new session logs one line.
+   const warnSessions: number = options.warnSessions ?? getBudget('MCP_SESSIONS_MAX').value;
    // The idle limit in milliseconds.
    const idleMs: number = options.idleMs ?? MCP_SESSION_IDLE_MS;
    // The sweep period in milliseconds.
@@ -224,13 +222,16 @@ export function createSessionManager(options: SessionManagerOptions = {}): Sessi
             void closeLogged(session);
             return false;
          }
-         if (sessions.size >= maxSessions) {
-            return false;
-         }
          sessions.set(session.id, {
             session,
             lastActivity: now(),
          });
+         if (sessions.size > warnSessions) {
+            log(
+               `Wiretap sidecar | MCP session ${session.id} opened: ${sessions.size} sessions are open, ` +
+                  `more than the ${warnSessions} recommended`,
+            );
+         }
          if (!sweeping) {
             sweep = timers.setInterval(expireIdle, sweepMs);
             sweeping = true;
@@ -256,10 +257,6 @@ export function createSessionManager(options: SessionManagerOptions = {}): Sessi
 
       size(): number {
          return sessions.size;
-      },
-
-      isFull(reserved: number = 0): boolean {
-         return sessions.size + reserved >= maxSessions;
       },
 
       list(): ManagedSession[] {

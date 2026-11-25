@@ -6,7 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { resolvePtyOptions, DEFAULT_BACKEND } from '../../server/ptyOptions.ts';
 import { resolveSpawn } from '../../server/spawnCommand.ts';
 import { createTerminalManager } from '../../server/terminal.ts';
-import { TERMINAL_LAUNCH } from '$shared/protocol.js';
+import {
+   TERMINAL_DATA,
+   TERMINAL_LAUNCH,
+   TERMINAL_SCROLLBACK_DEFAULT,
+   TERMINAL_SCROLLBACK_WARN,
+} from '$shared/protocol.js';
 
 describe('resolvePtyOptions', () => {
    it('returns no backend options off Windows', () => {
@@ -72,6 +77,101 @@ describe('terminal manager dispose', () => {
       // A second dispose is a safe no-op (the term is already cleared).
       manager.dispose();
       expect(child.kill).toHaveBeenCalledTimes(1);
+   });
+});
+
+describe('terminal manager scrollback', () => {
+   /** @type {import('vitest').MockInstance} Silences and records console.warn output. */
+   let warnSpy;
+
+   beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+   });
+
+   afterEach(() => {
+      vi.restoreAllMocks();
+   });
+
+   /**
+    * Launch a PTY with a launch payload, feed it output and return what a reattaching socket is replayed.
+    * @param {object} launchPayload - The `TERMINAL_LAUNCH` payload the first socket sends.
+    * @param {string} output - The PTY output fed to the manager.
+    * @returns {string} The replayed chunk, or '' when nothing is replayed.
+    */
+   function replayAfter(launchPayload, output) {
+      /** @type {((chunk: string) => void) | undefined} The manager's PTY data listener. */
+      let onData;
+      const child = {
+         onData: (fn) => {
+            onData = fn;
+         },
+         onExit: vi.fn(),
+         write: vi.fn(),
+         resize: vi.fn(),
+         kill: vi.fn(),
+      };
+      const manager = createTerminalManager({ emit: vi.fn() }, vi.fn(() => child));
+      const handlers = {};
+      manager.handleConnection({
+         emit: vi.fn(),
+         on: (event, fn) => {
+            handlers[event] = fn;
+         },
+      });
+      handlers[TERMINAL_LAUNCH](launchPayload);
+      onData(output);
+      const reattached = {
+         emit: vi.fn(),
+         on: vi.fn(),
+      };
+      manager.handleConnection(reattached);
+      const replay = reattached.emit.mock.calls.find(([event]) => event === TERMINAL_DATA);
+      manager.dispose();
+      return replay ? replay[1].chunk : '';
+   }
+
+   it('keeps 64 KB (65,536 characters) by default', () => {
+      expect(TERMINAL_SCROLLBACK_DEFAULT).toBe(64 * 1024);
+      const output = `${'a'.repeat(10)}${'b'.repeat(TERMINAL_SCROLLBACK_DEFAULT)}`;
+      const replay = replayAfter({ command: 'x' }, output);
+      expect(replay).toBe('b'.repeat(TERMINAL_SCROLLBACK_DEFAULT));
+   });
+
+   it('keeps the configured number of characters for the reattach replay', () => {
+      expect(replayAfter({
+         command: 'x',
+         scrollback: 10,
+      }, 'abcdefghijklmnopqrst')).toBe('klmnopqrst');
+   });
+
+   it.each([
+      ['zero', 0],
+      ['a negative number', -5],
+      ['a fraction', 1.5],
+      ['not a number', Number.NaN],
+      ['a string', '100'],
+      ['null', null],
+   ])('falls back to the default for %s', (_label, scrollback) => {
+      const output = 'c'.repeat(TERMINAL_SCROLLBACK_DEFAULT + 5);
+      expect(replayAfter({
+         command: 'x',
+         scrollback,
+      }, output)).toHaveLength(TERMINAL_SCROLLBACK_DEFAULT);
+      expect(warnSpy).not.toHaveBeenCalled();
+   });
+
+   it('keeps a size past the warning size and writes one warning line at launch', () => {
+      const scrollback = TERMINAL_SCROLLBACK_WARN + 10;
+      const output = 'd'.repeat(TERMINAL_SCROLLBACK_WARN + 5);
+      expect(replayAfter({
+         command: 'x',
+         scrollback,
+      }, output)).toHaveLength(TERMINAL_SCROLLBACK_WARN + 5);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toBe(
+         `Wiretap sidecar | terminal scrollback of ${scrollback} characters is more than the ` +
+            `${TERMINAL_SCROLLBACK_WARN} recommended; a reattach replays all of it in one message`,
+      );
    });
 });
 

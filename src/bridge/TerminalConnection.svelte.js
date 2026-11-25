@@ -6,10 +6,9 @@ import {
    TERMINAL_DATA,
    TERMINAL_STATE,
    TERMINAL_EXIT,
+   TERMINAL_SCROLLBACK_DEFAULT,
+   scrollbackChars,
 } from '$shared/protocol.js';
-
-// Maximum bytes of received output retained client-side for replay to a (re)attached terminal sink.
-const OUTPUT_LIMIT = 64 * 1024;
 
 /**
  * @typedef {'disconnected' | 'connecting' | 'connected'} SocketStatus
@@ -45,6 +44,13 @@ export class TerminalConnection {
     * @type {string}
     */
    #output = '';
+
+   /**
+    * Characters (UTF-16 code units) of output kept in `#output`, and sent with each launch as the sidecar's replay
+    * size; set from the GM's terminal scrollback setting.
+    * @type {number}
+    */
+   #scrollback = TERMINAL_SCROLLBACK_DEFAULT;
 
    /**
     * The most recent terminal size reported by a view, used when launching a new PTY.
@@ -117,9 +123,7 @@ export class TerminalConnection {
       });
       socket.on(TERMINAL_DATA, ({ chunk }) => {
          this.#output += chunk;
-         if (this.#output.length > OUTPUT_LIMIT) {
-            this.#output = this.#output.slice(this.#output.length - OUTPUT_LIMIT);
-         }
+         this.#trimOutput();
          for (const sink of this.#sinks) {
             sink(chunk);
          }
@@ -132,6 +136,27 @@ export class TerminalConnection {
             this.launch(command);
          }
       });
+   }
+
+   /**
+    * Set how many characters of output are kept for replay, here and (from the next launch) on the sidecar. A value
+    * that is not a positive integer gives `TERMINAL_SCROLLBACK_DEFAULT`. The kept output is trimmed at once.
+    * @param {unknown} value - The terminal scrollback setting.
+    * @returns {void}
+    */
+   setScrollback(value) {
+      this.#scrollback = scrollbackChars(value);
+      this.#trimOutput();
+   }
+
+   /**
+    * Drop the oldest kept output past the scrollback size.
+    * @returns {void}
+    */
+   #trimOutput() {
+      if (this.#output.length > this.#scrollback) {
+         this.#output = this.#output.slice(this.#output.length - this.#scrollback);
+      }
    }
 
    /**
@@ -167,12 +192,17 @@ export class TerminalConnection {
    }
 
    /**
-    * Request the sidecar spawn a PTY at the most recently reported size.
+    * Request the sidecar spawn a PTY at the most recently reported size, keeping the scrollback size for its replay.
     * @param {string} command - The command line to run.
     * @returns {void}
     */
    launch(command) {
-      this.#socket?.emit(TERMINAL_LAUNCH, { command, cols: this.#cols, rows: this.#rows });
+      this.#socket?.emit(TERMINAL_LAUNCH, {
+         command,
+         cols: this.#cols,
+         rows: this.#rows,
+         scrollback: this.#scrollback,
+      });
    }
 
    /**

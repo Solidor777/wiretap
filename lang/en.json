@@ -37,6 +37,10 @@
             "Name": "Terminal Font Size",
             "Hint": "Font size (px) of the embedded terminal."
          },
+         "TerminalScrollback": {
+            "Name": "Terminal scrollback (characters)",
+            "Hint": "How many characters of recent terminal output are kept and replayed when a Foundry tab reconnects to the running terminal. Default 65536 characters. Zero, negative, fractional or empty uses the default. Larger values are allowed; the sidecar logs a warning past 1048576 characters. The sidecar applies a change at the next launch."
+         },
          "BackupFolder": {
             "Name": "Backup folder",
             "Hint": "Absolute path of the folder the sidecar writes document backups to. Empty uses .wiretap/backups in the module folder."

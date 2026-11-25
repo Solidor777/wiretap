@@ -27,11 +27,36 @@ export const TERMINAL_STATE = 'terminal:state';
 // Server → client: the PTY process exited.
 export const TERMINAL_EXIT = 'terminal:exit';
 
+// Terminal scrollback kept for replay when no usable size is set: 64 KB, counted in characters (UTF-16 code units, the
+// unit of a JavaScript string's length), so 65,536 characters. Both the sidecar's reattach replay and the client's
+// output buffer keep this many.
+export const TERMINAL_SCROLLBACK_DEFAULT = 64 * 1024;
+
+// Scrollback size in characters past which the sidecar writes one warning line at launch. A reattach sends the whole
+// replay as one Socket.IO message and the terminal parses it at once; 1,048,576 characters (16 times the default) is
+// up to 2 MB of string memory in each buffer and at least 1 MB on the wire. Inferred: past it a reattach is visibly slow.
+export const TERMINAL_SCROLLBACK_WARN = 1024 * 1024;
+
+/**
+ * Turn a scrollback setting into the number of characters a buffer keeps: a positive integer is used as given, any
+ * other value (zero, negative, a fraction, not a number, absent) gives `TERMINAL_SCROLLBACK_DEFAULT`.
+ * @param {unknown} value - The setting value or the launch payload's `scrollback`.
+ * @returns {number} The number of characters to keep.
+ */
+export function scrollbackChars(value) {
+   if (Number.isInteger(value) && value > 0) {
+      return value;
+   }
+   return TERMINAL_SCROLLBACK_DEFAULT;
+}
+
 /**
  * @typedef {object} TerminalLaunch
  * @property {string} [command] - Command line to run in the PTY (default 'claude').
  * @property {number} cols - Initial column count.
  * @property {number} rows - Initial row count.
+ * @property {number} [scrollback] - Characters of output the sidecar keeps for the reattach replay; a value that is
+ * not a positive integer gives `TERMINAL_SCROLLBACK_DEFAULT`.
  */
 
 /**
@@ -135,9 +160,6 @@ export const OP_FAILED = 'OP_FAILED';
 // Error code: the chosen endpoint disconnected, or could not be written to, before it acked the invocation.
 export const ENDPOINT_GONE = 'ENDPOINT_GONE';
 
-// Error code: an identify was refused because the registry already holds the maximum number of endpoints.
-export const ENDPOINT_LIMIT = 'ENDPOINT_LIMIT';
-
 // Error code: the endpoint a registry tool call reached no longer registers that tool.
 export const TOOL_GONE = 'TOOL_GONE';
 
@@ -225,7 +247,7 @@ export const GATE_DENIED = 'GATE_DENIED';
 /**
  * @typedef {object} BridgeIdentifyAck
  * @property {boolean} ok - True when the endpoint was registered.
- * @property {{ code: string, message: string }} [error] - The refusal (PROTOCOL_MISMATCH, NOT_GM, ENDPOINT_LIMIT).
+ * @property {{ code: string, message: string }} [error] - The refusal (PROTOCOL_MISMATCH, NOT_GM).
  */
 
 /**

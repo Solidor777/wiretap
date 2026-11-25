@@ -3,8 +3,8 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
    BridgeError,
    EndpointGoneError,
+   ENDPOINTS_WARN,
    EndpointTimeoutError,
-   MAX_ENDPOINTS,
    ROUTE_ORDER,
    createEndpointRegistry,
    createRouter,
@@ -21,7 +21,6 @@ import { BACKUP_SIDECAR_CODES, TRASH_FAILED } from '../../shared/backup.js';
 import {
    ENDPOINT_GONE,
    GATE_DENIED,
-   ENDPOINT_LIMIT,
    ENDPOINT_TIMEOUT,
    ENDPOINT_UNAVAILABLE,
    NOT_GM,
@@ -327,17 +326,6 @@ describe('createEndpointRegistry change notifications', () => {
       expect(listener).toHaveBeenCalledTimes(1);
    });
 
-   it('does not notify for a registration the limit refused', () => {
-      const { registry, listener } = setup();
-      const identity = validateIdentify(identify()).identity;
-      for (let index = 0; index < MAX_ENDPOINTS; index += 1) {
-         registry.register(`s${index}`, identity);
-      }
-      listener.mockClear();
-      expect(registry.register('extra', identity)).toBe(false);
-      expect(listener).not.toHaveBeenCalled();
-   });
-
    it('stops notifying a listener after it unsubscribes and serves several listeners', () => {
       const registry = createEndpointRegistry();
       const first = vi.fn();
@@ -352,29 +340,48 @@ describe('createEndpointRegistry change notifications', () => {
    });
 });
 
-describe('createEndpointRegistry limit', () => {
-   it('exports a limit of 64 endpoints', () => {
-      expect(MAX_ENDPOINTS).toBe(64);
+describe('createEndpointRegistry warning count', () => {
+   it('warns past 64 endpoints', () => {
+      expect(ENDPOINTS_WARN).toBe(64);
    });
 
-   it('refuses a new socket beyond the limit and reports it', () => {
-      const registry = createEndpointRegistry();
+   it('registers a 65th endpoint, notifies for it and logs one line for it', () => {
+      /** @type {string[]} Log lines. */
+      const logs = [];
+      const registry = createEndpointRegistry(Date.now, (line) => logs.push(line));
+      const listener = vi.fn();
+      registry.subscribe(listener);
       const identity = validateIdentify(identify()).identity;
-      for (let i = 0; i < MAX_ENDPOINTS; i++) {
-         expect(registry.register(`s${i}`, identity)).toBe(true);
-      }
-      expect(registry.register('extra', identity)).toBe(false);
-      expect(registry.list()).toHaveLength(MAX_ENDPOINTS);
-   });
-
-   it('still lets an already registered socket re-identify at the limit', () => {
-      const registry = createEndpointRegistry();
-      const identity = validateIdentify(identify()).identity;
-      for (let i = 0; i < MAX_ENDPOINTS; i++) {
+      for (let i = 0; i < ENDPOINTS_WARN; i++) {
          registry.register(`s${i}`, identity);
       }
-      expect(registry.register('s3', { ...identity, kind: 'agent' })).toBe(true);
+      expect(logs).toEqual([]);
+      listener.mockClear();
+      registry.register('extra', identity);
+      expect(registry.list()).toHaveLength(65);
+      expect(registry.get('extra')).toBeDefined();
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(logs).toEqual([
+         'Wiretap sidecar | Foundry endpoint extra registered: 65 endpoints are registered, more than the 64 ' +
+            'recommended',
+      ]);
+   });
+
+   it('logs nothing when a registered socket identifies again past the warning count', () => {
+      /** @type {string[]} Log lines. */
+      const logs = [];
+      const registry = createEndpointRegistry(Date.now, (line) => logs.push(line));
+      const identity = validateIdentify(identify()).identity;
+      for (let i = 0; i < ENDPOINTS_WARN + 1; i++) {
+         registry.register(`s${i}`, identity);
+      }
+      expect(logs).toHaveLength(1);
+      registry.register('s3', {
+         ...identity,
+         kind: 'agent',
+      });
       expect(registry.list().find((e) => e.socketId === 's3').kind).toBe('agent');
+      expect(logs).toHaveLength(1);
    });
 });
 
@@ -533,7 +540,6 @@ describe('normalizeAckError', () => {
       NO_ENDPOINT,
       ENDPOINT_TIMEOUT,
       ENDPOINT_GONE,
-      ENDPOINT_LIMIT,
       ENDPOINT_UNAVAILABLE,
       PROTOCOL_MISMATCH,
       NOT_GM,

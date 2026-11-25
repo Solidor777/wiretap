@@ -1,13 +1,12 @@
 // @vitest-environment node
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { createFoundryBridge } from '../../server/foundryBridge.ts';
-import { MAX_ENDPOINTS } from '../../server/endpoints.ts';
+import { ENDPOINTS_WARN } from '../../server/endpoints.ts';
 import {
    BRIDGE_IDENTIFY,
    BRIDGE_INVOKE,
    BRIDGE_PING,
    ENDPOINT_GONE,
-   ENDPOINT_LIMIT,
    ENDPOINT_TIMEOUT,
    ENDPOINT_UNAVAILABLE,
    NOT_GM,
@@ -147,19 +146,24 @@ describe('createFoundryBridge identify', () => {
       await expect(bridge.invoke(OP_CALL_TOOL, {})).rejects.toMatchObject({ code: NO_ENDPOINT });
    });
 
-   it('refuses an identify beyond the endpoint limit with ENDPOINT_LIMIT', async () => {
+   it('registers a 65th endpoint, acks it ok and logs one line for it', async () => {
       const { bridge, lines } = makeBridge();
-      for (let i = 0; i < MAX_ENDPOINTS; i++) {
+      for (let i = 0; i < ENDPOINTS_WARN; i++) {
          const { socket, fire } = makeSocket(`s${i}`);
          bridge.handleConnection(socket);
          fire(BRIDGE_IDENTIFY, identify({ userId: `u${i}` }), () => undefined);
       }
+      expect(lines.filter((line) => line.includes('recommended'))).toEqual([]);
       const extra = makeSocket('extra');
       bridge.handleConnection(extra.socket);
       const acks = [];
       extra.fire(BRIDGE_IDENTIFY, identify(), (ack) => acks.push(ack));
-      expect(acks[0]).toMatchObject({ ok: false, error: { code: ENDPOINT_LIMIT } });
-      expect(lines.some((line) => line.includes('refused identify') && line.includes(ENDPOINT_LIMIT))).toBe(true);
+      expect(acks).toEqual([{ ok: true }]);
+      expect(lines.filter((line) => line.includes('recommended'))).toEqual([
+         'Wiretap sidecar | Foundry endpoint extra registered: 65 endpoints are registered, more than the 64 ' +
+            'recommended',
+      ]);
+      expect(lines.some((line) => line.includes('refused identify'))).toBe(false);
    });
 
    it('refuses an over-long userId with PROTOCOL_MISMATCH', () => {

@@ -75,6 +75,14 @@ describe('onceInit settings registration', () => {
       expect(config?.default).toBe('');
    });
 
+   it('registers the terminal scrollback setting at init', () => {
+      onceInit();
+      const config = registered.get('terminalScrollback');
+      expect(config?.scope).toBe('world');
+      expect(config?.restricted).toBe(true);
+      expect(config?.type).toBe(Number);
+   });
+
    it('re-identifies the bridge when endpointKind changes', () => {
       onceInit();
       registered.get('endpointKind').onChange('agent');

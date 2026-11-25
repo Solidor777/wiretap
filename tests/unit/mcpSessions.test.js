@@ -41,7 +41,7 @@ function makeManager(options = {}) {
    const logs = [];
    return {
       manager: createSessionManager({
-         maxSessions: 3,
+         warnSessions: 3,
          idleMs: 1000,
          sweepMs: 100,
          onEnd: (id) => ended.push(id),
@@ -78,7 +78,7 @@ describe('session manager: membership', () => {
    });
 
    it('keeps ending the other sessions when a close rejects or throws, and logs it', async () => {
-      const { manager, ended, logs } = makeManager({ maxSessions: 5 });
+      const { manager, ended, logs } = makeManager({ warnSessions: 5 });
       const rejecting = {
          id: 'r',
          close: vi.fn(async () => {
@@ -184,74 +184,48 @@ describe('session manager: log lines', () => {
    });
 });
 
-describe('session manager: session cap', () => {
-   it('refuses a session beyond the cap and ends no held session', async () => {
-      const { manager, ended } = makeManager();
-      const a = fakeSession('a');
-      expect(manager.add(a)).toBe(true);
-      expect(manager.add(fakeSession('b'))).toBe(true);
-      expect(manager.add(fakeSession('c'))).toBe(true);
-      manager.touch('a');
-      const refused = fakeSession('d');
-      expect(manager.add(refused)).toBe(false);
-      expect(ended).toEqual([]);
-      expect(manager.size()).toBe(3);
-      expect(manager.get('a')).toBe(a);
-      expect(manager.get('d')).toBeUndefined();
-      // A refused session is left to the caller: the manager neither holds nor closes it.
-      expect(refused.close).not.toHaveBeenCalled();
-      manager.dispose();
-   });
-
-   it('holds the cap through a long run of additions without ending anything', () => {
-      const { manager, ended } = makeManager({ maxSessions: 4 });
-      let accepted = 0;
-      for (let index = 0; index < 20; index += 1) {
-         if (manager.add(fakeSession(`s${index}`))) {
-            accepted += 1;
-         }
-         expect(manager.size()).toBeLessThanOrEqual(4);
+describe('session manager: sessions past the warning count', () => {
+   it('holds every session past the warning count and logs one line for each one over it', () => {
+      const { manager, ended, logs } = makeManager({ warnSessions: 3 });
+      for (let index = 0; index < 5; index += 1) {
+         expect(manager.add(fakeSession(`s${index}`))).toBe(true);
       }
-      expect(accepted).toBe(4);
+      expect(manager.size()).toBe(5);
       expect(ended).toEqual([]);
+      // The fourth and fifth sessions are over the warning count of 3; the first three log nothing.
+      expect(logs).toEqual([
+         'Wiretap sidecar | MCP session s3 opened: 4 sessions are open, more than the 3 recommended',
+         'Wiretap sidecar | MCP session s4 opened: 5 sessions are open, more than the 3 recommended',
+      ]);
       manager.dispose();
    });
 
-   it('uses the session cap budget by default', () => {
-      const ended = [];
-      const manager = createSessionManager({ onEnd: (id) => ended.push(id) });
+   it('opens a 33rd session with the default budget and logs the line once', () => {
+      const logs = [];
+      const manager = createSessionManager({ log: (line) => logs.push(line) });
       for (let index = 0; index < 33; index += 1) {
-         manager.add(fakeSession(`s${index}`));
+         expect(manager.add(fakeSession(`s${index}`))).toBe(true);
       }
-      expect(manager.size()).toBe(32);
-      expect(manager.get('s32')).toBeUndefined();
-      expect(ended).toEqual([]);
+      expect(manager.size()).toBe(33);
+      expect(manager.get('s32')).toBeDefined();
+      expect(logs).toEqual([
+         'Wiretap sidecar | MCP session s32 opened: 33 sessions are open, more than the 32 recommended',
+      ]);
       manager.dispose();
    });
 
-   it('reports a full manager counting reserved slots', () => {
-      const { manager } = makeManager({ maxSessions: 3 });
+   it('logs nothing once the open count is back at the warning count', async () => {
+      const { manager, logs } = makeManager({ warnSessions: 1 });
       manager.add(fakeSession('a'));
-      expect(manager.isFull()).toBe(false);
-      expect(manager.isFull(1)).toBe(false);
-      expect(manager.isFull(2)).toBe(true);
       manager.add(fakeSession('b'));
+      expect(logs).toHaveLength(1);
+      await manager.end('a');
       manager.add(fakeSession('c'));
-      expect(manager.isFull()).toBe(true);
-      manager.dispose();
-   });
-
-   it('frees a slot when an idle session expires', async () => {
-      const { manager } = makeManager({
-         maxSessions: 1,
-         idleMs: 1000,
-         sweepMs: 100,
-      });
-      manager.add(fakeSession('a'));
-      expect(manager.add(fakeSession('b'))).toBe(false);
-      await vi.advanceTimersByTimeAsync(1200);
-      expect(manager.size()).toBe(0);
-      expect(manager.add(fakeSession('b'))).toBe(true);
+      expect(logs).toHaveLength(2);
+      await manager.end('b');
+      await manager.end('c');
+      manager.add(fakeSession('d'));
+      expect(logs).toHaveLength(2);
       manager.dispose();
    });
 });
@@ -267,7 +241,7 @@ describe('session manager: timers', () => {
    });
 
    it('starts a single timer however many sessions are added', () => {
-      const { manager } = makeManager({ maxSessions: 10 });
+      const { manager } = makeManager({ warnSessions: 10 });
       for (let index = 0; index < 5; index += 1) {
          manager.add(fakeSession(`s${index}`));
       }
