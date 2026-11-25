@@ -208,7 +208,7 @@ capture-time default, not enforced by the result enforcer.
 
 Wiretap skills reference the MCP tools to point agents to them.
 
-- **Developer skills** (`.claude/skills/wiretap-*`) and **user-facing skills shipped for MCP users** name the exact
+- **Developer skills** (`wiretap:wiretap-*`, plugin `wiretap@personal-skills`) and **user-facing skills shipped for MCP users** name the exact
   tools and the recipe ("read one field: `mcp__wiretap__get_document` with `paths`"). Tool descriptions then stay one
   line; examples and caveats live in skill bodies.
 - **Interaction with deferral.** Claude Code lists skill names and descriptions at session start and loads a skill's
@@ -431,7 +431,7 @@ A mismatched `protocolVersion` is refused, not translated (no-backwards-compatib
 - `bridge:identify` gains: `kind`, `dom` (can render and measure), `protocolVersion`, `token?` (external mode only),
   `gateState` (from M2).
 - `bridge:registry` carries `{apiVersion, scripts: [ScriptDefinition]}`.
-  Wire shape and routing: the `wiretap-mcp-bridge`, `wiretap-mcp-sessions` and `wiretap-scripts` skills.
+  Wire shape and routing: the `wiretap:wiretap-mcp-bridge`, `wiretap:wiretap-mcp-sessions` and `wiretap:wiretap-scripts` skills.
 - `bridge:credentials` (GM human tab → sidecar only) carries the agent list. It is never broadcast and never sent
   sidecar → client.
 - `bridge:invoke` gains `actAs?`, `dryRun?`, `requestId`, and `code` + `sha256` for agent-saved scripts (if D21).
@@ -484,7 +484,7 @@ guarantee is reduced to "no core skill can change a gate".
   - `bridge:identify` requires the token.
   - CORS origin becomes configurable (today hard-coded `http://localhost:30000`, READ `server/server.ts:38`).
   - Guidance: run behind a TLS reverse proxy; never expose plain HTTP.
-  - This deliberately reopens the loopback-only rule (`wiretap-codebase-core`) for an explicit GM opt-in. The skill
+  - This deliberately reopens the loopback-only rule (`wiretap:wiretap-codebase-core`) for an explicit GM opt-in. The skill
     text changes accordingly.
 - **Credentials:**
   - Client-scope settings live in the GM browser's `localStorage` (READ `client/helpers/client-settings.mjs:43`).
@@ -537,8 +537,8 @@ Every milestone follows `.claude/claude.md`:
   document calls (D12); test documents are cleaned up with the §4.8 pattern.
 - e2e in-page waits ≤ 1000 ms.
 - No dynamic imports in shipping builds.
-- Implementation via `wiretap-coder` (sidecar, shared, tests) or `foundry-module-dev` (client `.js`/`.svelte`), then
-  `wiretap-spec-reviewer` → `wiretap-code-reviewer`. `buddy-checking` for M9, M10, M16 (security or
+- Implementation via `wiretap:wiretap-coder` (sidecar, shared, tests) or `wiretap:foundry-module-dev` (client `.js`/`.svelte`), then
+  `wiretap:wiretap-spec-reviewer` → `wiretap:wiretap-code-reviewer`. `buddy-checking` for M9, M10, M16 (security or
   protocol).
 - **Context-budget criterion (required, D17):** each milestone states one; from M13 on, every tool and result it adds
   is covered by the M13 budget test, and a budget breach fails the milestone. A budget is raised only by the user.
@@ -753,7 +753,7 @@ plugin scripts. **Risks:** §2.5 residual risks of the chosen option.
 
 **Goal:** D3. **Depends on:** M1; uses M10's token when external. **In:**
 
-- Client-scope setting `agentUsers` with a settings menu (ApplicationV2 form, `foundry-module-dev`) on GM clients:
+- Client-scope setting `agentUsers` with a settings menu (ApplicationV2 form, `wiretap:foundry-module-dev`) on GM clients:
   a user picker limited to non-human-assigned users plus a password field. The form shows each user's role and warns
   when it is not ASSISTANT (D4: a GAMEMASTER agent competes with humans for `activeGM`; a PLAYER or TRUSTED agent
   cannot run GM ops) and when the user has no password (P1: anonymous `/join` lists every user name).
@@ -838,7 +838,7 @@ headless layout differs from a human's window size → results report the viewpo
 - Configurable CORS origin.
 - README TLS/reverse-proxy section.
 - Startup warning when external.
-- Update `wiretap-codebase-core` "loopback only" text to "loopback by default; external opt-in requires tokens".
+- Update `wiretap:wiretap-codebase-core` "loopback only" text to "loopback by default; external opt-in requires tokens".
 
 **Tests:** integration (no token → 401 / identify refused; constant-time compare; loopback mode unchanged);
 `serverModes` style bind assertions. **Acceptance:** external mode cannot start without a token (test). **Context
@@ -896,7 +896,7 @@ Evaluate at the end of the named milestone:
 - `wiretap-agents` (`server/agentRunner.ts`, `server/agentCredentials.ts`): at M9, a new subsystem.
 - Matching `-coder` / `-code-reviewer` agent variants only if those domains need specialised context.
 
-Each creation also updates the subsystem table in `wiretap-codebase-core` and the skill list in `.claude/claude.md`.
+Each creation also updates the subsystem table in `wiretap:wiretap-codebase-core` and the skill list in `.claude/claude.md`.
 
 ## 7. Risks and open questions
 

@@ -1,7 +1,8 @@
 # Wiretap documentation index
 
 Living documents are updated as the work changes; historical records are kept as written and are not edited to track
-the current code (the `wiretap-*` skills under `.claude/skills/` describe the current code).
+the current code (the `wiretap:wiretap-*` skills of the user-scope plugin `wiretap@personal-skills` describe the current
+code).
 
 ## Living documents
 
