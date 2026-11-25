@@ -311,7 +311,10 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
             pending = true;
             burstStart = current;
          }
-         timer = timers.setTimeout(fire, Math.min(options.quietMs, burstStart + options.maxWaitMs - current));
+         // Milliseconds until the run: the quiet period, cut to what is left of the maximum wait, and zero once a
+         // late trigger arrives after the maximum wait has already passed.
+         const delay: number = Math.max(0, Math.min(options.quietMs, burstStart + options.maxWaitMs - current));
+         timer = timers.setTimeout(fire, delay);
       },
 
       cancel(): void {

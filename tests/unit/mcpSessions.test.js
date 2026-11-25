@@ -365,4 +365,28 @@ describe('debouncer', () => {
       await vi.advanceTimersByTimeAsync(200);
       expect(run).toHaveBeenCalledTimes(2);
    });
+
+   it('schedules a trigger made after the maximum wait has passed with a delay of zero', () => {
+      // The clock reading the debouncer sees on its next trigger.
+      let clock = 0;
+      // The injected setTimeout, which records each delay and never fires.
+      const setTimeoutMock = vi.fn(() => 'handle');
+      const debouncer = createDebouncer({
+         quietMs: 200,
+         maxWaitMs: 1000,
+         run: vi.fn(),
+         now: () => clock,
+         timers: {
+            setTimeout: setTimeoutMock,
+            clearTimeout: vi.fn(),
+            setInterval: vi.fn(),
+            clearInterval: vi.fn(),
+         },
+      });
+      debouncer.trigger();
+      // The pending timer has not fired, so this trigger continues the burst that started at 0.
+      clock = 1100;
+      debouncer.trigger();
+      expect(setTimeoutMock).toHaveBeenLastCalledWith(expect.any(Function), 0);
+   });
 });
