@@ -352,9 +352,10 @@ function embeddedNames(doc, named) {
 }
 
 /**
- * Build the compact tuple of one embedded document.
+ * Build the compact tuple of one embedded document. A shortened name or type keeps only its "…" marker; a cut id
+ * cannot be used, so it marks the view cut.
  * @param {unknown} element - The embedded document.
- * @param {{ cut: boolean }} trimmed - Set to cut when a value is cut to its bound.
+ * @param {{ cut: boolean }} trimmed - Set to cut when the id is cut to its bound.
  * @returns {[string, string, string]} Its id, name and type, each bounded.
  */
 function tupleOf(element, trimmed) {
@@ -364,22 +365,31 @@ function tupleOf(element, trimmed) {
     * Read one string field, bounded.
     * @param {string} key - The field name.
     * @param {number} max - The byte bound.
-    * @returns {string} The bounded text, or an empty string when the field is not a string.
+    * @returns {{ value: string, cut: boolean }} The bounded text, or an empty string when the field is not a string,
+    * and whether it was cut.
     */
    const text = (key, max) => {
       const value = own(doc, key);
       if (typeof value !== 'string') {
-         return '';
+         return {
+            value: '',
+            cut: false,
+         };
       }
       /** @type {string} The bounded text. */
       const bounded = truncateUtf8(value, max);
-      trimmed.cut ||= bounded !== value;
-      return bounded;
+      return {
+         value: bounded,
+         cut: bounded !== value,
+      };
    };
+   /** @type {{ value: string, cut: boolean }} The bounded id. */
+   const id = text('_id', TUPLE_ID_MAX_BYTES);
+   trimmed.cut ||= id.cut;
    return [
-      text('_id', TUPLE_ID_MAX_BYTES),
-      text('name', TUPLE_NAME_MAX_BYTES),
-      text('type', TUPLE_TYPE_MAX_BYTES),
+      id.value,
+      text('name', TUPLE_NAME_MAX_BYTES).value,
+      text('type', TUPLE_TYPE_MAX_BYTES).value,
    ];
 }
 
@@ -388,9 +398,11 @@ function tupleOf(element, trimmed) {
  * string, the `system` leaves named by `keyPaths` or whose key matches a pattern (`fields`, at most 24),
  * and the embedded documents as `[id, name, type]` tuples (`embedded`: at most 8 collections, their names shortened to
  * 32 bytes, at most 40 tuples in all, with the true `total` of each collection). Every string is bounded. `cut: true`
- * says the view leaves something out, so the agent can ask with `fields`, `paths` or `mode: 'full'`: a value cut to
- * its compact length (a cut `uuid` cannot be used), a matching leaf past the leaf count or path bound, a non-empty
- * object the leaf walk did not enter at its depth or object bound, a collection left out, or an entry dropped to fit.
+ * says the view loses data, so the agent can ask with `fields`, `paths` or `mode: 'full'`: a `uuid`, `version`,
+ * tuple id or leaf value cut to its compact length (a cut identifier cannot be used), a matching leaf past the leaf
+ * count or path bound, a non-empty object the leaf walk did not enter at its depth or object bound, a collection left
+ * out, or an entry dropped to fit. A name, a type or a collection name shortened to its compact length keeps only its
+ * "…" marker and does not set `cut`.
  * While the serialized view exceeds `COMPACT_VIEW_MAX_BYTES` it loses entries: the larger of the leaves and the tuples
  * loses its last entry, then any remaining leaf, then a collection with no tuples left, then the header fields, so the
  * size bound holds for any data. `partial: true` is copied from the option. Reads own properties only and never
@@ -413,7 +425,7 @@ function compact(doc, options = {}) {
       const requested = options.keyPattern ?? DEFAULT_KEY_PATTERN;
       /** @type {RegExp} The key pattern without stateful flags, so repeated tests do not depend on `lastIndex`. */
       const pattern = new RegExp(requested.source, requested.flags.replace(/[gy]/g, ''));
-      /** @type {{ cut: boolean }} Set when a header, leaf or tuple value is cut to its compact length. */
+      /** @type {{ cut: boolean }} Set when the uuid, the version or a tuple id is cut to its compact length. */
       const trimmed = { cut: false };
       /** @type {Record<string, unknown>} The view header. */
       const header = {};
@@ -425,7 +437,9 @@ function compact(doc, options = {}) {
          const value = own(doc, key);
          if (typeof value === 'string') {
             header[key] = truncateUtf8(value, max);
-            trimmed.cut ||= header[key] !== value;
+            if (key === 'uuid') {
+               trimmed.cut ||= header[key] !== value;
+            }
          }
       }
       if (typeof options.version === 'string' && options.version !== '') {
@@ -452,7 +466,6 @@ function compact(doc, options = {}) {
       for (const full of embeddedNames(doc, options.embedded)) {
          /** @type {string} The collection name as shown. */
          const name = truncateUtf8(full, COLLECTION_NAME_MAX_BYTES);
-         trimmed.cut ||= name !== full;
          if (collections.length >= COLLECTIONS_MAX || listedNames.has(name)) {
             skipped = true;
             continue;
@@ -503,8 +516,8 @@ function compact(doc, options = {}) {
       };
 
       /**
-       * Whether something was left out of the view or cut: an entry dropped to fit the budget, a collection left out,
-       * a leaf the walk left out, or a value cut to its compact length.
+       * Whether the view loses data: an entry dropped to fit the budget, a collection left out, a leaf the walk left
+       * out or cut, or the uuid, the version or a tuple id cut to its compact length.
        * @type {boolean}
        */
       let cut = skipped || leafOutcome.cut || trimmed.cut;

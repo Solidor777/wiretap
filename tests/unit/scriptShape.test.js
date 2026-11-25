@@ -762,30 +762,74 @@ describe('compact view: notices for values and leaves left out', () => {
       expect(shape.compact(small(full)).cut).toBeUndefined();
    });
 
-   it('marks the view cut when a header value is cut to its compact length', () => {
+   it('marks the view cut when the uuid or the version is cut to its compact length', () => {
       /** @type {string} A pack document uuid longer than the 96-byte bound. */
       const uuid = `Compendium.world.${'p'.repeat(60)}.Actor.${'MOCKACTOR0000001'.repeat(2)}`;
       /** @type {Record<string, unknown>} The view of the long-uuid export. */
       const view = shape.compact(small({}, { uuid }));
       expect(view.uuid.endsWith('…')).toBe(true);
       expect(view.cut).toBe(true);
-      expect(shape.compact(small({}, { name: `MOCK_${'n'.repeat(80)}` })).cut).toBe(true);
-      expect(shape.compact(small({}, { type: `MOCK_${'t'.repeat(40)}` })).cut).toBe(true);
       expect(shape.compact(small({}), { version: 'v'.repeat(40) }).cut).toBe(true);
    });
 
-   it('marks the view cut when a leaf value or an embedded tuple value is cut', () => {
-      expect(shape.compact(small({ hp: { value: 'v'.repeat(80) } })).cut).toBe(true);
-      /** @type {Record<string, unknown>} An export with one embedded item whose name is past the tuple bound. */
+   it('leaves the view unmarked when only a name, a type or a collection name is shortened', () => {
+      /** @type {Record<string, unknown>} The view of an export whose name and type are past their bounds. */
+      const header = shape.compact(small({}, {
+         name: `MOCK_${'n'.repeat(80)}`,
+         type: `MOCK_${'t'.repeat(40)}`,
+      }));
+      expect(header.name.endsWith('…')).toBe(true);
+      expect(header.type.endsWith('…')).toBe(true);
+      expect(header.cut).toBeUndefined();
+      /** @type {string} An embedded collection name past the 32-byte bound. */
+      const collection = `MOCK_${'c'.repeat(40)}`;
+      /** @type {Record<string, unknown>} An export with one embedded item whose name and type are past the bounds. */
       const named = {
          ...small({}),
-         items: [{
+         [collection]: [{
             _id: 'MOCKITEM00000001',
             name: `MOCK_${'i'.repeat(30)}`,
+            type: `MOCK_${'g'.repeat(20)}`,
+         }],
+      };
+      /** @type {Record<string, unknown>} The view of the long-named item. */
+      const view = shape.compact(named);
+      /** @type {[string, string, string]} The item's tuple. */
+      const [row] = Object.values(view.embedded)[0].rows;
+      expect(Object.keys(view.embedded)[0].endsWith('…')).toBe(true);
+      expect(row[1].endsWith('…')).toBe(true);
+      expect(row[2].endsWith('…')).toBe(true);
+      expect(view.cut).toBeUndefined();
+   });
+
+   it('marks the view cut when a leaf value or an embedded tuple id is cut', () => {
+      expect(shape.compact(small({ hp: { value: 'v'.repeat(80) } })).cut).toBe(true);
+      /** @type {Record<string, unknown>} An export with one embedded item whose id is past the tuple bound. */
+      const longId = {
+         ...small({}),
+         items: [{
+            _id: 'MOCKITEM00000001'.repeat(2),
+            name: 'MOCK_Item',
             type: 'gear',
          }],
       };
-      expect(shape.compact(named).cut).toBe(true);
+      expect(shape.compact(longId).cut).toBe(true);
+   });
+
+   it('marks the view cut when more embedded collections exist than it lists', () => {
+      /** @type {Record<string, unknown>} An export with one more non-empty collection than the view lists. */
+      const many = small({});
+      for (let index = 0; index < 9; index += 1) {
+         many[`c${index}`] = [{
+            _id: `MOCKITEM0000000${index}`,
+            name: 'MOCK_Item',
+            type: 'gear',
+         }];
+      }
+      /** @type {Record<string, unknown>} The view of the many-collection export. */
+      const view = shape.compact(many);
+      expect(Object.keys(view.embedded)).toHaveLength(8);
+      expect(view.cut).toBe(true);
    });
 
    it('marks the view cut when more matching leaves exist than it holds', () => {
