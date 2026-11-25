@@ -11,7 +11,6 @@
 
 ## AI bridge roadmap (terminal-relay design)
 
-- [ ] #3 terminal UX polish (theme dropdown ✓, popout-takeover + 4:3 default ✓, sidecar launcher + offline panel ✓, toolbar [clear/copy/font/restart] + persisted font size ✓; remaining: scrollback tuning)
 - [ ] (optional/future) structured chat UI — only viable via headless/programmatic mode
       (Agent SDK / `claude -p`), which draws on the $200/mo Agent SDK credit + Commercial Terms
 - [x] dedicated Foundry MCP server for the user's `claude` to call — vertical slice: one create tool (now `create_documents`)
@@ -54,7 +53,7 @@
 
 - [ ] Result-handle eviction is global across owners: handles are owned per MCP session, but the LRU count and byte
       limits are shared, so one session's puts can evict another session's handles (the evicted owner then gets
-      `HANDLE_NOT_FOUND`). Decide on per-owner quotas or a fairness rule
+      `HANDLE_NOT_FOUND`, whose text names the bounds, and the sidecar logs each eviction). Decide on per-owner quotas or a fairness rule
 - [ ] A `read_handle` `paths` read parses the whole stored text again on every call (nothing cached). Measured: ~185 ms
       worst case for 7.7 MB of small objects, of which parsing is 26 to 55 ms and path resolution 153 to 170 ms, so a
       parsed-document cache would not bring it under 150 ms; make `resolvePaths` cheaper for wildcard reads over large
@@ -71,9 +70,8 @@
       `create_documents`, keeps the MCP default `destructiveHint: true`. That is right for `delete_documents`,
       `replace_document` and `batch`; adding a definition field (shared contract, both validators, registry signature)
       would let `create_documents` say false
-- [ ] Plugin and agent-saved script routes: `validateScriptDefinition` already applies the 64-character
-      `<moduleId>__<skill>` and `agent__<name>` rules but refuses both sources as not supported until their routes exist
-      (docs/PLAN.md M7, M16)
+- [ ] Agent-saved script route: `validateScriptDefinition` already applies the 50-character `agent__<name>` rule but
+      refuses the `agent` source as not supported until its route exists (docs/PLAN.md M16)
 - [ ] Point `WIRETAP_INSTRUCTIONS` (`server/mcp.ts`, a sidecar file) at the user-facing skill `skills/wiretap/SKILL.md`
       when that is judged right: one sentence within `INSTRUCTIONS_MAX_CHARS` (600; the current text leaves room to
       check against the constant), and the cost is paid by every session at start (the 531-character text measured about

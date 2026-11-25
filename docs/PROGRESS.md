@@ -24,18 +24,17 @@ document, so none are stated here; the count at the time this file was written i
 | M21 Document backups | Done | 2026-11-21 | `253257f`, `3914297` (design and plan); `393ac25`, `302d9f9`, `517fb81`, `723a3ad`, `76b9ad8`, `9a6f979`, `a8b78d1`, `9c30bb4`, `e4c2085`, `b61251f`, `cd2967a`, `d5b3960`, `da9bd16`, `fa9e809` (features and fixes); `80403c5`, `79f94ac`, `8f820be`, `f9bc54a` (tests); merges `1881516`, `8570e4f`, `18fc7b1`, `f5409a4`, `ec5a77e`, `8433951`, `176d540`, `eb570e0`, `b70cbc1`, `640f155`; `docs: close M21; progress, README and skills` | [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md), [`plans/2026-11-21-wiretap-m21-backups.md`](plans/2026-11-21-wiretap-m21-backups.md); as-built notes below; `backup_documents`, `list_backups`, `restore_backup`, `delete_backup` in `server/backupTools.ts`; 19 tools, 10,426 B of definitions |
 | M18 Compendium pack tools | Done | 2026-11-21 | `10ffd14`, `75ef915` (design and plan); `a7ce589`, `b4f9f24`, `214426b`, `3b6787b`, `d372696`, `72c6af2`, `b41ab2e` (features and fix); `a48ffd2`, `869a36d`, `989582d`, `e15d83b`, `1361027` (tests); merges `c9773e5`, `ae02d1c`, `f239556`, `5d8da73`, `853581a`, `f47640c`, `9cbf590`, `bab19f8`, `02bda56`, `86aaa0e`, `bf0b67e`; `7c3bbb6`, `343465e` and the final-review docs commit (docs) | [`specs/2026-11-21-wiretap-pack-tools-design.md`](specs/2026-11-21-wiretap-pack-tools-design.md), [`plans/2026-11-21-wiretap-m18-pack-tools.md`](plans/2026-11-21-wiretap-m18-pack-tools.md); as-built notes below; `create_pack`, `delete_pack` in `src/bridge/scripts/`; the `allowPackDeletion` gate; 21 tools, 11,330 B of definitions |
 | M15a Copy by uuid and content versions | Done | 2026-11-21 to 2026-11-22 | `f883eb8`, `d42de9f` (design and plan); `bbea2d4`, `2c58019`, `6a9fcd2`, `1bed934`, `64c9b78`, `f88bb0c`, `db6e6a2`, `d5d897b`, `786c5a6` (features and fixes); `9595303`, `b54fb70`, `0abefeb`, `c7a7e58`, `c5de351`, `f549e95`, `0ae7ff5`, `2865459` (tests); `144ca8a`, `cb2adf2`, `31643e4`, `6eec27c`, `d27bf23` and `docs: close M15a; progress, README and skills` (docs); `c102166`, `9a23dc6`, `d38825c` and `docs: M15a final-review progress` (final-review fixes) | [`plans/2026-11-21-wiretap-m15a-design.md`](plans/2026-11-21-wiretap-m15a-design.md), [`plans/2026-11-21-wiretap-m15a-plan.md`](plans/2026-11-21-wiretap-m15a-plan.md); as-built notes below; `fromUuids` on `create_documents`, `version` and `ifChanged` on `get_document`, the copy, actor and change-only recipes in `skills/wiretap/SKILL.md`; D35; 21 tools, 11,393 B of definitions |
+| M7 Plugin tools | In review (final review, skills and the e2e review fixes pending) | 2026-11-23 to 2026-11-25 | `b4020a8`, `245f56b`, `608ef8a` (spec and plan edits); `4472d8b`, `cb42e50`, `74c54bf`, `506e55d`, `647cc81`, `07fa66e`, `29beb90`, `e6cfad7`, `cdebcc1`, `031f0b4`, `2475596`, `0b1a4e4`, `92243f3`, `b4f2136`, `59f74c6`, `9928f2d` (plugin route, gates, API, no tool cap); `91d7639`, `f036fc5`, `ebbdd92`, `39a0846`, `5b69b12`, `14a8545`, `88d7db7`, `aed3d38` (no limits on the GM's choices); `802d0e2`, `36fa963`, `189b1f7`, `76bfb28` (no silent cuts); `d60adf1`, `7586c54`, `c5a82a7` (fixes); `27ae471`, `4edad93` (tests); `5c5593c` (example); `a270248` (shared resources) | [`specs/2026-11-23-wiretap-m7-plugin-tools-design.md`](specs/2026-11-23-wiretap-m7-plugin-tools-design.md), [`plans/2026-11-23-wiretap-m7-plugin-tools.md`](plans/2026-11-23-wiretap-m7-plugin-tools.md); as-built notes below; `api.registerTool` and the `wiretap.registerTools` hook in `src/bridge/pluginApi.js`; `examples/spell-text-plugin/`; 21 tools, 10,918 B of definitions |
 
-Current suite (MEASURED 2026-11-22, `npm test` after the M15a final-review fixes): 133 test files, 2960 tests passed,
-2 skipped (2962); `OPEN_BUGS.md` holds none. Headless
-e2e: the last full run (before M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless
-`WIRETAP_MEASURE_KEYFIELDS=1`); the three M6 specs, the M21 specs `backupTools.spec.js` and `gates.spec.js`, and the
-M18 spec `packTools.spec.js` and the M15a specs `readTools.spec.js`, `copyTools.spec.js` and `writeTools.spec.js` were
-run on their own (see
-M6, M21, M18 and M15a below). A full e2e run after M6 has not been
-made.
+Current suite (MEASURED by the controller on 2026-11-25, `npm test` on `m7` at `41c008c`): 141 test files, 3197
+tests passed, 2 skipped; `OPEN_BUGS.md` holds two comment defects found in M7. Headless e2e: the last full run (before
+M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless `WIRETAP_MEASURE_KEYFIELDS=1`); the three
+M6 specs, the M21 specs `backupTools.spec.js` and `gates.spec.js`, the M18 spec `packTools.spec.js`, the M15a specs
+`readTools.spec.js`, `copyTools.spec.js` and `writeTools.spec.js` and the M7 spec `pluginTools.spec.js` were run on
+their own (see M6, M21, M18, M15a and M7 below). A full e2e run after M6 has not been made.
 
-Next milestone in the order of PLAN.md section 5: M7 (M17 dropped by D29, revision 7; M21 added by D33, revision 8,
-and done; M18 and M15a done).
+M7 is in review. In the order of PLAN.md section 5, M17 was dropped by D29 (revision 7), and M21 (added by D33,
+revision 8), M18 and M15a are done.
 
 ## M0 status and deviations
 
@@ -435,8 +434,8 @@ follow):**
   paths `items` and `items.<id>` with any op stay `PATH_INVALID`; field-level `op: 'delete'` or `'replace'` of a plain
   field is an ordinary update, ungated. `replace_document` also needs `allowDelete` when the replacement drops embedded
   documents of any kind and depth (`droppedEmbedded`), and its ack, dry run included, carries `dropped`. `keepId` with an
-  `_id` that exists is refused (MEASURED: the server overwrites the stored document, world and embedded, and the client
-  keeps its old copy). An embedded update group is never `partial`: a dropped entry has no paths in the ack, as
+  `_id` that exists is refused (MEASURED in M7 on 14.364: the server overwrites a stored world document, and the
+  client's collection then holds the new one; it refuses a taken embedded id itself). An embedded update group is never `partial`: a dropped entry has no paths in the ack, as
   `changed: []` does for a single update.
 - Operator spellings (fifth review round). Four review rounds had each found a new bypass of one class (flags
   operators, collection operators, wrapper objects, operators on nested collections, `==key` on a Setting, delta
@@ -717,6 +716,44 @@ on `get_document` with `contentHash.js`, the copy, actor-build and change-only r
   - The backups 1,000-header test limit (60 s) and the exportBackup 10,000-document test limit (15 s) were raised with
     measured reasons after the owner fixed a filling disk.
   - Task 1 (version) and its e2e were separate commits, because the e2e needs a live Foundry and a second agent type.
+
+### As-built notes: M7
+
+**As built (2026-11-23 to 2026-11-25; the plugin route of the script validator and both registries, the public
+plugin API, the module and declared gates of a plugin tool, no tool cap, the removal of the GM-choice limits and a
+notice at every silent cut):**
+
+- Owner decisions during the run (from the conversation; the design records them): no tool cap for anyone; per-tool
+  guidelines warn for plugins and refuse Wiretap's own tools; discovery by descriptions plus an optional guide skill;
+  plugin names refused over 50 characters; schema reuse counted each time it appears, refused past about 60,000
+  expanded nodes, and depth 32 kept as protection; the push bound leaves out the largest plugin tools first with one
+  console line each; no limits on the GM's choices (survey and remove artificial limits, at most warn); shipped names
+  refuse `__`; module ids are Foundry's full set; the plugin API gets its own short-name errors and refuses a doubled
+  prefix; per-call limits removed with protections kept; session and endpoint counts removed, scrollback a GM setting;
+  reply budgets kept; a warning at every silent cut; the 837-byte backup note bound kept; pack and document id length
+  caps lifted; the 1,000-item cap lifted for the read and write lists; the 64 MB handle-input total; font size 8 to 32
+  kept; `MCP_CONNECTIONS_MAX` 128 kept with a throttled drop line; the compact view's `cut` only for real loss.
+- Controller decisions: plugin results carry no image, so the plugin image limits were dropped rather than built; the
+  compact view keeps `cut` at the depth bound (an unentered object may hold leaves); the e2e fixture task ran in the
+  main tree, because Foundry loads `Data/modules/wiretap`; the new plugin-tool skill goes into the
+  `wiretap@personal-skills` plugin with no `paths:` (the owner moved the skills there on 2026-11-25).
+- Suite (MEASURED by the controller with `npm test` on `m7` after the last merge, `41c008c`): 141 test files, 3197
+  passed, 2 skipped; `npm run typecheck` and `npm run eslint` clean. Earlier wave ends: 133 files, 3017 passed
+  (`7d5d863`); 135 files, 3058 passed (`9ef6766`); 139 files, 3130 passed (`c2dd985`); 140 files, 3157 passed
+  (`88d7db7`); 141 files, 3193 passed (`c4a8aa7`); 2 skipped in each.
+- e2e (MEASURED, headless): `tests/e2e/pluginTools.spec.js` with the fixture module `wiretap-e2e-plugin`, 9 passed;
+  the world's module configuration restored (no prior record); `npm run check:release` 0 afterwards. No full e2e run
+  was made during M7.
+- Definition sizes (MEASURED, `npx tsx tests/measure/measureContext.mjs` on 2026-11-25): 21 tools, 10,918 B; the
+  example plugin's `create_spell` lists 797 B of the 800 B guideline (its own comment).
+- `keepId` with a taken id (MEASURED on 14.364, two runs): a world document is overwritten by the server, and the
+  client's collection holds the new document after the call and after a reload; an embedded document is refused by
+  the server ("The _id [..] already exists within the parent collection"). The `keepId` refusal text no longer claims
+  an overwrite (`7586c54`).
+- The `tools/list_changed` debounce scheduled a negative delay (fixed in `d60adf1`; see `CLOSED_BUGS.md`).
+- Two test families failed only in full runs: duration bounds in the schema scale tests (removed, with a scan test
+  `tests/unit/noWallClockBounds.test.js`, `c5a82a7`) and tests that still asserted a removed bound (`writeUpdate`
+  and `readTools`, caught by the wave-end full suite and fixed in `14a8545` and `88d7db7`).
 
 ## Decision provenance (moved from PLAN.md section 3)
 
