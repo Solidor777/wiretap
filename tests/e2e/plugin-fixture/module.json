@@ -1,0 +1,12 @@
+{
+   "id": "wiretap-e2e-plugin",
+   "title": "Wiretap E2E Plugin",
+   "version": "1.0.0",
+   "compatibility": {
+      "minimum": "14",
+      "verified": "14"
+   },
+   "esmodules": [
+      "index.js"
+   ]
+}
