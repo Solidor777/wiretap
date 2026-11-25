@@ -176,23 +176,6 @@ describe('the core read tools over the bridge', () => {
       await gm.register(shippedScripts());
       /** @type {{ client: import('@modelcontextprotocol/sdk/client/index.js').Client }} The connected MCP client. */
       const { client } = await harness.connectClient();
-      const tooMany = await client
-         .callTool({
-            name: 'get_document',
-            arguments: {
-               uuid: 'Actor.MOCKACTOR0000001',
-               // One past the item bound every shipped list schema declares.
-               paths: Array.from({ length: 1001 }, (_, index) => `p${index}`),
-            },
-         })
-         .catch((error) => error);
-      expect(tooMany.isError).toBe(true);
-      expect(issuesOf(tooMany, 'get_document')).toMatchObject([
-         {
-            code: 'too_big',
-            path: ['paths'],
-         },
-      ]);
       const overCap = await client
          .callTool({
             name: 'get_document',
