@@ -5,6 +5,10 @@ import { makeReadHandleHandler, startMcpServer } from '../../server/mcp.ts';
 import { createHandleStore } from '../../server/handles.ts';
 import { getBudget } from '../../shared/budgets.js';
 
+/** @type {string} The answer for a handle that cannot be read, with the default store bounds. */
+const HANDLE_NOT_FOUND_TEXT = 'HANDLE_NOT_FOUND: Handle not found: it may have expired (1800 s unread) or been evicted '
+   + '(1024 handles and 64000000 bytes are kept).';
+
 /**
  * Build a bridge that has no endpoint: no tools and no changes.
  * @returns {{ invokeTool: Function, tools: Function, subscribe: Function }} A bridge with no endpoint behind it.
@@ -224,7 +228,7 @@ describe('makeReadHandleHandler', () => {
       const { handler } = setup('x');
       const result = await handler({ handle: 'AAAAAAAAAAAAAAAAAAAAAA' });
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe('HANDLE_NOT_FOUND: Handle not found or expired.');
+      expect(result.content[0].text).toBe(HANDLE_NOT_FOUND_TEXT);
    });
 
    it('refuses a handle that belongs to another owner', async () => {

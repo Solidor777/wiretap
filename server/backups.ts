@@ -100,6 +100,11 @@ export interface BackupListing {
    total: number;
    /** How many of the names read were not valid backups. */
    invalid: number;
+   /**
+    * How many names were never read because the listing stopped at `LIST_HEADER_READS_MAX` header reads before it
+    * had `limit` rows; 0 when it stopped at `limit` rows or read every name.
+    */
+   unread: number;
 }
 
 /** The backup file store. */
@@ -535,7 +540,8 @@ export function createBackupStore(options: BackupStoreOptions = {}): BackupStore
    }
 
    /**
-    * List a folder's backups, newest first, reading at most `LIST_HEADER_READS_MAX` headers.
+    * List a folder's backups, newest first, reading at most `LIST_HEADER_READS_MAX` headers; the names past that
+    * bound are counted in `unread`.
     * @param {ResolvedFolder} folder - The folder.
     * @param {number} limit - The most rows to return.
     * @returns {BackupListing} The listing; empty for a missing default folder.
@@ -547,6 +553,7 @@ export function createBackupStore(options: BackupStoreOptions = {}): BackupStore
          rows: [],
          total: 0,
          invalid: 0,
+         unread: 0,
       };
       if (!checkFolder(folder, false)) {
          return listing;
@@ -582,6 +589,9 @@ export function createBackupStore(options: BackupStoreOptions = {}): BackupStore
                listing.invalid += 1;
             }
          }
+      }
+      if (listing.rows.length < limit) {
+         listing.unread = names.length - reads;
       }
       return listing;
    }

@@ -179,6 +179,55 @@ describe('put', () => {
       expect(store.slice(OWNER_A, handles[0]).ok).toBe(true);
       expect(store.slice(OWNER_A, handles[1]).ok).toBe(false);
    });
+
+   it('logs how many handles a put evicted at the handle count bound', () => {
+      /** @type {string[]} The store's log lines. */
+      const lines = [];
+      const { store } = makeStore({
+         maxCount: 2,
+         log: (line) => lines.push(line),
+      });
+      putOk(store, OWNER_A, 'x');
+      putOk(store, OWNER_A, 'x');
+      expect(lines).toEqual([]);
+      putOk(store, OWNER_A, 'y');
+      expect(lines).toEqual([
+         'Wiretap sidecar | handle store evicted 1 least recently used handle at the 2-handle bound',
+      ]);
+   });
+
+   it('logs how many handles a put evicted at the byte bound', () => {
+      /** @type {string[]} The store's log lines. */
+      const lines = [];
+      /** @type {string} A 40-character text. */
+      const text = 'a'.repeat(40);
+      const { store } = makeStore({
+         maxTotalBytes: 2 * cost(text),
+         log: (line) => lines.push(line),
+      });
+      putOk(store, OWNER_A, text);
+      putOk(store, OWNER_A, text);
+      putOk(store, OWNER_A, 'b'.repeat(80));
+      expect(lines).toEqual([
+         `Wiretap sidecar | handle store evicted 2 least recently used handles at the ${2 * cost(text)}-byte bound`,
+      ]);
+   });
+
+   it('names the idle, count and byte bounds in the not-found message', () => {
+      const { store } = makeStore({
+         idleMs: 60_000,
+         maxCount: 5,
+         maxTotalBytes: 100_000,
+      });
+      expect(store.slice(OWNER_A, 'missing')).toEqual({
+         ok: false,
+         error: {
+            code: 'HANDLE_NOT_FOUND',
+            message: 'Handle not found: it may have expired (60 s unread) or been evicted (5 handles and 100000 '
+               + 'bytes are kept).',
+         },
+      });
+   });
 });
 
 describe('slice window', () => {

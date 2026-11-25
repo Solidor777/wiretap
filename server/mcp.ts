@@ -434,6 +434,7 @@ function buildServer(
             store,
             ownerKey,
             ownerLive,
+            toolName: tool.name,
             budgetBytes: tool.budgetBytes,
          }),
       );
@@ -665,14 +666,14 @@ export function startMcpServer(
 ): { close: () => void; ready: Promise<void>; port: () => number; sessions: () => number } {
    // The settings of the sessions.
    const settings: McpSessionSettings = options.sessions ?? {};
+   // The sidecar log sink.
+   const log: (line: string) => void = settings.log ?? ((line) => console.log(line));
    // The store behind every session's `read_handle`; it outlives the sessions, which own disjoint handles.
-   const store: HandleStore = options.handleStore ?? createHandleStore();
+   const store: HandleStore = options.handleStore ?? createHandleStore({ log });
    // The caller's tools, registered on every session.
    const extraTools: ToolRegistration[] = options.tools ?? [];
    // The instructions text every session receives.
    const instructions: string = options.instructions ?? WIRETAP_INSTRUCTIONS;
-   // The sidecar log sink.
-   const log: (line: string) => void = settings.log ?? ((line) => console.log(line));
    // Builds a session's backup tools for its endpoint kind; one store and one busy lock serve every session.
    const backupTools: (endpoint: EndpointKind | undefined) => ToolRegistration[] = createBackupTools({
       bridge,
@@ -709,10 +710,11 @@ export function startMcpServer(
 
    /**
     * Make a session's registry tools equal to the wanted tools: remove the ones that are gone, replace the ones whose
-    * definition changed and register the new ones. A tool named like a fixed tool is skipped; every other wanted tool
-    * is listed, however many there are. The wanted tools are looked up by name in a map, so one sync costs time linear
-    * in the held and wanted tools; every session re-syncs on each change the bridge announces. The server's own
-    * change notifications are withheld; the caller notifies once.
+    * definition changed and register the new ones. A tool named like a fixed tool, and a repeat of an earlier wanted
+    * name, is skipped with one log line each on every sync; every other wanted tool is listed, however many there
+    * are. The wanted tools are looked up by name in a map, so one sync costs time linear in the held and wanted tools;
+    * every session re-syncs on each change the bridge announces. The server's own change notifications are withheld;
+    * the caller notifies once.
     * @param {McpSession} session - The session.
     * @param {RegistryTool[]} wanted - The tools of the endpoint the session routes to.
     * @returns {boolean} Whether the session's tool list changed.
@@ -721,7 +723,13 @@ export function startMcpServer(
       // The wanted tools that may be listed, by name; the first tool of a name wins.
       const listed: Map<string, RegistryTool> = new Map();
       for (const tool of wanted) {
-         if (!fixedNames.has(tool.name) && !listed.has(tool.name)) {
+         if (fixedNames.has(tool.name)) {
+            log(`Wiretap sidecar | MCP session ${session.id} skipped registry tool ${tool.name}: the name belongs to a `
+               + 'fixed tool');
+         } else if (listed.has(tool.name)) {
+            log(`Wiretap sidecar | MCP session ${session.id} skipped registry tool ${tool.name}: the name repeats an `
+               + 'earlier tool');
+         } else {
             listed.set(tool.name, tool);
          }
       }
@@ -760,6 +768,7 @@ export function startMcpServer(
                   store,
                   ownerKey: session.id,
                   ownerLive: () => manager.get(session.id) !== undefined,
+                  toolName: tool.name,
                   budgetBytes: tool.budgetBytes,
                }),
             ),

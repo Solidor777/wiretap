@@ -80,6 +80,59 @@ describe('terminal manager dispose', () => {
    });
 });
 
+describe('terminal manager second launch', () => {
+   afterEach(() => {
+      vi.restoreAllMocks();
+   });
+
+   it('ignores a launch while a terminal runs, logs one line and tells the launching socket', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const child = {
+         onData: vi.fn(),
+         onExit: vi.fn(),
+         write: vi.fn(),
+         resize: vi.fn(),
+         kill: vi.fn(),
+      };
+      const spawn = vi.fn(() => child);
+      const io = { emit: vi.fn() };
+      const manager = createTerminalManager(io, spawn);
+      /** @type {Record<string, Function>} The first socket's handlers. */
+      const first = {};
+      manager.handleConnection({
+         emit: vi.fn(),
+         on: (event, fn) => {
+            first[event] = fn;
+         },
+      });
+      first[TERMINAL_LAUNCH]({ command: 'x' });
+      /** @type {Record<string, Function>} The second socket's handlers. */
+      const second = {};
+      const socket = {
+         emit: vi.fn(),
+         on: (event, fn) => {
+            second[event] = fn;
+         },
+      };
+      manager.handleConnection(socket);
+      socket.emit.mockClear();
+      io.emit.mockClear();
+      second[TERMINAL_LAUNCH]({ command: 'y' });
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.map((call) => call[0])).toEqual([
+         'Wiretap sidecar | terminal launch ignored: a terminal is already running',
+      ]);
+      expect(socket.emit.mock.calls).toEqual([
+         [
+            TERMINAL_DATA,
+            { chunk: '\r\n[Wiretap] A terminal is already running; the launch was ignored.\r\n' },
+         ],
+      ]);
+      expect(io.emit).not.toHaveBeenCalled();
+      manager.dispose();
+   });
+});
+
 describe('terminal manager scrollback', () => {
    /** @type {import('vitest').MockInstance} Silences and records console.warn output. */
    let warnSpy;

@@ -12,6 +12,10 @@ import { BRIDGE_IDENTIFY, BRIDGE_INVOKE, PROTOCOL_VERSION } from '../../shared/p
 import { createDocumentsArgs, createDocumentsScript, registryPayload } from '../unit/scriptFixtures.js';
 import { reservePort } from '../portPool.js';
 
+/** @type {string} The answer for a handle that cannot be read, with the default store bounds. */
+const HANDLE_NOT_FOUND_TEXT = 'HANDLE_NOT_FOUND: Handle not found: it may have expired (1800 s unread) or been evicted '
+   + '(1024 handles and 64000000 bytes are kept).';
+
 /** @type {string} The op of the test-only tool; the fake client is the only party that knows it. */
 const OP_TEST_BIG = 'test:big-result';
 
@@ -250,7 +254,7 @@ describe('large results become handles', () => {
          arguments: { handle: 'AAAAAAAAAAAAAAAAAAAAAA' },
       });
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe('HANDLE_NOT_FOUND: Handle not found or expired.');
+      expect(result.content[0].text).toBe(HANDLE_NOT_FOUND_TEXT);
    });
 
    it('lists read_handle inside the definition budgets', async () => {
