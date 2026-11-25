@@ -398,10 +398,12 @@ describe('MCP HTTP hardening and session robustness', () => {
          });
          const { client } = await harness.connectClient();
          expect(await harness.toolNames(client)).toContain('twice');
-         expect(harness.logs().some((text) => /^Wiretap sidecar \| MCP session \S+ skipped registry tool clash: the name /
-            .test(text) && text.endsWith('belongs to a fixed tool'))).toBe(true);
-         expect(harness.logs().some((text) => /^Wiretap sidecar \| MCP session \S+ skipped registry tool twice: the name /
-            .test(text) && text.endsWith('repeats an earlier tool'))).toBe(true);
+         expect(harness.logs().some((text) =>
+            /^Wiretap sidecar \| MCP session \S+ skipped registry tool clash: the name /.test(text)
+            && text.endsWith('belongs to a fixed tool'))).toBe(true);
+         expect(harness.logs().some((text) =>
+            /^Wiretap sidecar \| MCP session \S+ skipped registry tool twice: the name /.test(text)
+            && text.endsWith('repeats an earlier tool'))).toBe(true);
       });
 
       it('lists a tool registered between creating a session and holding it', async () => {

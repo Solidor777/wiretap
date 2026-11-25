@@ -131,6 +131,39 @@ describe('terminal manager second launch', () => {
       expect(io.emit).not.toHaveBeenCalled();
       manager.dispose();
    });
+
+   it('writes a bounded number of lines when many launches are ignored, and tells the socket each time', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const child = {
+         onData: vi.fn(),
+         onExit: vi.fn(),
+         write: vi.fn(),
+         resize: vi.fn(),
+         kill: vi.fn(),
+      };
+      const spawn = vi.fn(() => child);
+      const manager = createTerminalManager({ emit: vi.fn() }, spawn);
+      /** @type {Record<string, Function>} The socket's handlers. */
+      const handlers = {};
+      const socket = {
+         emit: vi.fn(),
+         on: (event, fn) => {
+            handlers[event] = fn;
+         },
+      };
+      manager.handleConnection(socket);
+      handlers[TERMINAL_LAUNCH]({ command: 'x' });
+      socket.emit.mockClear();
+      for (let index = 0; index < 50; index += 1) {
+         handlers[TERMINAL_LAUNCH]({ command: 'y' });
+      }
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.map((call) => call[0])).toEqual(
+         Array(10).fill('Wiretap sidecar | terminal launch ignored: a terminal is already running'),
+      );
+      expect(socket.emit).toHaveBeenCalledTimes(50);
+      manager.dispose();
+   });
 });
 
 describe('terminal manager scrollback', () => {
