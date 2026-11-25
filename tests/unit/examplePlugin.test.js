@@ -5,7 +5,9 @@ import { compileSchema } from '../../shared/schemaValidate.js';
 import { definitionBytes, validateScriptDefinition } from '../../shared/scripts.js';
 import { createSpellHandler, createSpellTool, mapSpell } from '../../examples/spell-text-plugin/spellTool.js';
 
-/** @type {Record<string, unknown>} The example tool as Wiretap registers it: full name, module id and default result. */
+/**
+ * @type {Record<string, unknown>} The example tool as Wiretap registers it: full name, module id and default result.
+ */
 const full = {
    ...createSpellTool,
    name: 'wiretap-example-spells__create_spell',

@@ -12,9 +12,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 /**
  * Playwright global setup: build the e2e bundle (probe-enabled) into dist/ once before the suite, check that the files
  * module.json names exist, install the fixture plugin module, then restore the fixture's module configuration entry
- * and any gate setting values and delete any e2e documents a crashed earlier run left (recorded or not). Each spec file manages its own fresh sidecar (see tests/e2e/sidecar.js), so the sidecar is
- * not started here.
- * @returns {Promise<void>} Resolves once the e2e bundle is built and no recorded gate value is pending.
+ * and any gate setting values and delete any e2e documents a crashed earlier run left (recorded or not). Each spec
+ * file manages its own fresh sidecar (see tests/e2e/sidecar.js), so the sidecar is not started here.
+ * @returns {Promise<void>} Resolves once the e2e bundle is built, the fixture plugin module is installed, its module
+ * configuration entry and the recorded gate values are restored, and no e2e document of an earlier run is left.
  */
 export default async function globalSetup() {
    execSync('npm run build:e2e', { cwd: repoRoot, stdio: 'inherit' });

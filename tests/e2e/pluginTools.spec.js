@@ -41,6 +41,26 @@ async function toolNames() {
 }
 
 /**
+ * Wait until the session lists a shipped tool, which shows the page's script list has reached the sidecar, and return
+ * that listing. An empty listing lacks the fixture tool too, so a "not listed" check reads this listing instead.
+ * @returns {Promise<string[]>} The first listing that holds `create_documents`.
+ */
+async function shippedListing() {
+   /** @type {string[]} The most recent listing read by the poll. */
+   let listed = [];
+   await expect
+      .poll(
+         async () => {
+            listed = await toolNames();
+            return listed;
+         },
+         { timeout: POLL_MS },
+      )
+      .toContain('create_documents');
+   return listed;
+}
+
+/**
  * Call a tool and return its first text item.
  * @param {string} name - The tool name.
  * @param {object} args - The arguments.
@@ -105,6 +125,7 @@ test.describe('wiretap plugin tools', () => {
       'the fixture registers through the hook at ready, is listed only while allowed, runs ctx.core, and is gone ' +
          'after it is disabled',
       async ({ page }) => {
+         /** @type {object} The fixture module's record of its hook call and registration outcome. */
          const state = await page.evaluate((id) => game.modules.get(id).api.state, FIXTURE_MODULE_ID);
          expect(state).toEqual({
             setupSeenAtHook: true,
@@ -115,14 +136,17 @@ test.describe('wiretap plugin tools', () => {
                name: FIXTURE_TOOL_NAME,
             },
          });
-         expect(await toolNames()).not.toContain(FIXTURE_TOOL_NAME);
+         expect(await shippedListing()).not.toContain(FIXTURE_TOOL_NAME);
 
          await page.evaluate((id) => game.settings.set('wiretap', 'allowedPluginModules', id), FIXTURE_MODULE_ID);
          await expect.poll(toolNames, { timeout: POLL_MS }).toContain(FIXTURE_TOOL_NAME);
 
+         /** @type {string} The actor name the fixture tool echoes and creates. */
          const text = `${E2E_PREFIX}Plugin ${Date.now()}`;
+         /** @type {{ isError: boolean, text: string }} The fixture tool's call result. */
          const call = await callText(FIXTURE_TOOL_NAME, { text });
          // The id is known only from the reply, so the record is written before anything else can fail.
+         /** @type {{ echo: string, created: { uuid: string }[] } | undefined} The parsed reply of a successful call. */
          const reply = call.isError ? undefined : JSON.parse(call.text);
          if (reply?.created?.[0]) {
             await recordDocument(page, {
@@ -156,7 +180,7 @@ test.describe('wiretap plugin tools', () => {
          await expect
             .poll(() => page.evaluate(() => game.modules.get('wiretap').api.bridge.identified), { timeout: POLL_MS })
             .toBe(true);
-         await expect.poll(toolNames, { timeout: POLL_MS }).not.toContain(FIXTURE_TOOL_NAME);
+         expect(await shippedListing()).not.toContain(FIXTURE_TOOL_NAME);
       },
    );
 });
