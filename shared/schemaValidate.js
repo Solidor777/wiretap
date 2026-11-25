@@ -34,10 +34,12 @@
 
 import { getBudget } from './budgets.js';
 import { CONTROL_PATTERN } from './logText.js';
+import { truncateUtf8 } from './utf8.js';
 
 /**
  * @typedef {{ ok: false, error: string }} ValueFailure
- * A failed validation: the first problem, naming the argument path, at most 256 bytes and never caller text.
+ * A failed validation: the first problem, naming the argument path, at most 256 bytes and never caller text; a longer
+ * text is cut and ends in the `…` marker.
  */
 
 /**
@@ -70,8 +72,8 @@ import { CONTROL_PATTERN } from './logText.js';
 export const VALUE_NODES_MAX = 10_000;
 
 /**
- * The longest error text, in bytes. Errors are ASCII (schema property names, indexes and fixed phrases), so characters
- * equal bytes.
+ * The longest error text, in UTF-8 bytes. A longer text is cut with `truncateUtf8`, so it ends in the `…` marker,
+ * which counts toward the bound.
  * @type {number}
  */
 export const VALIDATION_ERROR_MAX_BYTES = 256;
@@ -850,7 +852,7 @@ export function compileSchema(schema, options = {}) {
                if ('error' in verdict) {
                   return {
                      ok: false,
-                     error: verdict.error.slice(0, VALIDATION_ERROR_MAX_BYTES),
+                     error: truncateUtf8(verdict.error, VALIDATION_ERROR_MAX_BYTES),
                   };
                }
                return {

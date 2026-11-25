@@ -110,7 +110,8 @@ function unknownSubtypeMessage(documentName, subtype, types) {
  * @param {string | undefined} subtype - The subtype the blank is built for, when the class has subtypes.
  * @param {{ fields: Record<string, object> }} schema - The class's schema.
  * @param {(line: string) => void} log - Receives one sanitized, bounded line when the construction fails.
- * @returns {{ example: Record<string, unknown> | null, note?: string }} The example, or null with the reason.
+ * @returns {{ example: Record<string, unknown> | null, note?: string, partial?: true }} The example, or null with the
+ * reason; `partial` when its export left part of the blank document out at a redaction bound.
  */
 function blankExample(documentName, subtype, schema, log) {
    /** @type {Record<string, unknown>} The construction data. */
@@ -132,7 +133,10 @@ function blankExample(documentName, subtype, schema, log) {
             note: outcome.message,
          };
       }
-      return { example: outcome.data };
+      return {
+         example: outcome.data,
+         ...(outcome.partial === true ? { partial: true } : {}),
+      };
    } catch (cause) {
       log(
          `Wiretap | describe_schema blank ${cleanForLog(documentName, ECHO_MAX_BYTES)} failed: ` +
@@ -217,21 +221,32 @@ function describeWhole(request, log) {
       documentName,
       ...(subtype === undefined ? {} : { subtype }),
       example: blank.example,
+      ...(blank.partial === true ? { examplePartial: true } : {}),
       ...(blank.note === undefined ? {} : { exampleNote: blank.note }),
       outline: outlineFields(schema, state),
    };
    /** @type {{ fields: Record<string, object> } | undefined} The schema of the subtype's `system`. */
    const system = CONFIG[documentName]?.dataModels?.[subtype]?.schema;
+   /** @type {ReturnType<typeof createWalkState>} The walk state of the system outline. */
+   const systemState = createWalkState({
+      documentName,
+      subtype,
+   });
    if (Object.hasOwn(schema.fields, 'system') && system?.fields !== undefined) {
-      result.systemOutline = outlineFields(system, createWalkState({
-         documentName,
-         subtype,
-      }));
+      result.systemOutline = outlineFields(system, systemState);
+   }
+   if (state.cut || systemState.cut) {
+      result.outlineCut = true;
    }
    /** @type {number} The largest result. */
    const limit = getBudget('DESCRIBE_SCHEMA_MAX_BYTES').value;
    if (jsonBytes(result) > limit && blank.example !== null) {
-      result.exampleKeys = Object.keys(blank.example).slice(0, EXAMPLE_KEYS_MAX);
+      /** @type {string[]} Every top-level key of the example. */
+      const keys = Object.keys(blank.example);
+      result.exampleKeys = keys.slice(0, EXAMPLE_KEYS_MAX);
+      if (keys.length > EXAMPLE_KEYS_MAX) {
+         result.exampleKeysMore = keys.length - EXAMPLE_KEYS_MAX;
+      }
       result.example = undefined;
       result.exampleCut = true;
    }
@@ -326,6 +341,7 @@ function describePath(request, path, log) {
          ...(subtype === undefined ? {} : { subtype }),
          path,
          ...(subtree === undefined ? {} : { example: subtree }),
+         ...(blank.partial === true ? { examplePartial: true } : {}),
          schema: describeField(field, state, 0),
          ...(state.cut || depthMax < 3 ? { cut: true } : {}),
       };

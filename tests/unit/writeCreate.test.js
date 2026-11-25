@@ -871,3 +871,33 @@ describe('createDocuments: rows follow the order of the data', () => {
       expect(rows[0].uuid).toBe(`Actor.${sent[0]._id}`);
    });
 });
+
+describe('createDocuments: the partial read-back notice', () => {
+   it('marks a read-back row partial when the export leaves part of the document out', async () => {
+      /** @type {Record<string, unknown>} A subtree past the redaction depth and within the write depth bound. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 26; level += 1) {
+         deep = { next: deep };
+      }
+      const rows = await createDocuments({
+         documentName: 'Actor',
+         data: [{
+            name: 'MOCK_deep',
+            type: 'npc',
+            flags: { mock: { deep } },
+         }],
+         readback: true,
+      });
+      expect(rows[0].exported).toMatchObject({ name: 'MOCK_deep' });
+      expect(rows[0].partial).toBe(true);
+      const whole = await createDocuments({
+         documentName: 'Actor',
+         data: [{
+            name: 'MOCK_whole',
+            type: 'npc',
+         }],
+         readback: true,
+      });
+      expect(whole[0].partial).toBeUndefined();
+   });
+});

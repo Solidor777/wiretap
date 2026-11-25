@@ -103,6 +103,7 @@ const WORLD_ONLY = Object.freeze([
  * @property {boolean} live - Whether `source` is a live document (exported canonically) or an index entry.
  * @property {string} key - The ordering key.
  * @property {Record<string, unknown> | null} [data] - The canonical export, once a filter or a row has needed it.
+ * @property {boolean} [partial] - True when that export left part of the document out at a redaction bound.
  */
 
 /**
@@ -113,6 +114,8 @@ const WORLD_ONLY = Object.freeze([
  * @property {number} [scanned] - The candidates examined, present with `cut`.
  * @property {string} [nextCursor] - Resumes after the last row, or after the last candidate examined when cut.
  * @property {boolean} [fieldsDropped] - True when a lone row lost its `fields` values to fit the page.
+ * @property {boolean} [partial] - True when an export a filter or a row read left part of a document out at a
+ * redaction bound, so a filter or field value may be missing from it.
  */
 
 /**
@@ -346,6 +349,7 @@ function exportOf(candidate) {
       /** @type {ReturnType<typeof exportDocument>} The export. */
       const exported = exportDocument(candidate.source, {});
       candidate.data = exported.ok ? exported.data : null;
+      candidate.partial = exported.ok && exported.partial === true;
    }
    return candidate.data;
 }
@@ -579,6 +583,8 @@ export async function searchDocuments(params, signal) {
       rows.push(row);
       rowBytes += utf8Bytes(JSON.stringify(row));
    }
+   /** @type {boolean} Whether an export this call read left part of a document out. */
+   const partial = ordered.some((candidate) => candidate.partial === true);
    /**
     * Build the result for the first `count` rows.
     * @param {number} count - How many rows to keep.
@@ -601,6 +607,9 @@ export async function searchDocuments(params, signal) {
       }
       if (fieldsDropped) {
          result.fieldsDropped = true;
+      }
+      if (partial) {
+         result.partial = true;
       }
       return result;
    };

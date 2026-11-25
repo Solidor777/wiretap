@@ -71,6 +71,7 @@ import {
  * @property {number} [dropped] - How many embedded documents (nested ones included) the replacement removes; absent
  * when none.
  * @property {Record<string, unknown>} [exported] - The canonical export, only when read-back was requested.
+ * @property {true} [partial] - Set with `exported` when the export left part of the document out at a redaction bound.
  */
 
 /**
@@ -421,6 +422,9 @@ export async function runReplace(plan, readback = false) {
       const exported = exportDocument(plan.target, {});
       if (exported.ok) {
          row.exported = exported.data;
+         if (exported.partial === true) {
+            row.partial = true;
+         }
       }
    }
    return row;

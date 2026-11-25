@@ -12,6 +12,15 @@ import { truncateUtf8, utf8Bytes } from '$shared/utf8.js';
  * top-level array whose first element is an object with a string `_id`.
  * @property {string} [version] - The content version of the document, shown in the header between `type` and
  * `fields` (cut to 32 bytes) when it is a non-empty string.
+ * @property {boolean} [partial] - Whether the export the view is built from left part of the document out; the view
+ * then carries `partial: true`.
+ */
+
+/**
+ * @typedef {object} LeafOutcome
+ * @property {Array<[string, string | number | boolean]>} leaves - At most `COMPACT_LEAVES_MAX` path and value pairs.
+ * @property {boolean} cut - Whether a leaf was left out or cut: a matching leaf past the count or path bound, a string
+ * value cut to `VALUE_MAX_BYTES`, or a non-empty object the walk did not enter at its depth or object bound.
  */
 
 /**
@@ -171,15 +180,38 @@ function jsonBytes(value) {
 }
 
 /**
+ * Bound a leaf value: a string is cut to `VALUE_MAX_BYTES`.
+ * @param {string | number | boolean} value - The scalar.
+ * @returns {{ value: string | number | boolean, cut: boolean }} The bounded value and whether it was cut.
+ */
+function leafValue(value) {
+   if (typeof value !== 'string') {
+      return {
+         value,
+         cut: false,
+      };
+   }
+   /** @type {string} The bounded text. */
+   const bounded = truncateUtf8(value, VALUE_MAX_BYTES);
+   return {
+      value: bounded,
+      cut: bounded !== value,
+   };
+}
+
+/**
  * Collect the scalar leaves of a `system` tree whose key matches the pattern. Depth-first in property order; arrays
- * are not entered and each object is entered once.
+ * are not entered and each object is entered once. Once the leaves are full the walk goes on only until it finds one
+ * more matching leaf, which marks the outcome cut.
  * @param {unknown} system - The `system` value of the document.
  * @param {RegExp} pattern - Matches a leaf key; has no `g` or `y` flag.
- * @returns {Array<[string, string | number | boolean]>} At most `COMPACT_LEAVES_MAX` path and value pairs.
+ * @returns {LeafOutcome} The leaves and whether any was left out or cut.
  */
 function collectLeaves(system, pattern) {
    /** @type {Array<[string, string | number | boolean]>} The leaves found. */
    const leaves = [];
+   /** @type {boolean} Whether a leaf was left out or cut. */
+   let cut = false;
    /** @type {Set<object>} The objects already entered. */
    const seen = new Set();
    /** @type {{ nodes: number }} The visit counter. */
@@ -193,13 +225,17 @@ function collectLeaves(system, pattern) {
     * @returns {void}
     */
    function walk(node, path, depth) {
-      if (seen.has(node) || budget.nodes >= LEAF_NODES_MAX) {
+      if (seen.has(node)) {
+         return;
+      }
+      if (budget.nodes >= LEAF_NODES_MAX) {
+         cut = true;
          return;
       }
       seen.add(node);
       budget.nodes += 1;
       for (const key of Object.keys(node)) {
-         if (leaves.length >= COMPACT_LEAVES_MAX) {
+         if (cut && leaves.length >= COMPACT_LEAVES_MAX) {
             return;
          }
          /** @type {unknown} The property value. */
@@ -211,14 +247,26 @@ function collectLeaves(system, pattern) {
             typeof value === 'boolean' ||
             (typeof value === 'number' && Number.isFinite(value))
          ) {
-            if (pattern.test(key) && keyPath.length <= LEAF_PATH_MAX_CHARS) {
-               leaves.push([
-                  keyPath,
-                  typeof value === 'string' ? truncateUtf8(value, VALUE_MAX_BYTES) : value,
-               ]);
+            if (!pattern.test(key)) {
+               continue;
             }
-         } else if (isRecord(value) && depth < LEAF_DEPTH_MAX) {
-            walk(value, keyPath, depth + 1);
+            if (keyPath.length > LEAF_PATH_MAX_CHARS || leaves.length >= COMPACT_LEAVES_MAX) {
+               cut = true;
+               continue;
+            }
+            /** @type {ReturnType<typeof leafValue>} The bounded value. */
+            const bounded = leafValue(value);
+            cut ||= bounded.cut;
+            leaves.push([
+               keyPath,
+               bounded.value,
+            ]);
+         } else if (isRecord(value)) {
+            if (depth < LEAF_DEPTH_MAX) {
+               walk(value, keyPath, depth + 1);
+            } else if (Object.keys(value).length > 0) {
+               cut = true;
+            }
          }
       }
    }
@@ -226,23 +274,30 @@ function collectLeaves(system, pattern) {
    if (isRecord(system)) {
       walk(system, 'system', 1);
    }
-   return leaves;
+   return {
+      leaves,
+      cut,
+   };
 }
 
 /**
  * Read the named scalar leaves of a `system` tree, in the order named. Reads own properties only.
  * @param {unknown} system - The `system` value of the document.
  * @param {unknown[]} keyPaths - Dotted paths below `system`.
- * @returns {Array<[string, string | number | boolean]>} At most `COMPACT_LEAVES_MAX` path and value pairs.
+ * @returns {LeafOutcome} The leaves, and whether a path past the path bound, a scalar past the count bound or a cut
+ * string value left something out.
  */
 function pathLeaves(system, keyPaths) {
    /** @type {Array<[string, string | number | boolean]>} The leaves found. */
    const leaves = [];
+   /** @type {boolean} Whether a leaf was left out or cut. */
+   let cut = false;
    for (const keyPath of keyPaths) {
-      if (leaves.length >= COMPACT_LEAVES_MAX) {
-         break;
+      if (typeof keyPath !== 'string') {
+         continue;
       }
-      if (typeof keyPath !== 'string' || `system.${keyPath}`.length > LEAF_PATH_MAX_CHARS) {
+      if (`system.${keyPath}`.length > LEAF_PATH_MAX_CHARS) {
+         cut = true;
          continue;
       }
       /** @type {string[]} The path's segments. */
@@ -258,14 +313,25 @@ function pathLeaves(system, keyPaths) {
       /** @type {boolean} Whether the node is a scalar a leaf can show. */
       const scalar =
          typeof node === 'string' || typeof node === 'boolean' || (typeof node === 'number' && Number.isFinite(node));
-      if (scalar) {
-         leaves.push([
-            `system.${keyPath}`,
-            typeof node === 'string' ? truncateUtf8(node, VALUE_MAX_BYTES) : node,
-         ]);
+      if (!scalar) {
+         continue;
       }
+      if (leaves.length >= COMPACT_LEAVES_MAX) {
+         cut = true;
+         break;
+      }
+      /** @type {ReturnType<typeof leafValue>} The bounded value. */
+      const bounded = leafValue(node);
+      cut ||= bounded.cut;
+      leaves.push([
+         `system.${keyPath}`,
+         bounded.value,
+      ]);
    }
-   return leaves;
+   return {
+      leaves,
+      cut,
+   };
 }
 
 /**
@@ -288,9 +354,10 @@ function embeddedNames(doc, named) {
 /**
  * Build the compact tuple of one embedded document.
  * @param {unknown} element - The embedded document.
+ * @param {{ cut: boolean }} trimmed - Set to cut when a value is cut to its bound.
  * @returns {[string, string, string]} Its id, name and type, each bounded.
  */
-function tupleOf(element) {
+function tupleOf(element, trimmed) {
    /** @type {Record<string, unknown>} The document, or an empty object for a non-object element. */
    const doc = isRecord(element) ? element : {};
    /**
@@ -301,7 +368,13 @@ function tupleOf(element) {
     */
    const text = (key, max) => {
       const value = own(doc, key);
-      return typeof value === 'string' ? truncateUtf8(value, max) : '';
+      if (typeof value !== 'string') {
+         return '';
+      }
+      /** @type {string} The bounded text. */
+      const bounded = truncateUtf8(value, max);
+      trimmed.cut ||= bounded !== value;
+      return bounded;
    };
    return [
       text('_id', TUPLE_ID_MAX_BYTES),
@@ -314,13 +387,17 @@ function tupleOf(element) {
  * Build the compact view of a document export: `uuid`, `name`, `type`, the `version` option when it is a non-empty
  * string, the `system` leaves named by `keyPaths` or whose key matches a pattern (`fields`, at most 24),
  * and the embedded documents as `[id, name, type]` tuples (`embedded`: at most 8 collections, their names shortened to
- * 32 bytes, at most 40 tuples in all, with the true `total` of each collection). Every string is bounded. While the
- * serialized view exceeds `COMPACT_VIEW_MAX_BYTES` it loses entries and `cut` is set: the larger of the leaves and the
- * tuples loses its last entry, then any remaining leaf, then a collection with no tuples left, then the header fields,
- * so the size bound holds for any data. Reads own properties only and never throws.
+ * 32 bytes, at most 40 tuples in all, with the true `total` of each collection). Every string is bounded. `cut: true`
+ * says the view leaves something out, so the agent can ask with `fields`, `paths` or `mode: 'full'`: a value cut to
+ * its compact length (a cut `uuid` cannot be used), a matching leaf past the leaf count or path bound, a non-empty
+ * object the leaf walk did not enter at its depth or object bound, a collection left out, or an entry dropped to fit.
+ * While the serialized view exceeds `COMPACT_VIEW_MAX_BYTES` it loses entries: the larger of the leaves and the tuples
+ * loses its last entry, then any remaining leaf, then a collection with no tuples left, then the header fields, so the
+ * size bound holds for any data. `partial: true` is copied from the option. Reads own properties only and never
+ * throws.
  * @param {unknown} doc - The canonical document export (plain data).
- * @param {CompactOptions} [options] - The leaf key paths or key pattern, the embedded collection names and the
- * version.
+ * @param {CompactOptions} [options] - The leaf key paths or key pattern, the embedded collection names, the version
+ * and the partial mark.
  * @returns {Record<string, unknown>} The compact view; `{}` when the input is not an object.
  */
 function compact(doc, options = {}) {
@@ -336,6 +413,8 @@ function compact(doc, options = {}) {
       const requested = options.keyPattern ?? DEFAULT_KEY_PATTERN;
       /** @type {RegExp} The key pattern without stateful flags, so repeated tests do not depend on `lastIndex`. */
       const pattern = new RegExp(requested.source, requested.flags.replace(/[gy]/g, ''));
+      /** @type {{ cut: boolean }} Set when a header, leaf or tuple value is cut to its compact length. */
+      const trimmed = { cut: false };
       /** @type {Record<string, unknown>} The view header. */
       const header = {};
       for (const [key, max] of [
@@ -346,15 +425,19 @@ function compact(doc, options = {}) {
          const value = own(doc, key);
          if (typeof value === 'string') {
             header[key] = truncateUtf8(value, max);
+            trimmed.cut ||= header[key] !== value;
          }
       }
       if (typeof options.version === 'string' && options.version !== '') {
          header.version = truncateUtf8(options.version, VERSION_MAX_BYTES);
+         trimmed.cut ||= header.version !== options.version;
       }
-      /** @type {Array<[string, string | number | boolean]>} The leaves, trimmed to fit. */
-      const leaves = Array.isArray(options.keyPaths)
+      /** @type {LeafOutcome} The leaves and whether any was left out or cut. */
+      const leafOutcome = Array.isArray(options.keyPaths)
          ? pathLeaves(own(doc, 'system'), options.keyPaths)
          : collectLeaves(own(doc, 'system'), pattern);
+      /** @type {Array<[string, string | number | boolean]>} The leaves, trimmed to fit. */
+      const leaves = leafOutcome.leaves;
       /**
        * The embedded collections and their tuples.
        * @type {Array<{ name: string, total: number, rows: Array<[string, string, string]> }>}
@@ -369,6 +452,7 @@ function compact(doc, options = {}) {
       for (const full of embeddedNames(doc, options.embedded)) {
          /** @type {string} The collection name as shown. */
          const name = truncateUtf8(full, COLLECTION_NAME_MAX_BYTES);
+         trimmed.cut ||= name !== full;
          if (collections.length >= COLLECTIONS_MAX || listedNames.has(name)) {
             skipped = true;
             continue;
@@ -379,7 +463,7 @@ function compact(doc, options = {}) {
          /** @type {Array<[string, string, string]>} The tuples of this collection. */
          const rows = [];
          for (let index = 0; index < elements.length && remaining > 0; index += 1) {
-            rows.push(tupleOf(elements[index]));
+            rows.push(tupleOf(elements[index], trimmed));
             remaining -= 1;
          }
          collections.push({
@@ -409,14 +493,21 @@ function compact(doc, options = {}) {
                });
             }
          }
+         if (options.partial === true) {
+            view.partial = true;
+         }
          if (cut) {
             view.cut = true;
          }
          return view;
       };
 
-      /** @type {boolean} Whether an entry was dropped to fit the budget or a collection was left out. */
-      let cut = skipped;
+      /**
+       * Whether something was left out of the view or cut: an entry dropped to fit the budget, a collection left out,
+       * a leaf the walk left out, or a value cut to its compact length.
+       * @type {boolean}
+       */
+      let cut = skipped || leafOutcome.cut || trimmed.cut;
       /** @type {string[]} The header fields in the order they are dropped when nothing else is left to drop. */
       const headerDrop = [
          'version',

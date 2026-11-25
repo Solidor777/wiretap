@@ -895,7 +895,7 @@ describe('validate: results and errors', () => {
       }
    });
 
-   it('keeps every error within 256 bytes', () => {
+   it('keeps every error within 256 bytes and ends a cut one with the marker', () => {
       const deep = {
          type: 'object',
          properties: {
@@ -923,6 +923,7 @@ describe('validate: results and errors', () => {
       const outcome = validate({ [`a${'b'.repeat(63)}`]: { [`c${'d'.repeat(63)}`]: { [`e${'f'.repeat(63)}`]: {} } } });
       expect(outcome.ok).toBe(false);
       expect(new TextEncoder().encode(outcome.error).length).toBeLessThanOrEqual(256);
+      expect(outcome.error.endsWith('…')).toBe(true);
    });
 
    it('refuses an argument tree larger than the value bound', () => {

@@ -111,7 +111,12 @@ export async function updateDocumentsHandler(args, ctx) {
          if (!sliced.ok) {
             throw shapeRefusal(sliced.error);
          }
-         return sliced;
+         return document.partial === true
+            ? {
+               ...sliced,
+               partial: true,
+            }
+            : sliced;
       }),
    );
 }

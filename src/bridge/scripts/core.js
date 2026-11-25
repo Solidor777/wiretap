@@ -73,7 +73,8 @@ function documentTypes() {
  * export exclusions, so nothing excluded ever leaves this function.
  * @param {import('~/bridge/scripts/canonical.js').DocumentReference} reference - A uuid, or a class name and id.
  * @param {import('~/bridge/scripts/canonical.js').ExportOptions} options - The export options.
- * @returns {Promise<{ data: Record<string, unknown>, documentName: string }>} The plain export and the document class.
+ * @returns {Promise<{ data: Record<string, unknown>, documentName: string, partial: boolean }>} The plain export, the
+ * document class, and whether the export left part of the document out at a redaction bound.
  * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `DOC_EXCLUDED` or `DOC_UNREADABLE`.
  */
 async function readDocument(reference, options) {
@@ -87,6 +88,7 @@ async function readDocument(reference, options) {
    return {
       data: outcome.data,
       documentName: document.documentName,
+      partial: outcome.partial === true,
    };
 }
 

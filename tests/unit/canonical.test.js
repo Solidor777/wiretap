@@ -657,3 +657,46 @@ describe('resolveDocument', () => {
       }
    });
 });
+
+describe('exportDocument: the partial notice', () => {
+   it('marks an export partial when the redaction walk drops part of the document at a bound', () => {
+      /** @type {Record<string, unknown>} A subtree nested deeper than the walk enters. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 30; level += 1) {
+         deep = { next: deep };
+      }
+      /** @type {string} JSON text wrapped in JSON strings past the nesting bound. */
+      let text = '{"a":1}';
+      for (let level = 0; level < 8; level += 1) {
+         text = JSON.stringify(text);
+      }
+      for (const source of [
+         { system: deep },
+         { flags: { m: { cfg: text } } },
+         { system: { list: Array.from({ length: REDACT_MAX_NODES + 10 }, () => ({})) } },
+      ]) {
+         const actor = mockDocument(
+            {
+               documentName: 'Actor',
+               id: 'MOCKACTOR0000009',
+               source,
+            },
+            vi.fn,
+         );
+         /** @type {ReturnType<typeof exportDocument>} The export. */
+         const outcome = exportDocument(actor, {});
+         expect(outcome.ok).toBe(true);
+         expect(outcome.partial).toBe(true);
+         expect(exportDocument(actor, { derived: true }).partial).toBe(true);
+      }
+      const whole = mockDocument(
+         {
+            documentName: 'Actor',
+            id: 'MOCKACTOR0000010',
+            source: { system: { hp: 1 } },
+         },
+         vi.fn,
+      );
+      expect(exportDocument(whole, {}).partial).toBeUndefined();
+   });
+});

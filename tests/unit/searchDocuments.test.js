@@ -1183,3 +1183,33 @@ describe('search_documents row size', () => {
       });
    });
 });
+
+describe('search_documents: the partial notice', () => {
+   it('marks the page partial when an export it read left part of a document out', async () => {
+      /** @type {Record<string, unknown>} A subtree nested deeper than the redaction walk enters. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 30; level += 1) {
+         deep = { next: deep };
+      }
+      installWorld(
+         {
+            documents: actors(3, (index) => (index === 1
+               ? {
+                  source: {
+                     system: {
+                        level: index,
+                        deep,
+                     },
+                  },
+               }
+               : {})),
+         },
+         vi.fn,
+      );
+      expect((await search({
+         documentName: 'Actor',
+         fields: ['system.level'],
+      })).partial).toBe(true);
+      expect((await search({ documentName: 'Actor' })).partial).toBeUndefined();
+   });
+});

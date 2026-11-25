@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GATES, closedGateState } from '$shared/gates.js';
 import { GATE_DENIED } from '$shared/protocol.js';
 import { readGateState, requireGate, gateNameFromSettingKey } from '~/bridge/gates.js';
@@ -156,6 +156,45 @@ describe('gateNameFromSettingKey', () => {
       ];
       for (const key of keys) {
          expect(gateNameFromSettingKey(key), String(key)).toBeNull();
+      }
+   });
+});
+
+describe('readGateState notices', () => {
+   it('logs each stored plugin module entry that is not a module id, once per stored value', () => {
+      /** @type {import('vitest').MockInstance} The console warning spy. */
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+         stored.allowedPluginModules = 'good-mod,MOCK Bad Mod,dot.ted';
+         expect(readGateState().allowedPluginModules).toEqual(['good-mod']);
+         readGateState();
+         expect(warn.mock.calls.map(([line]) => line)).toEqual([
+            'Wiretap | allowedPluginModules ignores "MOCK Bad Mod": a module id holds only letters, digits, _ and -.',
+            'Wiretap | allowedPluginModules ignores "dot.ted": a module id holds only letters, digits, _ and -.',
+         ]);
+         warn.mockClear();
+         stored.allowedPluginModules = 'good-mod, other_mod';
+         readGateState();
+         expect(warn).not.toHaveBeenCalled();
+      } finally {
+         warn.mockRestore();
+      }
+   });
+
+   it('cleans and bounds the entry it names', () => {
+      /** @type {import('vitest').MockInstance} The console warning spy. */
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+         stored.allowedPluginModules = `MOCK${String.fromCharCode(7)}bell,${'x'.repeat(200)}!`;
+         readGateState();
+         /** @type {string[]} The lines logged. */
+         const lines = warn.mock.calls.map(([line]) => line);
+         expect(lines).toHaveLength(2);
+         expect(lines[0]).toContain('"MOCK bell"');
+         expect(lines[1]).toContain('…"');
+         expect(lines[1].length).toBeLessThan(160);
+      } finally {
+         warn.mockRestore();
       }
    });
 });

@@ -519,3 +519,51 @@ describe('describe_schema with a path', () => {
       expect(result.cut).toBe(true);
    });
 });
+
+describe('describe_schema notices for lists and examples it shortens', () => {
+   it('marks the outline cut when the class has more fields than an outline lists', async () => {
+      /** @type {Record<string, F.DataField>} One more field than an outline lists. */
+      const fields = Object.fromEntries(Array.from({ length: 81 }, (_, index) => [
+         `f${index}`,
+         new F.NumberField(),
+      ]));
+      globalThis.CONFIG.Item = { documentClass: documentClass('Item', fields) };
+      /** @type {Record<string, unknown>} The description. */
+      const result = await describe_({ documentName: 'Item' });
+      expect(result.outline).toHaveLength(80);
+      expect(result.outlineCut).toBe(true);
+   });
+
+   it('counts the example keys it leaves out when the example is cut', async () => {
+      /** @type {Record<string, string>} Sixty large blank fields, past the result budget. */
+      const blank = Object.fromEntries(Array.from({ length: 60 }, (_, index) => [
+         `k${index}`,
+         'MOCK'.repeat(80),
+      ]));
+      globalThis.CONFIG.Item = { documentClass: documentClass('Item', { name: new F.StringField() }, { blank }) };
+      /** @type {Record<string, unknown>} The description. */
+      const result = await describe_({ documentName: 'Item' });
+      expect(result.exampleCut).toBe(true);
+      expect(result.exampleKeys).toHaveLength(40);
+      // The blank export holds `_id`, `name` and `uuid` beside the sixty fields.
+      expect(result.exampleKeysMore).toBe(Object.keys(blank).length + 3 - 40);
+   });
+
+   it('marks the example partial when its export leaves part of the blank document out', async () => {
+      /** @type {Record<string, unknown>} A subtree nested deeper than the redaction walk enters. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 30; level += 1) {
+         deep = { next: deep };
+      }
+      globalThis.CONFIG.Item = {
+         documentClass: documentClass('Item', { name: new F.StringField() }, { blank: { deep } }),
+      };
+      expect((await describe_({ documentName: 'Item' })).examplePartial).toBe(true);
+      expect((await describe_({
+         documentName: 'Item',
+         path: 'name',
+      })).examplePartial).toBe(true);
+      globalThis.CONFIG.Item = { documentClass: documentClass('Item', { name: new F.StringField() }) };
+      expect((await describe_({ documentName: 'Item' })).examplePartial).toBeUndefined();
+   });
+});
