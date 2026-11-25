@@ -88,6 +88,8 @@ describe('keepId never overwrites a document that exists', () => {
       });
       expect(error?.code).toBe('ARGS_INVALID');
       expect(error.message).toContain('already exists');
+      // Foundry's server refuses a taken embedded id itself, so the message claims no overwrite.
+      expect(error.message).not.toContain('overwritten');
       expect(actor.createEmbeddedDocuments).not.toHaveBeenCalled();
    });
 

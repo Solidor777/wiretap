@@ -347,9 +347,9 @@ async function resolveCreateTarget(documentName, parentUuid, pack) {
 /**
  * Refuse `keepId` data whose `_id` is already taken in the collection it would land in, with one early `ARGS_INVALID`.
  * Foundry 14.364's server `_createDocuments` (`dist/database/backend/server-backend.mjs`) throws "The _id [..] already
- * exists within the parent collection" for a taken embedded id and has no such check for a top-level document; for a
- * world document it overwrites the stored document (MEASURED) while the client keeps its old copy, so the world and
- * the client disagree afterwards.
+ * exists within the parent collection" for a taken embedded id (MEASURED: the create rejects with that text and the
+ * stored item is unchanged) and has no such check for a top-level document: a taken world id resolves and overwrites
+ * the stored document (MEASURED), and the client's world collection then holds the new document under that id.
  * @param {string} documentName - The class created.
  * @param {Awaited<ReturnType<typeof resolveCreateTarget>>} target - Where the documents land.
  * @param {Record<string, unknown>[]} data - The data of each document.
@@ -384,7 +384,7 @@ async function refuseTakenIds(documentName, target, data) {
       if (taken) {
          throw new ScriptError(
             'ARGS_INVALID',
-            `keepId: ${documentName} '${shown}' already exists and would be overwritten. Use update_documents or ` +
+            `keepId: ${documentName} '${shown}' already exists. Use update_documents or ` +
                'replace_document, or leave out keepId.',
          );
       }
