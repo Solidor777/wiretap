@@ -649,7 +649,8 @@ function sessionIdOf(req: http.IncomingMessage): string | undefined {
  * with its own server, transport, tool set and result-handle owner; GET opens the session's event stream, POST carries
  * requests and DELETE ends the session. The tool set of a session is the built-in tools, the caller's tools and the
  * tools registered by the Foundry endpoint it routes to; when those change, the session is sent one debounced
- * `notifications/tools/list_changed`. Sessions expire after an idle period and are capped in number.
+ * `notifications/tools/list_changed`. Sessions expire after an idle period; their number is not capped, and a log line
+ * warns past `MCP_SESSIONS_MAX`.
  * @param {FoundryBridge} bridge - The Foundry bridge the tools execute against.
  * @param {number} port - The TCP port to listen on.
  * @param {McpServerOptions} [options] - Extra tools, the server instructions, a handle store, session settings, HTTP
