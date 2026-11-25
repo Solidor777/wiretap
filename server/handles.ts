@@ -92,6 +92,8 @@ export interface HandleStoreOptions {
    maxEntryBytes?: number;
    /** Most handles held at once (default: the `HANDLE_MAX_COUNT` budget). */
    maxCount?: number;
+   /** Receives the sidecar log line a put that evicts handles writes (default: `console.log`). */
+   log?: (line: string) => void;
 }
 
 /** A per-owner, in-memory store of large results addressed by opaque handles. */
@@ -169,20 +171,20 @@ function fail(code: string, message: string): Failure {
 }
 
 /**
- * The failure for every handle that cannot be read: unknown, expired, evicted or owned by another session. One answer
- * for all four so a caller cannot probe which handles exist.
- * @returns {Failure} The failure.
- */
-function notFound(): Failure {
-   return fail('HANDLE_NOT_FOUND', 'Handle not found or expired.');
-}
-
-/**
  * The failure for a window that cannot hold even the next character.
  * @returns {Failure} The failure.
  */
 function windowTooSmall(): Failure {
    return fail('HANDLE_WINDOW_TOO_SMALL', 'maxBytes is too small for the next character; raise it.');
+}
+
+/**
+ * Describe a count of evicted handles.
+ * @param {number} count - How many handles were evicted.
+ * @returns {string} The count followed by "least recently used handle" or "handles".
+ */
+function evictedHandles(count: number): string {
+   return `${count} least recently used handle${count === 1 ? '' : 's'}`;
 }
 
 /**
@@ -308,8 +310,9 @@ export function boundedStringify(value: unknown, maxUnits: number): BoundedText 
  * Create a handle store. Values live in memory only. Each entry is accounted as the larger of its UTF-8 and UTF-16
  * size plus a fixed overhead; the oldest-used handles are evicted when the accounted capacity or the handle count is
  * exceeded, and a handle unread for the idle limit expires. A handle is readable only by the owner key that stored it.
- * The store has no timers; expired entries are released on the next `put` or `slice`.
- * @param {HandleStoreOptions} [options] - Clock, capacity, entry limit, count limit and idle limit overrides.
+ * The store has no timers; expired entries are released on the next `put` or `slice`. A put that evicts handles
+ * writes one log line naming the bound and the count, and the not-found answer names the idle, count and byte bounds.
+ * @param {HandleStoreOptions} [options] - Clock, capacity, entry limit, count limit, idle limit and log overrides.
  * @returns {HandleStore} An empty store.
  */
 export function createHandleStore(options: HandleStoreOptions = {}): HandleStore {
@@ -323,6 +326,8 @@ export function createHandleStore(options: HandleStoreOptions = {}): HandleStore
    const maxEntryBytes: number = options.maxEntryBytes ?? getBudget('HANDLE_ENTRY_MAX_BYTES').value;
    // The most handles held at once.
    const maxCount: number = options.maxCount ?? getBudget('HANDLE_MAX_COUNT').value;
+   // The sidecar log sink.
+   const log: (line: string) => void = options.log ?? ((line) => console.log(line));
    // The default window bound.
    const defaultMaxBytes: number = getBudget('RESULT_HARD_CAP_DEFAULT_BYTES').value;
    // The largest window bound a caller may ask for.
@@ -332,6 +337,39 @@ export function createHandleStore(options: HandleStoreOptions = {}): HandleStore
    const entries: Map<string, HandleEntry> = new Map();
    // Total accounted bytes of the stored entries.
    let totalBytes: number = 0;
+
+   /**
+    * The failure for every handle that cannot be read: unknown, expired, evicted or owned by another session. One
+    * answer for all four so a caller cannot probe which handles exist; it names the bounds that expire and evict.
+    * @returns {Failure} The failure.
+    */
+   function notFound(): Failure {
+      return fail(
+         'HANDLE_NOT_FOUND',
+         `Handle not found: it may have expired (${idleMs / 1000} s unread) or been evicted (${maxCount} handles `
+            + `and ${maxTotalBytes} bytes are kept).`,
+      );
+   }
+
+   /**
+    * Write the log line of a put that evicted handles, one clause per bound that evicted any.
+    * @param {number} byCount - Handles evicted because the store held `maxCount` handles.
+    * @param {number} byBytes - Handles evicted because the new value did not fit in `maxTotalBytes`.
+    * @returns {void}
+    */
+   function logEvictions(byCount: number, byBytes: number): void {
+      // One clause per bound that evicted a handle.
+      const clauses: string[] = [];
+      if (byCount > 0) {
+         clauses.push(`${evictedHandles(byCount)} at the ${maxCount}-handle bound`);
+      }
+      if (byBytes > 0) {
+         clauses.push(`${evictedHandles(byBytes)} at the ${maxTotalBytes}-byte bound`);
+      }
+      if (clauses.length > 0) {
+         log(`Wiretap sidecar | handle store evicted ${clauses.join(' and ')}`);
+      }
+   }
 
    /**
     * Remove one entry and release its bytes.
@@ -394,14 +432,23 @@ export function createHandleStore(options: HandleStoreOptions = {}): HandleStore
             );
          }
          purgeExpired();
+         // Handles evicted by this put at the count bound and at the byte bound.
+         let byCount: number = 0;
+         let byBytes: number = 0;
          while (entries.size > 0 && (entries.size >= maxCount || totalBytes + accounted > maxTotalBytes)) {
             // The least recently used handle.
             const oldest: IteratorResult<string> = entries.keys().next();
             if (oldest.done) {
                break;
             }
+            if (entries.size >= maxCount) {
+               byCount += 1;
+            } else {
+               byBytes += 1;
+            }
             drop(oldest.value);
          }
+         logEvictions(byCount, byBytes);
          // The new opaque id.
          const handle: string = randomBytes(HANDLE_ID_BYTES).toString('base64url');
          entries.set(handle, {

@@ -37,6 +37,7 @@ async function enforce(result, args = {}, options = {}) {
    const wrapped = withResultBudget(async () => result, {
       store,
       ownerKey: OWNER,
+      toolName: 'mock_tool',
       budgetBytes: options.budgetBytes,
    });
    return {
@@ -173,6 +174,23 @@ describe('threshold', () => {
    ])('honours a per-call %s', async (_label, maxBytes, size, expectHandle) => {
       const { out } = await enforce(textResult('a'.repeat(size)), { maxBytes });
       expect(out.content[0].text.startsWith('{"handle"')).toBe(expectHandle);
+   });
+
+   it('says in the handle response that a maxBytes over 16,000 was lowered, and to what', async () => {
+      const { out } = await enforce(textResult('a'.repeat(16001)), { maxBytes: 99999 });
+      expect(JSON.parse(out.content[0].text).maxBytesLowered).toBe(16000);
+   });
+
+   it('says a maxBytes over the tool budget was lowered to the budget', async () => {
+      const { out } = await enforce(textResult('a'.repeat(1001)), { maxBytes: 5000 }, { budgetBytes: 1000 });
+      expect(JSON.parse(out.content[0].text).maxBytesLowered).toBe(1000);
+   });
+
+   it('adds no lowering note when maxBytes was not lowered', async () => {
+      const { out } = await enforce(textResult('a'.repeat(16001)), { maxBytes: 16000 });
+      expect(JSON.parse(out.content[0].text)).not.toHaveProperty('maxBytesLowered');
+      const plain = await enforce(textResult('a'.repeat(8001)));
+      expect(JSON.parse(plain.out.content[0].text)).not.toHaveProperty('maxBytesLowered');
    });
 
    it.each([
@@ -1119,6 +1137,38 @@ describe('unmeasured fields are dropped', () => {
       ]);
       expect(out.structuredContent).toEqual({ value: 1 });
       expect(Buffer.byteLength(JSON.stringify(out), 'utf8')).toBeLessThan(1000);
+   });
+
+   it('logs the tool and the names of the fields it drops', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      /** @type {Function} The wrapped handler of a named tool. */
+      const wrapped = withResultBudget(async () => ({
+         content: [
+            {
+               type: 'text',
+               text: 'ok',
+               annotations: { audience: ['user'] },
+            },
+         ],
+         _meta: { pad: 'p' },
+         extra: 1,
+      }), {
+         store: createHandleStore(),
+         ownerKey: OWNER,
+         toolName: 'mock_tool',
+      });
+      await wrapped({});
+      expect(warn.mock.calls.map((call) => call[0])).toEqual([
+         'Wiretap sidecar | mock_tool result fields dropped: _meta, extra, content.annotations',
+      ]);
+      warn.mockRestore();
+   });
+
+   it('logs nothing when a result has no field to drop', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await enforce(textResult('ok'));
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
    });
 
    it('drops top-level _meta and unknown fields from a result with only content', async () => {

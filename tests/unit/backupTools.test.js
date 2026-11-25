@@ -1452,6 +1452,32 @@ describe('list_backups and delete_backup', () => {
       expect(/** @type {unknown[]} */ (large.rows).length).toBeLessThan(30);
    });
 
+   it('says how many files the listing did not read when the header read bound stopped it', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      /** @type {ToolRegistration[]} Tools over a store whose listing stopped at the read bound. */
+      const tools = createBackupTools({
+         bridge: fixture.bridge,
+         store: {
+            ...fixture.store,
+            list: () => ({
+               rows: [],
+               total: 1500,
+               invalid: 1000,
+               unread: 500,
+            }),
+         },
+      })(undefined);
+      /** @type {Record<string, unknown>} The `list_backups` reply over the stopped listing. */
+      const listing = await callTool(tools, 'list_backups', {});
+      expect(listing).toMatchObject({
+         total: 1500,
+         invalid: 1000,
+         unread: 500,
+      });
+      expect((await fixture.call('list_backups', {})).unread).toBeUndefined();
+   });
+
    it('fitListResult and fitRestoreResult leave a fitting result unchanged', () => {
       /** @type {object} A small listing. */
       const small = {

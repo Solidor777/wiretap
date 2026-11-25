@@ -253,7 +253,7 @@ function fitRows(result: object, maxBytes: number): object {
 
 /**
  * Fit a `list_backups` result to a byte budget by dropping rows from the end.
- * @param {object} result - The listing `{ folder, rows, total, invalid? }`.
+ * @param {object} result - The listing `{ folder, rows, total, invalid?, unread? }`.
  * @param {number} maxBytes - The JSON size limit in UTF-8 bytes.
  * @returns {object} The result, with fewer rows and `cut: true` when any was dropped.
  */
@@ -891,7 +891,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
       const limit: number = args.limit ?? LIST_LIMIT_DEFAULT;
       warnPast('list_backups', 'limit', limit, LIST_LIMIT_GUIDELINE);
       // The folder's backups, newest first, with full notes.
-      const { rows, total, invalid }: BackupListing = store.list(folder, limit);
+      const { rows, total, invalid, unread }: BackupListing = store.list(folder, limit);
       return jsonResult(fitListResult({
          folder: folder.kind,
          rows: rows.map(([file, created, documents, note]) => [
@@ -902,6 +902,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
          ]),
          total,
          ...(invalid > 0 ? { invalid } : {}),
+         ...(unread > 0 ? { unread } : {}),
       }, getBudget('BACKUP_LIST_MAX_BYTES').value));
    }
 

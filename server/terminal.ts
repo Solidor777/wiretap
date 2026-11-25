@@ -20,6 +20,10 @@ import { writeMcpConfig } from './mcpConfigFile.ts';
 // Largest accepted terminal dimension in columns or rows; bounds what an untrusted client can hand to node-pty.
 const MAX_TERMINAL_DIMENSION: number = 1000;
 
+// The output chunk sent only to a socket whose launch is ignored because a terminal already runs; the client shows
+// terminal output as it arrives, so the GM sees why nothing new started.
+const LAUNCH_IGNORED_NOTICE: string = '\r\n[Wiretap] A terminal is already running; the launch was ignored.\r\n';
+
 interface LaunchPayload {
    command?: string;
    cols?: number;
@@ -139,15 +143,19 @@ export function createTerminalManager(
    }
 
    /**
-    * Spawn the PTY if none is running. A payload that is not an object, whose `command` is neither absent nor a
-    * string, or whose `cols` or `rows` is present but not an integer within 1..MAX_TERMINAL_DIMENSION, launches
-    * nothing: the payload comes from an untrusted socket event. An absent `cols` or `rows` keeps the stored size. The
+    * Spawn the PTY if none is running; a launch while one runs is ignored with one log line, and the launching socket
+    * alone is sent `LAUNCH_IGNORED_NOTICE` as terminal output (it is not kept in the scrollback). A payload that is
+    * not an object, whose `command` is neither absent nor a string, or whose `cols` or `rows` is present but not an
+    * integer within 1..MAX_TERMINAL_DIMENSION, launches nothing: the payload comes from an untrusted socket event. An absent `cols` or `rows` keeps the stored size. The
     * payload's `scrollback` sets the replay size for this PTY (any value that is not a positive integer gives the
     * default); a size past `TERMINAL_SCROLLBACK_WARN` is kept and logged once.
+    * @param {Socket} socket - The socket that asked for the launch.
     * @param {LaunchPayload} payload - The launch parameters.
     */
-   function launch(payload: LaunchPayload): void {
+   function launch(socket: Socket, payload: LaunchPayload): void {
       if (term) {
+         console.warn('Wiretap sidecar | terminal launch ignored: a terminal is already running');
+         socket.emit(TERMINAL_DATA, { chunk: LAUNCH_IGNORED_NOTICE });
          return;
       }
       if (
@@ -211,7 +219,7 @@ export function createTerminalManager(
          if (term && scrollback) {
             socket.emit(TERMINAL_DATA, { chunk: scrollback });
          }
-         socket.on(TERMINAL_LAUNCH, (payload: LaunchPayload) => launch(payload));
+         socket.on(TERMINAL_LAUNCH, (payload: LaunchPayload) => launch(socket, payload));
          socket.on(TERMINAL_INPUT, (payload: InputPayload) => {
             if (!isObjectPayload(payload) || typeof payload.data !== 'string') {
                console.warn('Wiretap sidecar | terminal input ignored: the payload data is not a string');

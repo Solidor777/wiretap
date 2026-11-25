@@ -369,7 +369,8 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    /**
     * Apply a `bridge:registry` payload (`{ apiVersion, scripts }`) to a registered endpoint and ack the outcome. A
     * payload that is not a registry object of the current api version, or one whose processing throws, clears the
-    * endpoint's tools (fail closed) and acks OP_FAILED.
+    * endpoint's tools (fail closed), acks OP_FAILED and writes a throttled log line naming the endpoint socket and
+    * saying its tools were cleared.
     * @param {Socket} socket - The sending socket.
     * @param {unknown} payload - The untrusted payload.
     * @param {unknown} ack - The ack callback, if any.
@@ -391,7 +392,10 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
          const outcome: RegistryOutcome = sanitizeRegistry(payload, logRegistryLine);
          if (!outcome.ok) {
             registry.setTools(socket.id, []);
-            logRegistryLine(`Wiretap sidecar | registry payload from ${socket.id} refused: ${outcome.reason}`);
+            logRegistryLine(
+               `Wiretap sidecar | registry payload from ${socket.id} refused: ${outcome.reason}; `
+                  + 'its tools were cleared',
+            );
             reply(ack, {
                ok: false,
                error: {
@@ -409,7 +413,9 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
          });
       } catch (cause) {
          registry.setTools(socket.id, []);
-         logRegistryLine(`Wiretap sidecar | registry from ${socket.id} failed: ${describeCause(cause)}`);
+         logRegistryLine(
+            `Wiretap sidecar | registry from ${socket.id} failed: ${describeCause(cause)}; its tools were cleared`,
+         );
          reply(ack, {
             ok: false,
             error: {

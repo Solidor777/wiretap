@@ -25,6 +25,10 @@ import {
    PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
 
+/** @type {string} The answer for a handle that cannot be read, with the default store bounds. */
+const HANDLE_NOT_FOUND_TEXT = 'HANDLE_NOT_FOUND: Handle not found: it may have expired (1800 s unread) or been evicted '
+   + '(1024 handles and 64000000 bytes are kept).';
+
 /** @type {string[]} The timer functions the tests fake once everything is connected. */
 const FAKED = [
    'setTimeout',
@@ -871,7 +875,7 @@ describe('stateful MCP sessions', () => {
             arguments: { handle },
          });
          expect(stolen.isError).toBe(true);
-         expect(stolen.content[0].text).toBe('HANDLE_NOT_FOUND: Handle not found or expired.');
+         expect(stolen.content[0].text).toBe(HANDLE_NOT_FOUND_TEXT);
          const own = await owner.client.callTool({
             name: 'read_handle',
             arguments: {
