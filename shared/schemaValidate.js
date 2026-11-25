@@ -21,7 +21,8 @@
  * most 100,000; every array declaring a `maxItems` of at most `SCHEMA_ARRAY_ITEMS_MAX`; node descriptions of at most
  * `DESCRIPTION_MAX_CHARS`) refuse a `shipped` schema and only warn for a `plugin` schema: one `guidelineWarning` line
  * per guideline passed, carrying the largest measured value, in `SCHEMA_GUIDELINES` order. A plugin array without
- * `maxItems` has no item cap. The sidecar imports these limits and helpers from here.
+ * `maxItems` has no item cap. The item guideline does not apply to the tools in `UNCAPPED_LIST_TOOLS`, whose arrays
+ * declare no `maxItems` and have no item cap. The sidecar imports these limits and helpers from here.
  *
  * Semantics follow zod's object handling: an undeclared property is dropped from the validated copy when the object
  * does not declare `additionalProperties: false` (never an error), and is an error when it does (zod's `strict`). A
@@ -184,6 +185,24 @@ export const TYPE_KEYWORDS = Object.freeze({
 });
 
 /**
+ * The shipped tools whose list arguments have no item cap: a call carries as many documents, update entries, uuids,
+ * paths, fields and filters as the GM sends, so the item guideline (`maxItemsMissing`, `maxItems`) does not apply to
+ * their arrays. A call stays bounded by `VALUE_NODES_MAX`, the MCP request body bound (inline arguments) and the
+ * sidecar's 64 MB handle-input total (handle arguments); the scripts log one warning line past each best-practice size
+ * (`src/bridge/scripts/sizeNotes.js`). Implicit coupling: `server/toolRegistry.ts` judges the same names.
+ * @type {readonly string[]}
+ */
+export const UNCAPPED_LIST_TOOLS = Object.freeze([
+   'create_documents',
+   'update_documents',
+   'delete_documents',
+   'replace_document',
+   'batch',
+   'get_document',
+   'search_documents',
+]);
+
+/**
  * The complexity guidelines, in the order their warnings are emitted.
  * @type {readonly string[]}
  */
@@ -251,6 +270,8 @@ export function guidelineWarning(guideline, measured) {
  * @property {number} nodes - Schema nodes compiled so far, the root included.
  * @property {boolean} strictNested - Whether every object below the root refuses an undeclared key.
  * @property {SchemaSource} source - Who wrote the schema; decides whether a guideline refuses or warns.
+ * @property {boolean} uncappedLists - Whether the schema's tool is in `UNCAPPED_LIST_TOOLS`, so the item guideline does
+ * not apply to its arrays.
  * @property {Map<string, number>} measured - The largest measured value of each guideline a plugin schema passed.
  */
 
@@ -473,18 +494,21 @@ function compileArray(node, depth, counter) {
    const element = compileNode(ownValue(node, 'items'), depth + 1, counter);
    /** @type {number | undefined} The declared minimum item count. */
    const minItems = readBound(node, 'minItems', counter);
-   /** @type {number} The item cap guideline, which binds every shipped array. */
+   /** @type {number} The item cap guideline, which binds every shipped array outside `UNCAPPED_LIST_TOOLS`. */
    const itemsCap = getBudget('SCHEMA_ARRAY_ITEMS_MAX').value;
    /** @type {string} The reason a shipped array over the item guideline is refused with. */
    const capReason = `an array schema needs a maxItems of 0 to ${itemsCap}`;
    // A shipped maxItems over the bound guideline is also over the tighter item cap, so it is refused with the cap text.
    /** @type {number | undefined} The declared maximum item count; a plugin array may leave it out. */
    const maxItems = readBound(node, 'maxItems', counter, capReason);
-   if (maxItems === undefined) {
-      // A missing cap counts as one array over the guideline; its warning carries no measured value.
-      holdGuideline(counter, 'maxItemsMissing', 1, 0, capReason);
-   } else {
-      holdGuideline(counter, 'maxItems', maxItems, itemsCap, capReason);
+   // The arrays of a tool in `UNCAPPED_LIST_TOOLS` have no item cap, so they are not held to the item guideline.
+   if (!counter.uncappedLists) {
+      if (maxItems === undefined) {
+         // A missing cap counts as one array over the guideline; its warning carries no measured value.
+         holdGuideline(counter, 'maxItemsMissing', 1, 0, capReason);
+      } else {
+         holdGuideline(counter, 'maxItems', maxItems, itemsCap, capReason);
+      }
    }
    return (value, path, state) => {
       if (!Array.isArray(value)) {
@@ -785,9 +809,11 @@ function listedNode(node) {
  * pays for): the client checks the size of that form, not of the raw schema, so it refuses what the sidecar refuses.
  * `tests/unit/schemaValidate.test.js` asserts `listed` equals the sidecar's listing for the parity fixtures.
  * @param {unknown} schema - The JSON Schema of the arguments.
- * @param {{ strictNested?: boolean, source?: SchemaSource }} [options] - `strictNested`: every object below the root
- * refuses an undeclared key, though the listed form does not say so (it would take definition budget). `source`
- * (default `shipped`): a `plugin` schema over a complexity guideline compiles with a warning instead of being refused.
+ * @param {{ strictNested?: boolean, source?: SchemaSource, tool?: string }} [options] - `strictNested`: every object
+ * below the root refuses an undeclared key, though the listed form does not say so (it would take definition budget).
+ * `source` (default `shipped`): a `plugin` schema over a complexity guideline compiles with a warning instead of being
+ * refused. `tool`: the name of the tool the schema belongs to; a name in `UNCAPPED_LIST_TOOLS` lifts the item
+ * guideline.
  * @returns {CompileOutcome} The validator, listed form and warnings, or the short reason the schema is refused. Never
  * throws.
  */
@@ -801,6 +827,7 @@ export function compileSchema(schema, options = {}) {
          nodes: 0,
          strictNested: options.strictNested === true,
          source: options.source === 'plugin' ? 'plugin' : 'shipped',
+         uncappedLists: typeof options.tool === 'string' && UNCAPPED_LIST_TOOLS.includes(options.tool),
          measured: new Map(),
       };
       /** @type {CompiledNode} The compiled root. */

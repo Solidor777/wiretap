@@ -19,6 +19,7 @@ import {
    SCHEMA_NODES_MAX,
    SCHEMA_PLUGIN_DEPTH_MAX,
    SCHEMA_PROPERTIES_MAX,
+   UNCAPPED_LIST_TOOLS,
    COMMON_KEYWORDS,
    TYPE_KEYWORDS,
    guidelineWarning,
@@ -107,6 +108,8 @@ interface ConvertState {
    strictNested: boolean;
    /** Who wrote the schema; decides whether a guideline refuses or warns. */
    source: SchemaSource;
+   /** Whether the schema's tool is in `UNCAPPED_LIST_TOOLS`, so the item guideline does not apply to its arrays. */
+   uncappedLists: boolean;
    /** The largest measured value of each guideline a plugin schema passed. */
    measured: Map<string, number>;
 }
@@ -309,18 +312,24 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
          if (minItems !== undefined) {
             list = list.min(minItems);
          }
-         // The item cap guideline, which binds every shipped array.
+         // The item cap guideline, which binds every shipped array outside `UNCAPPED_LIST_TOOLS`.
          const itemsCap: number = getBudget('SCHEMA_ARRAY_ITEMS_MAX').value;
          // The reason a shipped array over the item guideline is refused with.
          const capReason: string = `an array schema needs a maxItems of 0 to ${itemsCap}`;
-         // The declared item cap; a plugin array may leave it out and is then listed and parsed without one. A shipped
-         // maxItems over the bound guideline is also over the tighter item cap, so it is refused with the cap text.
+         // The declared item cap; a plugin array, or an array of a tool in `UNCAPPED_LIST_TOOLS`, may leave it out and
+         // is then listed and parsed without one. A shipped maxItems over the bound guideline is also over the tighter
+         // item cap, so it is refused with the cap text.
          const maxItems: number | undefined = readBound(node, 'maxItems', state, capReason);
-         if (maxItems === undefined) {
-            // A missing cap counts as one array over the guideline; its warning carries no measured value.
-            holdGuideline(state, 'maxItemsMissing', 1, 0, capReason);
-         } else {
-            holdGuideline(state, 'maxItems', maxItems, itemsCap, capReason);
+         // The arrays of a tool in `UNCAPPED_LIST_TOOLS` are not held to the item guideline.
+         if (!state.uncappedLists) {
+            if (maxItems === undefined) {
+               // A missing cap counts as one array over the guideline; its warning carries no measured value.
+               holdGuideline(state, 'maxItemsMissing', 1, 0, capReason);
+            } else {
+               holdGuideline(state, 'maxItems', maxItems, itemsCap, capReason);
+            }
+         }
+         if (maxItems !== undefined) {
             list = list.max(maxItems);
          }
          result = list;
@@ -441,16 +450,19 @@ export function argumentSchema(converted: { shape: ZodRawShape; strict: boolean 
  * conversion is linear in the schema.
  * Plugin switch: the complexity guidelines of `shared/schemaValidate.js` (`SCHEMA_GUIDELINES`) refuse a `shipped`
  * schema and only warn for a `plugin` one, with the same rules and texts as `compileSchema` there; a plugin array
- * without `maxItems` has no `.max()`.
+ * without `maxItems` has no `.max()`. The item guideline does not apply to the tools in `UNCAPPED_LIST_TOOLS`.
  * @param {unknown} schema - The untrusted JSON Schema.
  * @param {boolean} [strictNested] - Whether every object below the root refuses an undeclared key.
  * @param {SchemaSource} [source] - Who wrote the schema; `shipped` by default.
+ * @param {string} [tool] - The name of the tool the schema belongs to; a name in `UNCAPPED_LIST_TOOLS` lifts the item
+ * guideline.
  * @returns {ShapeOutcome} The shape and the guideline warnings, or the short reason the schema is refused.
  */
 export function jsonSchemaToZodShape(
    schema: unknown,
    strictNested: boolean = false,
    source: SchemaSource = 'shipped',
+   tool?: string,
 ): ShapeOutcome {
    try {
       if (!isRecord(schema) || ownValue(schema, 'type') !== 'object') {
@@ -461,6 +473,7 @@ export function jsonSchemaToZodShape(
          nodes: 0,
          strictNested,
          source,
+         uncappedLists: tool !== undefined && UNCAPPED_LIST_TOOLS.includes(tool),
          measured: new Map(),
       };
       const root: ZodType = convertNode(schema, 1, state);
@@ -530,7 +543,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>): ToolOutcome {
          reason: 'duplicate name in this registry',
       };
    }
-   const converted: ShapeOutcome = jsonSchemaToZodShape(inputSchema, strictNested === true, source);
+   const converted: ShapeOutcome = jsonSchemaToZodShape(inputSchema, strictNested === true, source, name);
    if (!converted.ok) {
       return converted;
    }

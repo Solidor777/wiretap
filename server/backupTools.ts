@@ -129,13 +129,6 @@ const TIMEOUT_MAX_MS: number = TIMER_DELAY_MAX_MS - REPLY_GRACE_MS;
 // Longest string a restore result may carry in a field or after the uuid of a row, in UTF-8 bytes.
 const RESTORE_STRING_MAX_BYTES: number = 256;
 
-// Most UTF-16 code units in one entry of a `uuids` argument.
-const UUID_ARG_MAX_CHARS: number = 256;
-
-// Longest uuid a restore row may carry, in UTF-8 bytes: a skipped row echoes an asked uuid, and one UTF-16 code unit
-// takes at most 3 UTF-8 bytes (a surrogate pair takes 4 for 2 units).
-const RESTORE_UUID_MAX_BYTES: number = UUID_ARG_MAX_CHARS * 3;
-
 // The count fields of a restore result; the client restore always sends each.
 const RESTORE_COUNT_KEYS: readonly string[] = [
    'replaced',
@@ -410,15 +403,16 @@ function isShortStringArray(value: unknown, min: number, max: number): value is 
 }
 
 /**
- * Check that a value is a restore row `[uuid, state, reason?]`: a uuid of at most `RESTORE_UUID_MAX_BYTES` bytes, then
- * one or two strings of at most `RESTORE_STRING_MAX_BYTES` bytes.
+ * Check that a value is a restore row `[uuid, state, reason?]`: a uuid string, then one or two strings of at most
+ * `RESTORE_STRING_MAX_BYTES` bytes. The uuid has no length bound: no tool caps the length of a uuid (a skipped row
+ * echoes an asked uuid, the others carry the uuid of a backed-up document, whose pack id may be of any length), and the
+ * Socket.IO message bound (`maxHttpBufferSize`, 1,000,000 bytes) bounds the whole result the client sends.
  * @param {unknown} value - The untrusted value.
  * @returns {boolean} Whether it is such a row.
  */
 function isRestoreRow(value: unknown): boolean {
    return Array.isArray(value)
       && typeof value[0] === 'string'
-      && utf8Bytes(value[0]) <= RESTORE_UUID_MAX_BYTES
       && isShortStringArray(value.slice(1), 1, 2);
 }
 
@@ -949,7 +943,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
          .optional();
       // The shared `uuids` argument.
       const uuidsArg: z.ZodOptional<z.ZodArray<z.ZodString>> = z
-         .array(z.string().max(UUID_ARG_MAX_CHARS))
+         .array(z.string())
          .min(1)
          .optional();
       return [
@@ -959,9 +953,9 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
                + 'file. Use or offer before bulk or risky changes.',
             inputSchema: {
                uuids: uuidsArg,
-               folderUuid: z.string().max(256).optional(),
+               folderUuid: z.string().optional(),
                documentName: z.string().max(32).optional(),
-               pack: z.string().max(128).optional(),
+               pack: z.string().optional(),
                folder: folderArg,
                note: z.string().optional().describe('Short note.'),
                dryRun: z.boolean().optional().describe('Measure only.'),

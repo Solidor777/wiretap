@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { OP_CALL_TOOL } from '../../shared/protocol.js';
+import { OP_BACKUP_EXPORT, OP_CALL_TOOL } from '../../shared/protocol.js';
 import { shippedScripts } from '../unit/scriptFixtures.js';
 import { createHarness } from './mcpHarness.js';
 
@@ -192,6 +192,74 @@ describe('the pack tools over the bridge', () => {
          expect((await client.callTool(call)).isError).toBe(true);
       }
       expect(gm.invokes).toHaveLength(0);
+   });
+
+   it('creates a pack whose name is over 200 characters, then deletes it and backs it up by its id', async () => {
+      /** @type {string} A pack name of 201 characters. */
+      const name = `mock-${'p'.repeat(196)}`;
+      /** @type {string} The pack id Foundry gives a world pack of that name. */
+      const id = `world.${name}`;
+      const { gm, client } = await startWithShipped((request) => {
+         if (request.op === OP_BACKUP_EXPORT) {
+            return {
+               ok: true,
+               result: {
+                  documents: 0,
+                  bytes: 0,
+                  unreadable: 0,
+                  parents: 0,
+               },
+            };
+         }
+         return {
+            ok: true,
+            result: request.params.name === 'create_pack'
+               ? {
+                  id,
+                  label: 'MOCK_PACK_LONG',
+                  type: 'Actor',
+               }
+               : {
+                  id,
+                  deleted: true,
+               },
+         };
+      });
+      /** @type {Array<{ name: string, arguments: Record<string, unknown> }>} The three calls, in order. */
+      const calls = [
+         {
+            name: 'create_pack',
+            arguments: {
+               label: 'MOCK_PACK_LONG',
+               type: 'Actor',
+               name,
+            },
+         },
+         {
+            name: 'backup_documents',
+            arguments: {
+               pack: id,
+               dryRun: true,
+            },
+         },
+         {
+            name: 'delete_pack',
+            arguments: { id },
+         },
+      ];
+      for (const call of calls) {
+         /** @type {{ isError?: boolean, content: { type: string, text?: string }[] }} The tool result. */
+         const result = await client.callTool(call);
+         expect(result.isError, `${call.name}: ${textOf(result)}`).toBeFalsy();
+      }
+      expect(gm.invokes.map((request) => request.op)).toEqual([
+         OP_CALL_TOOL,
+         OP_BACKUP_EXPORT,
+         OP_CALL_TOOL,
+      ]);
+      expect(gm.invokes[0].params.arguments.name).toBe(name);
+      expect(gm.invokes[1].params.pack).toBe(id);
+      expect(gm.invokes[2].params.arguments.id).toBe(id);
    });
 
    it('a GM client error code reaches the agent as <code>: <message>', async () => {

@@ -587,7 +587,6 @@ describe('create_documents with fromUuids', () => {
       expect(createDocumentsDefinition.inputSchema.properties.fromUuids).toEqual({
          type: 'array',
          minItems: 1,
-         maxItems: getBudget('SCHEMA_ARRAY_ITEMS_MAX').value,
          items: { type: 'string' },
       });
       expect(createDocumentsDefinition.inputSchema.required).toEqual(['documentName']);
@@ -598,7 +597,7 @@ describe('create_documents with fromUuids', () => {
       expect(description).toContain('fromUuids');
       expect(description).toContain('idempotencyKey');
       /** @type {ReturnType<typeof compileSchema>} The compiled schema. */
-      const compiled = compileSchema(createDocumentsDefinition.inputSchema);
+      const compiled = compileSchema(createDocumentsDefinition.inputSchema, { tool: createDocumentsDefinition.name });
       expect(compiled.ok).toBe(true);
       expect(definitionBytes(createDocumentsDefinition.name, description, compiled.listed)).toBeLessThanOrEqual(800);
    });

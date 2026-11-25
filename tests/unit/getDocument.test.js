@@ -109,13 +109,13 @@ describe('get_document definition', () => {
       expect(getDocumentDefinition.result.budgetBytes).toBe(getBudget('RESULT_HARD_CAP_MAX_BYTES').value);
       /** @type {import('$shared/scripts.js').ScriptDefinition} The definition under test. */
       const { name, description, inputSchema } = getDocumentDefinition;
-      expect(definitionBytes(name, description, compileSchema(inputSchema).listed)).toBeLessThanOrEqual(
+      expect(definitionBytes(name, description, compileSchema(inputSchema, { tool: name }).listed)).toBeLessThanOrEqual(
          getBudget('DEFINITION_MAX_BYTES').value,
       );
       expect(description.length).toBeLessThanOrEqual(getBudget('DESCRIPTION_TARGET_CHARS').value);
    });
 
-   it('declares maxBytes as an optional integer up to 16000 and both path lists at the schema item guideline', () => {
+   it('declares maxBytes as an optional integer up to 16000 and both path lists with no item cap', () => {
       /** @type {{ properties: Record<string, any>, required: string[] }} The input schema under test. */
       const { properties, required } = getDocumentDefinition.inputSchema;
       expect(properties.maxBytes).toMatchObject({
@@ -123,8 +123,8 @@ describe('get_document definition', () => {
          maximum: getBudget('RESULT_HARD_CAP_MAX_BYTES').value,
       });
       expect(required ?? []).not.toContain('maxBytes');
-      expect(properties.paths.maxItems).toBe(getBudget('SCHEMA_ARRAY_ITEMS_MAX').value);
-      expect(properties.fields.maxItems).toBe(getBudget('SCHEMA_ARRAY_ITEMS_MAX').value);
+      expect(properties.paths.maxItems).toBeUndefined();
+      expect(properties.fields.maxItems).toBeUndefined();
    });
 
    it('declares ifChanged with no length bound and no ifModifiedSince, within 800 B listed', () => {
@@ -132,7 +132,9 @@ describe('get_document definition', () => {
       const { name, description, inputSchema } = getDocumentDefinition;
       expect(inputSchema.properties.ifChanged).toEqual({ type: 'string' });
       expect(Object.hasOwn(inputSchema.properties, 'ifModifiedSince')).toBe(false);
-      expect(definitionBytes(name, description, compileSchema(inputSchema).listed)).toBeLessThanOrEqual(800);
+      /** @type {ReturnType<typeof compileSchema>} The compiled schema. */
+      const compiled = compileSchema(inputSchema, { tool: name });
+      expect(definitionBytes(name, description, compiled.listed)).toBeLessThanOrEqual(800);
    });
 });
 

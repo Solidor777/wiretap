@@ -17,7 +17,8 @@ import { scriptRegistry } from '~/bridge/scripts/registry.js';
  * @property {string} moduleId - The registering module's id from its `module.json`; the module must be active.
  * @property {string} name - The short tool name, one or more of `A-Z`, `a-z`, `0-9`, `_` and `-`, without the
  * `<moduleId>__` prefix; Wiretap registers `<moduleId>__<name>`.
- * @property {string} version - A semver-like version of at most 32 characters.
+ * @property {string} version - A non-empty version; one that is not semver-like or is over 32 characters registers
+ * with a warning.
  * @property {string} description - One line that tells the agent what the tool does.
  * @property {Record<string, unknown>} inputSchema - The argument schema (the subset the sidecar converts).
  * @property {import('~/bridge/scripts/registry.js').ScriptHandler} handler - The code that runs a call.

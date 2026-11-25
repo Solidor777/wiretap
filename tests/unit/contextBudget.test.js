@@ -648,7 +648,7 @@ describe('context budgets of the real MCP server', () => {
          expect(textBytes(page)).toBeGreaterThan(getBudget('RESULT_HARD_CAP_DEFAULT_BYTES').value);
       });
 
-      it('accepts the maximum number of paths and rejects one more', async () => {
+      it('accepts more paths than the best-practice size', async () => {
          harness = await startHarness();
          const handle = await mintHandle();
          const limit = getBudget('PATHS_PER_CALL_MAX').value;
@@ -660,15 +660,14 @@ describe('context budgets of the real MCP server', () => {
             },
          });
          expect(accepted.isError).toBeFalsy();
-         const rejected = await harness.client.callTool({
+         const past = await harness.client.callTool({
             name: 'read_handle',
             arguments: {
                handle,
-               paths: Array.from({ length: limit + 1 }, () => 'name'),
+               paths: Array.from({ length: limit * 5 }, () => 'name'),
             },
          });
-         expect(rejected.isError).toBe(true);
-         expect(rejected.content[0].text).not.toContain('HANDLE_');
+         expect(past.isError).toBeFalsy();
       });
    });
 });

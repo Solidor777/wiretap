@@ -176,7 +176,7 @@ describe.each([
    });
 
    it('lists within the definition budget and the description limit', () => {
-      const compiled = compileSchema(definition.inputSchema);
+      const compiled = compileSchema(definition.inputSchema, { tool: definition.name });
       expect(compiled.ok).toBe(true);
       expect(definitionBytes(definition.name, definition.description, compiled.listed)).toBeLessThanOrEqual(
          getBudget('DEFINITION_MAX_BYTES').value,

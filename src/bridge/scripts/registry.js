@@ -185,6 +185,7 @@ export function createScriptRegistry(options = {}) {
             const compiled = compileSchema(normalized.inputSchema, {
                strictNested: normalized.strictNested === true,
                source,
+               tool: normalized.name,
             });
             if (!compiled.ok) {
                return refuse(label, `inputSchema: ${compiled.reason}`);

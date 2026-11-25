@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
-import { compileSchema } from '../../shared/schemaValidate.js';
+import { UNCAPPED_LIST_TOOLS, compileSchema } from '../../shared/schemaValidate.js';
 import { shippedScripts } from './scriptFixtures.js';
 import { argumentSchema, jsonSchemaToZodShape, sanitizeRegistry } from '../../server/toolRegistry.ts';
 
@@ -182,18 +182,61 @@ describe('sanitizeRegistry: strict tools', () => {
    });
 });
 
+describe('the item cap of the shipped list arguments', () => {
+   /**
+    * Collect the `maxItems` of every array node of a schema.
+    * @param {unknown} node - A JSON Schema node.
+    * @param {string} path - The dotted path of the node, for the assertion label.
+    * @returns {Array<[string, number | undefined]>} One `[path, maxItems]` pair per array node.
+    */
+   function arrayCaps(node, path) {
+      if (typeof node !== 'object' || node === null) {
+         return [];
+      }
+      /** @type {Record<string, any>} The node as a record. */
+      const record = /** @type {Record<string, any>} */ (node);
+      if (record.type === 'array') {
+         return [
+            [path, record.maxItems],
+            ...arrayCaps(record.items, `${path}[]`),
+         ];
+      }
+      return Object.entries(record.properties ?? {}).flatMap(([key, child]) => arrayCaps(child, `${path}.${key}`));
+   }
+
+   it('declares no maxItems on a list argument of the uncapped-list tools and one on every other', () => {
+      for (const definition of shippedScripts()) {
+         for (const [path, maxItems] of arrayCaps(definition.inputSchema, definition.name)) {
+            if (UNCAPPED_LIST_TOOLS.includes(definition.name)) {
+               expect(maxItems, path).toBeUndefined();
+            } else {
+               expect(maxItems, path).toBeTypeOf('number');
+            }
+         }
+      }
+   });
+});
+
 describe('the client lists every shipped definition as the sidecar does', () => {
    it('gives the same listed schema, so both measure the same bytes', () => {
       for (const definition of shippedScripts()) {
          const sidecar = toJsonSchemaCompat(
-            argumentSchema(jsonSchemaToZodShape(definition.inputSchema, definition.strictNested === true)),
+            argumentSchema(jsonSchemaToZodShape(
+               definition.inputSchema,
+               definition.strictNested === true,
+               'shipped',
+               definition.name,
+            )),
             {
                strictUnions: true,
                pipeStrategy: 'input',
             },
          );
          expect(
-            compileSchema(definition.inputSchema, { strictNested: definition.strictNested === true }).listed,
+            compileSchema(definition.inputSchema, {
+               strictNested: definition.strictNested === true,
+               tool: definition.name,
+            }).listed,
             definition.name,
          ).toEqual(sidecar);
       }

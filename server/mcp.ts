@@ -176,15 +176,29 @@ const MCP_DRAIN_MAX_BYTES: number = 8 * 1024 * 1024;
  * it.
  * The window text is the first content item and a footer `{offset, length, total}` (plus `truncated: true` when a
  * paths result was cut at the window size) the second; together they stay within the call's `maxBytes` (default: the
- * result hard cap).
+ * result hard cap). `paths` takes any number of paths; a call with more than `PATHS_PER_CALL_MAX` (the best-practice
+ * size) logs one warning line.
  * @param {HandleStore} store - The store holding the results.
  * @param {string} ownerKey - The owner key whose handles may be read.
+ * @param {(line: string) => void} log - The sidecar log sink, which receives the warning line.
  * @returns {ToolHandler<ReadHandleArgs>} An async handler mapping tool args to an MCP tool result.
  */
-export function makeReadHandleHandler(store: HandleStore, ownerKey: string): ToolHandler<ReadHandleArgs> {
+export function makeReadHandleHandler(
+   store: HandleStore,
+   ownerKey: string,
+   log: (line: string) => void,
+): ToolHandler<ReadHandleArgs> {
    // The result size limit when the call gives no `maxBytes`.
    const defaultBytes: number = getBudget('RESULT_HARD_CAP_DEFAULT_BYTES').value;
+   // The path count a call is warned past.
+   const pathsSize: number = getBudget('PATHS_PER_CALL_MAX').value;
    return async ({ handle, paths, offset, length, maxBytes }) => {
+      if (paths !== undefined && paths.length > pathsSize) {
+         log(
+            `Wiretap sidecar | read_handle: ${paths.length} paths in one call, over the ${pathsSize} `
+               + 'best-practice size',
+         );
+      }
       if (maxBytes !== undefined && maxBytes < READ_HANDLE_MIN_BYTES) {
          return {
             content: [
@@ -364,6 +378,7 @@ function makeRegistryToolHandler(
  * @param {string} instructions - The server instructions text.
  * @param {string} ownerKey - The session id, the owner of the session's handles.
  * @param {() => boolean} ownerLive - Whether that session is still held; a result is not stored for an ended one.
+ * @param {(line: string) => void} log - The sidecar log sink `read_handle` writes its warning line to.
  * @returns {SessionMcpServer} A configured server, not yet connected.
  */
 function buildServer(
@@ -374,6 +389,7 @@ function buildServer(
    instructions: string,
    ownerKey: string,
    ownerLive: () => boolean,
+   log: (line: string) => void,
 ): SessionMcpServer {
    // The per-session MCP server.
    const server: SessionMcpServer = new SessionMcpServer(
@@ -390,11 +406,7 @@ function buildServer(
          description: 'Read a slice of a stored large result: optional document paths, then offset and length.',
          inputSchema: {
             handle: z.string().max(64).describe('Handle from an earlier large result.'),
-            paths: z
-               .array(z.string())
-               .max(getBudget('PATHS_PER_CALL_MAX').value)
-               .optional()
-               .describe('Document paths to read.'),
+            paths: z.array(z.string()).optional().describe('Document paths to read.'),
             offset: z.number().int().min(0).optional().describe('First UTF-16 unit to return.'),
             length: z.number().int().min(1).optional().describe('Most UTF-16 units to return.'),
             maxBytes: z
@@ -405,7 +417,7 @@ function buildServer(
                .optional()
                .describe('Result size limit.'),
          },
-         handler: makeReadHandleHandler(store, ownerKey),
+         handler: makeReadHandleHandler(store, ownerKey, log),
       },
       ...backupTools,
       ...extraTools,
@@ -820,6 +832,7 @@ export function startMcpServer(
          instructions,
          id,
          () => manager.get(id) !== undefined,
+         log,
       );
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
          sessionIdGenerator: () => id,

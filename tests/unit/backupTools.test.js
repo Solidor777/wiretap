@@ -446,8 +446,8 @@ describe('backup_documents arguments', () => {
       expect(fixture.bridge.calls).toHaveLength(0);
    });
 
-   it('accepts any positive timeoutMs up to the timer limit less the reply grace, any uuid count and any list '
-      + 'limit', () => {
+   it('accepts any positive timeoutMs up to the timer limit less the reply grace, any uuid count, a uuid, folder uuid '
+      + 'or pack id of any length and any list limit', () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {number} The longest delay a JavaScript timer holds (a signed 32-bit integer of milliseconds). */
@@ -478,6 +478,27 @@ describe('backup_documents arguments', () => {
             uuids,
          }).success).toBe(true);
       }
+      /** @type {string} A document uuid in a pack whose id is over 200 characters. */
+      const long = `Compendium.world.${'p'.repeat(300)}.Actor.MOCKACTOR0000001`;
+      /** @type {import('zod').ZodObject} The backup_documents argument schema. */
+      const backup = z.object(
+         /** @type {ToolRegistration} */ (fixture.tools.find((tool) => tool.name === 'backup_documents')).inputSchema,
+      );
+      for (const args of [
+         { uuids: [long] },
+         { folderUuid: `Folder.${'f'.repeat(300)}` },
+         { pack: `world.${'p'.repeat(300)}` },
+      ]) {
+         expect(backup.safeParse(args).success, JSON.stringify(args).slice(0, 40)).toBe(true);
+      }
+      /** @type {import('zod').ZodObject} The restore_backup argument schema. */
+      const restore = z.object(
+         /** @type {ToolRegistration} */ (fixture.tools.find((tool) => tool.name === 'restore_backup')).inputSchema,
+      );
+      expect(restore.safeParse({
+         file: 'x',
+         uuids: [long],
+      }).success).toBe(true);
       /** @type {ToolRegistration} The listing registration. */
       const list = /** @type {ToolRegistration} */ (fixture.tools.find((tool) => tool.name === 'list_backups'));
       expect(z.object(list.inputSchema).safeParse({ limit: 100_000 }).success).toBe(true);
@@ -1365,13 +1386,13 @@ describe('restore_backup', () => {
       }
    });
 
-   it('returns a skipped row that echoes the longest non-ASCII uuid the arguments allow', async () => {
+   it('returns a skipped row that echoes a long non-ASCII uuid', async () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The backup. */
       const file = await writeBackup(fixture.store);
-      /** @type {string} A uuid of 256 characters, each 3 UTF-8 bytes: 768 bytes. */
-      const uuid = '€'.repeat(256);
+      /** @type {string} A uuid of 1000 characters, each 3 UTF-8 bytes: 3000 bytes. */
+      const uuid = '€'.repeat(1000);
       fixture.bridge.behaviour = async () => ({
          replaced: 2,
          created: 0,
