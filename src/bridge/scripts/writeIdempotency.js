@@ -23,7 +23,8 @@
  * reused after a day. The flag itself stays on the document.
  * - Size: the lookup reads every document of the collection, one property read each, because a record it skipped
  * would be missed and the documents created twice. A collection over `BEST_PRACTICE.idempotencyLookup` documents is
- * read whole and noted in the call's one warning line; the script time limit still bounds the call.
+ * read whole and noted in the call's one warning line. The scan is synchronous, so the script time limit cannot stop
+ * it mid-scan: it ends the call only after the scan returns.
  * - Concurrency: calls with one key (per class, parent and key) run one after another in this client, so the second
  * call finds the first call's records. Two clients calling at once are not coordinated.
  * - Safety: the `flags.wiretap` scope is refused by the write guard in every create, update and replace, so a caller

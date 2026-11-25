@@ -145,10 +145,10 @@ export const BUDGETS = table([
    budget('HANDLE_MAX_COUNT', 1024, 'count', BUDGET_SEVERITY.HARD),
    // Live calibration runs of the manual measurement script; the script reports, it never fails a build.
    budget('LIVE_RECALIBRATION_MAX_RUNS', 6, 'count', BUDGET_SEVERITY.WARN),
-   // Paths in one `read_handle` call, refused past it by that tool's schema. For the read and write scripts it is the
-   // best-practice number of paths, fields or patches of one document: a call past it runs and the client logs one
-   // warning line.
-   budget('PATHS_PER_CALL_MAX', 20, 'count', BUDGET_SEVERITY.HARD),
+   // The best-practice number of paths in one `read_handle` call, and of paths, fields or patches of one document in
+   // the read and write scripts: a call past it runs and logs one warning line (the sidecar's for `read_handle`, the
+   // client's for the scripts).
+   budget('PATHS_PER_CALL_MAX', 20, 'count', BUDGET_SEVERITY.WARN),
    // A path-grammar error text.
    budget('PATH_ERROR_MAX_BYTES', 256, 'bytes', BUDGET_SEVERITY.HARD),
    // A path string, in UTF-8 bytes; longer paths are refused before they are split.

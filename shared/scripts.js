@@ -16,8 +16,9 @@
  * `agent__<name>`, at most 50 characters for the same reason. The names in `RESERVED_SCRIPT_NAMES` and the names of
  * `Object.prototype` members are refused.
  *
- * `version`: a semver-like string (`MAJOR.MINOR.PATCH`, optional `-prerelease` and `+build`). Over 32 characters
- * (`SCRIPT_VERSION_MAX_CHARS`) is refused for shipped scripts and accepted with a warning for plugin scripts.
+ * `version`: a non-empty string. Semver-like (`MAJOR.MINOR.PATCH`, optional `-prerelease` and `+build`) and at most 32
+ * characters (`SCRIPT_VERSION_MAX_CHARS`) are best practices: a shipped script is refused past either, a plugin script
+ * is accepted with one warning per best practice it passes.
  *
  * `description`: one non-empty line. Over 160 characters (`DESCRIPTION_TARGET_CHARS`) is accepted with a warning;
  * over 240 (`DESCRIPTION_MAX_CHARS`) is refused for shipped and agent scripts and accepted with a warning for plugin
@@ -56,10 +57,10 @@
  * The total of `{name, description, inputSchema}` serialized is held to `DEFINITION_MAX_BYTES` for shipped and agent
  * scripts. A plugin script's size is a guideline: the listed form is measured where it is listed, with a warning.
  *
- * Best-practice limits (definition size, description length, result budget, version length, `handleArgs` count and the
- * schema guidelines of `shared/schemaValidate.js`) refuse a shipped script, so Wiretap's own tools are held to them, and only warn for a
- * plugin script. Every other rule is needed for the tool to work and refuses every source, with a reason that says
- * what to change.
+ * Best-practice limits (definition size, description length, result budget, version form and length, `handleArgs`
+ * count and the schema guidelines of `shared/schemaValidate.js`) refuse a shipped script, so Wiretap's own tools are
+ * held to them, and only warn for a plugin script. Every other rule is needed for the tool to work and refuses every
+ * source, with a reason that says what to change.
  *
  * The `source` of a script ('shipped', 'plugin' or 'agent') is not a field of the definition: it is implied by the
  * route the definition registered through, and the caller passes it to the validator.
@@ -286,8 +287,8 @@ function nameProblem(name, source, moduleId) {
 /**
  * Check the `handleArgs` of a definition against its argument schema. The sidecar resolves each listed name on its
  * own (`server/handleInput.ts`), so any number of names works; more than `HANDLE_ARGS_MAX` is a best practice that
- * refuses a shipped script and is left to the caller's warning for a plugin script. An empty list, a repeated name or a
- * name that is not a declared text argument cannot carry a handle and refuses every source.
+ * refuses a shipped script and is left to the caller's warning for a plugin script. An empty list, a repeated name or
+ * a name that is not a declared text argument cannot carry a handle and refuses every source.
  * @param {unknown} handleArgs - The untrusted list.
  * @param {Record<string, unknown>} inputSchema - The argument schema.
  * @param {ScriptSource} source - The source the script registers as.
@@ -350,8 +351,9 @@ export function definitionBytes(name, description, inputSchema) {
  * Validate one script definition. Reads own properties only and copies the known fields, so nothing of the received
  * object is kept and a getter that throws or a field that cannot be serialized is a refusal, never an exception. Every
  * field is checked for every source. A plugin definition passes the best-practice limits with a warning: a version
- * over 32 characters, a description over 240 characters, a result budget over the hard cap (clamped to the cap), more
- * than 4 `handleArgs` names and a listed size over `DEFINITION_MAX_BYTES` (not measured here). A valid agent definition is refused because no route accepts it.
+ * over 32 characters or not semver-like, a description over 240 characters, a result budget over the hard cap
+ * (clamped to the cap), more than 4 `handleArgs` names and a listed size over `DEFINITION_MAX_BYTES` (not measured
+ * here). A valid agent definition is refused because no route accepts it.
  * @param {unknown} input - The untrusted definition.
  * @param {ScriptSource} source - The source implied by the route the definition registered through.
  * @returns {ScriptOutcome} A fresh definition (and warnings) or the reason for the refusal.
@@ -404,17 +406,17 @@ export function validateScriptDefinition(input, source) {
       }
       /** @type {number} The longest version of a shipped script, and the length a plugin version is warned past. */
       const versionMax = getBudget('SCRIPT_VERSION_MAX_CHARS').value;
-      // Only a string is needed to work: the sidecar compares the version as text in the tool's change signature and
-      // nothing parses it as semver. The semver-like form is the documented contract and refuses every source; the
-      // length is a best practice that refuses a shipped script and only warns for a plugin script.
+      // Only a non-empty string is needed to work: the sidecar compares the version as text in the tool's change
+      // signature and nothing parses it as semver. The semver-like form and the length are best practices that refuse a
+      // shipped script and only warn for a plugin script.
       if (
          typeof version !== 'string' ||
-         (source !== 'plugin' && version.length > versionMax) ||
-         !VERSION_PATTERN.test(version)
+         version.length === 0 ||
+         (source !== 'plugin' && (version.length > versionMax || !VERSION_PATTERN.test(version)))
       ) {
          return refuse(
             source === 'plugin'
-               ? 'version must be a semver-like string (for example 1.0.0)'
+               ? 'version must be a non-empty string'
                : `version must be a semver-like string (for example 1.0.0) of at most ${versionMax} characters`,
          );
       }
@@ -496,6 +498,9 @@ export function validateScriptDefinition(input, source) {
       const warnings = [];
       if (version.length > versionMax) {
          warnings.push(`version is ${version.length} characters, over the ${versionMax}-character best practice`);
+      }
+      if (!VERSION_PATTERN.test(version)) {
+         warnings.push('version is not semver-like (MAJOR.MINOR.PATCH, for example 1.0.0)');
       }
       /** @type {number} The description length that draws a warning. */
       const target = getBudget('DESCRIPTION_TARGET_CHARS').value;

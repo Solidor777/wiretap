@@ -80,7 +80,7 @@ describe('search_documents definition', () => {
       expect(searchDocumentsDefinition.result.budgetBytes).toBe(getBudget('SEARCH_PAGE_MAX_BYTES').value);
       /** @type {import('$shared/scripts.js').ScriptDefinition} The definition under test. */
       const { name, description, inputSchema } = searchDocumentsDefinition;
-      expect(definitionBytes(name, description, compileSchema(inputSchema).listed)).toBeLessThanOrEqual(
+      expect(definitionBytes(name, description, compileSchema(inputSchema, { tool: name }).listed)).toBeLessThanOrEqual(
          getBudget('DEFINITION_MAX_BYTES').value,
       );
       expect(description.length).toBeLessThanOrEqual(getBudget('DESCRIPTION_TARGET_CHARS').value);
@@ -96,7 +96,6 @@ describe('search_documents definition', () => {
       });
       expect(properties.filters).toEqual({
          type: 'array',
-         maxItems: getBudget('SCHEMA_ARRAY_ITEMS_MAX').value,
          items: { type: 'string' },
       });
       expect(properties.fields).toEqual(properties.filters);

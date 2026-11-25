@@ -588,8 +588,52 @@ describe('validateScriptDefinition: plugin route', () => {
       expect(validateScriptDefinition(script('tool', { version: overLimit }), 'shipped').reason).toContain('version');
    });
 
-   it('refuses a plugin version that is not semver-like at any length', () => {
-      expect(plugin('my-module__tool', { version: `v${'1'.repeat(40)}` }).ok).toBe(false);
+   it.each([
+      '1.0',
+      'v1.0.0',
+      '2026.11.24.1',
+   ])('registers the plugin version %s with one warning; refuses it when shipped', (version) => {
+      /** @type {ReturnType<typeof validateScriptDefinition>} The plugin outcome. */
+      const outcome = plugin('my-module__tool', { version });
+      expect(outcome.ok).toBe(true);
+      expect(outcome.definition.version).toBe(version);
+      expect(outcome.warnings).toEqual([
+         'version is not semver-like (MAJOR.MINOR.PATCH, for example 1.0.0)',
+      ]);
+      expect(validateScriptDefinition(script('tool', { version }), 'shipped').reason).toBe(
+         'version must be a semver-like string (for example 1.0.0) of at most 32 characters',
+      );
+   });
+
+   it('warns for the length and the form of a long plugin version that is not semver-like', () => {
+      expect(plugin('my-module__tool', { version: `v${'1'.repeat(40)}` }).warnings).toEqual([
+         'version is 41 characters, over the 32-character best practice',
+         'version is not semver-like (MAJOR.MINOR.PATCH, for example 1.0.0)',
+      ]);
+   });
+
+   it.each([
+      [
+         'a missing version',
+         undefined,
+      ],
+      [
+         'a number',
+         1,
+      ],
+      [
+         'an empty string',
+         '',
+      ],
+   ])('refuses a plugin with %s', (_label, version) => {
+      /** @type {Record<string, unknown>} A plugin definition with that version. */
+      const input = script('my-module__tool', { moduleId: 'my-module' });
+      if (version === undefined) {
+         delete input.version;
+      } else {
+         input.version = version;
+      }
+      expect(validateScriptDefinition(input, 'plugin').reason).toBe('version must be a non-empty string');
    });
 
    /** @type {string[]} Five text argument names, one past the four-name best practice. */
@@ -716,7 +760,7 @@ describe('validateScriptDefinition: plugin route', () => {
 
    it.each([
       { version: undefined },
-      { version: '1.0' },
+      { version: '' },
       { description: '' },
       { description: 'a\nb' },
       { inputSchema: 'x' },

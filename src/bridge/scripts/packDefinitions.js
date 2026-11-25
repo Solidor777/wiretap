@@ -47,7 +47,8 @@ export const createPackDefinition = {
 
 /**
  * The `delete_pack` definition. Like `create_pack` it declares no `gate`, so a dry run works while
- * `allowPackDeletion` is closed; the handler checks the gate on a real run. `requiresUserInteraction` makes the sidecar
+ * `allowPackDeletion` is closed; the handler checks the gate on a real run. `id` has no length bound, so every pack
+ * `create_pack` can make can be deleted. `requiresUserInteraction` makes the sidecar
  * list the tool with the MCP metadata that asks the client to prompt the human before every call.
  * @type {import('$shared/scripts.js').ScriptDefinition}
  */
@@ -63,7 +64,6 @@ export const deletePackDefinition = {
          id: {
             type: 'string',
             minLength: 1,
-            maxLength: 128,
          },
          dryRun: { type: 'boolean' },
       },

@@ -384,7 +384,7 @@ export function resolvePath(node, segments) {
 
 /**
  * Resolves any number of paths against a document export; a caller that bounds the count does so in its own schema
- * (`read_handle` takes `PATHS_PER_CALL_MAX`). A repeated path is read once (the first
+ * (`read_handle` warns past `PATHS_PER_CALL_MAX`). A repeated path is read once (the first
  * occurrence stays). A path that resolves to nothing, or to an ambiguous wildcard, is listed in `missing` (request
  * order) and is not an error; a call whose every path is missing still succeeds. A malformed, over-long or unsafe
  * path refuses the whole call and returns no values; the paths echoed in `values` and `missing` are each within

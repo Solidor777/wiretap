@@ -6,6 +6,7 @@ import { getBudget } from '../../shared/budgets.js';
 import {
    SCHEMA_EXPANDED_NODES_MAX,
    SCHEMA_GUIDELINES,
+   UNCAPPED_LIST_TOOLS,
    compileSchema,
    guidelineWarning,
    isWellFormedDescription,
@@ -1232,6 +1233,54 @@ describe('the plugin switch: guidelines warn for plugin schemas and refuse shipp
       const many = { a: Array.from({ length: 1500 }, () => 1) };
       expect(client.validate(many).ok).toBe(true);
       expect(argumentSchema(sidecar).safeParse(many).success).toBe(true);
+   });
+
+   it('names the write and read tools whose list arguments have no item cap', () => {
+      expect([...UNCAPPED_LIST_TOOLS]).toEqual([
+         'create_documents',
+         'update_documents',
+         'delete_documents',
+         'replace_document',
+         'batch',
+         'get_document',
+         'search_documents',
+      ]);
+   });
+
+   it('lists a shipped array without maxItems with no item cap for each uncapped-list tool and parses more than 1000 '
+      + 'items on both sides', () => {
+      const schema = rootOf({
+         type: 'array',
+         items: { type: 'integer' },
+      });
+      /** @type {{ a: number[] }} Arguments with 1500 items, past the 1000-item guideline. */
+      const many = { a: Array.from({ length: 1500 }, () => 1) };
+      for (const tool of UNCAPPED_LIST_TOOLS) {
+         const client = compileSchema(schema, { tool });
+         const sidecar = jsonSchemaToZodShape(schema, false, 'shipped', tool);
+         expect(client.ok, tool).toBe(true);
+         expect(client.warnings, tool).toEqual([]);
+         expect(sidecar.warnings, tool).toEqual([]);
+         expect(client.listed.properties.a.maxItems, tool).toBeUndefined();
+         expect(client.validate(many).ok, tool).toBe(true);
+         expect(argumentSchema(sidecar).safeParse(many).success, tool).toBe(true);
+      }
+   });
+
+   it('still refuses a shipped array without maxItems for every other tool, on both sides', () => {
+      const schema = rootOf({
+         type: 'array',
+         items: { type: 'integer' },
+      });
+      /** @type {{ ok: false, reason: string }} The item guideline refusal. */
+      const refusal = {
+         ok: false,
+         reason: `an array schema needs a maxItems of 0 to ${getBudget('SCHEMA_ARRAY_ITEMS_MAX').value}`,
+      };
+      for (const tool of [undefined, 'roll', 'backup_documents']) {
+         expect(compileSchema(schema, { tool }), String(tool)).toEqual(refusal);
+         expect(jsonSchemaToZodShape(schema, false, 'shipped', tool), String(tool)).toEqual(refusal);
+      }
    });
 
    it('refuses a reused object 32 levels deep by its expanded size, on both sides and for every source', () => {

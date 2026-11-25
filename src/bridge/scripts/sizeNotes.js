@@ -2,15 +2,16 @@
  * Best-practice sizes of the core read and write scripts, and the one warning line a call past them writes. No size
  * here refuses a call: the GM decides how much one call carries. The protections still bound every call and refuse
  * with their own messages: path bytes and segments, value depth and nodes, the script time limit, the result wire
- * bound and the MCP request body bound.
+ * bound, the MCP request body bound for inline arguments and, for arguments given as handles, the sidecar's
+ * handle-input total (`HANDLE_STORE_MAX_BYTES` in `server/handles.ts`, 64 MB).
  */
 
 import { getBudget } from '$shared/budgets.js';
 import { utf8Bytes } from '$shared/utf8.js';
 
 /**
- * The best-practice sizes, each the bound these scripts once enforced. The budget entries are shared with the
- * sidecar; the rest are known only to these scripts.
+ * The best-practice sizes: a call past one runs and notes it in its one warning line. The budget entries are shared
+ * with the sidecar; the rest are known only to these scripts.
  * @type {Readonly<{ documents: number, updateEntries: number, dataBytes: number, textChars: number, paths: number,
  * searchLimit: number, filters: number, fieldPathBytes: number, queryChars: number, filterChars: number,
  * cursorChars: number, ifChangedChars: number, uuidChars: number, idempotencyLookup: number }>}

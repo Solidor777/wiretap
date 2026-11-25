@@ -228,7 +228,7 @@ const EXPECTED = [
       'PATHS_PER_CALL_MAX',
       20,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'PATH_ERROR_MAX_BYTES',

@@ -25,9 +25,11 @@ export function requireOpenGate(name) {
 }
 
 /**
- * Hold a pack ack row to the `ACK_MAX_BYTES` budget. Only the `label` string is cut: it is the one field of unbounded
- * length (a pack title set in Foundry has no length limit), while `id`, `type` and `documents` must reach the agent
- * whole. The cut keeps the largest prefix whose row JSON fits, counting the JSON escapes of the label.
+ * Hold a pack ack row to the `ACK_MAX_BYTES` budget. Only the `label` string is cut (a pack title set in Foundry has no
+ * length limit), while `id`, `type` and `documents` must reach the agent whole. The cut keeps the largest prefix whose
+ * row JSON fits, counting the JSON escapes of the label. The `id` has no length limit either: when the id alone takes
+ * the row past the budget, the label is emptied and the row is returned over the budget, and the sidecar's result
+ * enforcer hands it to the agent as a handle to the stored row, so the ack still reaches the agent whole.
  * @param {Record<string, unknown>} row - The ack row with a string `label`.
  * @returns {Record<string, unknown>} A copy of the row, its label cut with `truncateUtf8` when the row is too long.
  */

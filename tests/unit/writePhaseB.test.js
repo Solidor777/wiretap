@@ -136,7 +136,7 @@ describe.each([
       const outcome = validateScriptDefinition(definition, 'shipped');
       expect(outcome.ok, outcome.reason).toBe(true);
       expect(outcome.warnings).toEqual([]);
-      const compiled = compileSchema(definition.inputSchema);
+      const compiled = compileSchema(definition.inputSchema, { tool: definition.name });
       expect(compiled.ok).toBe(true);
       expect(definitionBytes(definition.name, definition.description, compiled.listed)).toBeLessThanOrEqual(
          getBudget('DEFINITION_MAX_BYTES').value,

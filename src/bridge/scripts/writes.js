@@ -724,7 +724,7 @@ async function createChecked({
 /**
  * @typedef {object} UpdateEntry
  * @property {string} uuid - The document to update, a world, embedded or pack document.
- * @property {UpdatePatch[]} patches - The path-scoped writes, at most 20.
+ * @property {UpdatePatch[]} patches - The path-scoped writes.
  */
 
 /**

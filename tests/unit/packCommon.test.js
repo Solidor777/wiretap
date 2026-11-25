@@ -95,6 +95,21 @@ describe('fitPackAck', () => {
       expect(row.label.endsWith('…')).toBe(true);
    });
 
+   it('fitPackAck keeps a pack id longer than the budget whole and empties the label', () => {
+      /** @type {Record<string, unknown>} A row whose id alone passes the budget. */
+      const input = {
+         id: `world.${'c'.repeat(300)}`,
+         label: 'MOCK_PACK',
+         type: 'Item',
+      };
+      /** @type {Record<string, unknown>} The fitted row. */
+      const row = fitPackAck(input);
+      expect(row.id).toBe(input.id);
+      expect(row.type).toBe('Item');
+      expect(row.label).toBe('');
+      expect(jsonBytes(row)).toBeGreaterThan(256);
+   });
+
    it('fitPackAck keeps every field but the label', () => {
       /** @type {Record<string, unknown>} A row whose label is too long. */
       const input = {

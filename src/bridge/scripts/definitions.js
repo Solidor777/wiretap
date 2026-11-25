@@ -1,17 +1,12 @@
 /**
  * The definitions of the shipped scripts. They import only through relative paths so a script run by `tsx` (the
- * manual context measurement, through the test fixtures) can load them without the build aliases.
+ * manual context measurement, through the test fixtures) can load them without the build aliases. The list arguments
+ * of the read and write scripts declare no `maxItems`: these tools are in `UNCAPPED_LIST_TOOLS` of
+ * `shared/schemaValidate.js`, so a call takes any number of items and logs one warning line past a best-practice size
+ * (`sizeNotes.js`).
  */
 
 import { getBudget } from '../../../shared/budgets.js';
-
-/**
- * The `maxItems` of every list argument: the largest the argument-schema guideline lets a shipped schema declare (every
- * shipped array declares one). The scripts set no lower count; past a best-practice size (`sizeNotes.js`) a call runs
- * and the client logs one warning line, and the value-node bound of the argument validator still bounds the call.
- * @type {number}
- */
-const ITEMS_MAX = getBudget('SCHEMA_ARRAY_ITEMS_MAX').value;
 
 /**
  * The script definition.
@@ -57,12 +52,10 @@ export const getDocumentDefinition = {
          },
          fields: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          paths: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          derived: { type: 'boolean' },
@@ -97,14 +90,12 @@ export const searchDocumentsDefinition = {
          query: { type: 'string' },
          filters: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          pack: { type: 'string' },
          parentUuid: { type: 'string' },
          fields: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          limit: {
@@ -166,13 +157,11 @@ export const createDocumentsDefinition = {
          documentName: { type: 'string' },
          data: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          fromUuids: {
             type: 'array',
             minItems: 1,
-            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          parentUuid: { type: 'string' },
@@ -186,7 +175,6 @@ export const createDocumentsDefinition = {
          actAs: { type: 'string' },
          paths: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: {
                type: 'string',
                maxLength: getBudget('PATH_BYTES_MAX').value,
@@ -218,7 +206,6 @@ export const updateDocumentsDefinition = {
       properties: {
          updates: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: {
                type: 'object',
                properties: {
@@ -248,7 +235,6 @@ export const updateDocumentsDefinition = {
          actAs: { type: 'string' },
          paths: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: {
                type: 'string',
                maxLength: getBudget('PATH_BYTES_MAX').value,
@@ -278,7 +264,6 @@ export const deleteDocumentsDefinition = {
       properties: {
          uuids: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          dryRun: { type: 'boolean' },
@@ -311,7 +296,6 @@ export const replaceDocumentDefinition = {
          actAs: { type: 'string' },
          paths: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: {
                type: 'string',
                maxLength: getBudget('PATH_BYTES_MAX').value,
@@ -346,7 +330,6 @@ export const batchDefinition = {
       properties: {
          creates: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: {
                type: 'object',
                properties: {
@@ -358,7 +341,6 @@ export const batchDefinition = {
          },
          updates: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: {
                type: 'object',
                properties: {
@@ -375,7 +357,6 @@ export const batchDefinition = {
          },
          deletes: {
             type: 'array',
-            maxItems: ITEMS_MAX,
             items: { type: 'string' },
          },
          dryRun: { type: 'boolean' },

@@ -221,7 +221,10 @@ describe('batchHandler', () => {
 
 describe('the batch definition', () => {
    /** @type {ReturnType<typeof compileSchema>} The compiled schema, nested objects strict. */
-   const compiled = compileSchema(batchDefinition.inputSchema, { strictNested: batchDefinition.strictNested === true });
+   const compiled = compileSchema(batchDefinition.inputSchema, {
+      strictNested: batchDefinition.strictNested === true,
+      tool: batchDefinition.name,
+   });
 
    it('asks for strict entries, which is not listed', () => {
       expect(batchDefinition.strictNested).toBe(true);
