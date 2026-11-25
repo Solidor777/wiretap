@@ -247,7 +247,7 @@ describe('MCP HTTP hardening and session robustness', () => {
          expect(harness.mcp().sessions()).toBe(1);
       });
 
-      it('closes a connection beyond the connection cap', async () => {
+      it('closes a connection beyond the connection count and logs a line for it', async () => {
          await harness.start({ limits: { maxConnections: 2 } });
          /** @type {net.Socket[]} The sockets that hold the allowed connections. */
          const held = [];
@@ -260,13 +260,18 @@ describe('MCP HTTP hardening and session robustness', () => {
          const third = await rawSocket(harness.mcp().port(), 'GET /mcp HTTP/1.1\r\nHost: x\r\n\r\n', 400);
          expect(third.closed).toBe(true);
          expect(third.answer).toBe('');
+         await expect
+            .poll(() => harness.logs().filter((line) => line.includes('connection limit of 2 reached')), {
+               timeout: 1000,
+            })
+            .toHaveLength(1);
          for (const socket of held) {
             socket.destroy();
          }
       });
    });
 
-   describe('no session cap', () => {
+   describe('sessions past the warning count', () => {
       it('opens every overlapping initialize and logs one line per session held over the warning count', async () => {
          await harness.start({ sessions: { warnSessions: 3 } });
          // Slow every session's connect so the initializes overlap.

@@ -3,10 +3,11 @@ import { TERMINAL_SCROLLBACK_DEFAULT } from '$shared/protocol.js';
 
 /**
  * Register the GM-only world setting for the terminal scrollback size, in characters, and apply it to the shared
- * terminal connection now and on every change. World scope because the sidecar runs one terminal for every GM client:
- * a per-client value would let each client that launches set a different replay size for the same terminal. The
- * client buffer follows a change at once; the sidecar's replay buffer takes the value at the next launch. Must run
- * during `init`.
+ * terminal connection now and on every change. World scope because the GM clients on one machine share that machine's
+ * one sidecar terminal: a per-client value would let each client that launches set a different replay size for the
+ * same terminal. Each GM's machine runs its own sidecar, so the world value also sets the replay size of every other
+ * GM's sidecar. The client buffer follows a change at once; a sidecar's replay buffer takes the value at its next
+ * launch. Must run during `init`.
  * @returns {void}
  */
 export function registerTerminalSettings() {

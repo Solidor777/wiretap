@@ -184,7 +184,7 @@ describe('session manager: log lines', () => {
    });
 });
 
-describe('session manager: no session cap', () => {
+describe('session manager: sessions past the warning count', () => {
    it('holds every session past the warning count and logs one line for each one over it', () => {
       const { manager, ended, logs } = makeManager({ warnSessions: 3 });
       for (let index = 0; index < 5; index += 1) {

@@ -23,6 +23,7 @@ import {
    type SessionManager,
    type SessionTimers,
 } from './mcpSessions.ts';
+import { createLogThrottle } from './logThrottle.ts';
 import { describeCause } from './logText.ts';
 import { isMcpHostAllowed, isOriginAllowed } from './origins.ts';
 import { failureResult, withResultBudget, type ResultBudgetOptions, type ToolHandler } from './resultBudget.ts';
@@ -93,7 +94,7 @@ export interface McpHttpLimits {
    headersTimeoutMs?: number;
    /** Milliseconds between the server's checks for requests past those timeouts. */
    timeoutCheckMs?: number;
-   /** Most simultaneous connections; one beyond it is closed at once. */
+   /** Most simultaneous connections; one beyond it is closed at once and logged. */
    maxConnections?: number;
    /** Milliseconds a connection may wait without sending any request before it is closed. */
    socketIdleMs?: number;
@@ -150,9 +151,16 @@ const MCP_HEADERS_TIMEOUT_MS: number = 10_000;
 // Milliseconds between the HTTP server's checks for requests past the timeouts (Node's own default is 30 s).
 const MCP_TIMEOUT_CHECK_MS: number = 1_000;
 
-// Most simultaneous connections, open event streams and in-flight requests together. Each session with an open event
-// stream holds one, so this also bounds how many sessions can stream at once.
+// Most simultaneous connections, open event streams and in-flight requests together. It protects the sidecar's sockets
+// and file handles from a flood of connections. Each session with an open event stream holds one, so this also bounds
+// how many sessions can stream at once. A connection closed by it is logged through `logConnectionDrop`.
 const MCP_CONNECTIONS_MAX: number = 128;
+
+// Length in milliseconds of one window of the connection-drop log throttle.
+const CONNECTION_DROP_LOG_WINDOW_MS: number = 60_000;
+
+// Most connection-drop lines written per window; later drops in the window are counted in one summary line.
+const CONNECTION_DROP_LOG_LIMIT: number = 10;
 
 // Milliseconds a connection may go without sending a request before it is closed. Node's own timeouts only start with
 // the first byte of a request, so a socket that never sends one would otherwise hold a `maxConnections` slot. It does
@@ -1004,8 +1012,23 @@ export function startMcpServer(
          }
       },
    );
-   // Connections beyond the cap are closed at once, so idle sockets cannot exhaust file descriptors.
-   httpServer.maxConnections = limits.maxConnections ?? MCP_CONNECTIONS_MAX;
+   // The most simultaneous connections; one beyond it is closed at once, so idle sockets cannot exhaust file handles.
+   const connectionsMax: number = limits.maxConnections ?? MCP_CONNECTIONS_MAX;
+   httpServer.maxConnections = connectionsMax;
+   // Writes a connection-drop line subject to the per-window limit, with one summary line per window.
+   const logConnectionDrop: (line: string) => void = createLogThrottle({
+      log,
+      now: Date.now,
+      limit: CONNECTION_DROP_LOG_LIMIT,
+      windowMs: CONNECTION_DROP_LOG_WINDOW_MS,
+      noun: 'MCP connection drops',
+   });
+   // Node emits 'drop' for each connection it closes because `maxConnections` is reached.
+   httpServer.on('drop', () => {
+      logConnectionDrop(
+         `Wiretap sidecar | MCP connection limit of ${connectionsMax} reached; a new connection was closed`,
+      );
+   });
    // A connection that sends no request within the idle limit is closed; one with a request in flight is left alone.
    // Node destroys a timed-out socket unless the server has a `timeout` listener, so this listener decides.
    httpServer.on('connection', (socket) => {

@@ -919,7 +919,7 @@ describe('stateful MCP sessions', () => {
       });
    });
 
-   describe('idle expiry, session cap and disposal', () => {
+   describe('idle expiry and disposal', () => {
       it('expires an idle session, releases its handles and answers 404 afterwards', async () => {
          const big = {
             name: 'test_big',
