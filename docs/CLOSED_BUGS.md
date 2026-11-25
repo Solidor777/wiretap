@@ -1,5 +1,13 @@
 # Closed bugs
 
+## Two comments contradicted the code (registry push order, gate wording)
+
+- **Was:** the `sendRegistry` JSDoc in `src/bridge/foundryBridge.js` said plugin definitions are left out of an over-size
+  registry push "newest first", while `buildRegistryPayload` (`src/bridge/scripts/registryPayload.js`) leaves out the
+  largest listed definition first, the later registration first only among equal sizes. The `denyWiretapSettingWrite`
+  JSDoc in `shared/gates.js` said "no skill can change a gate"; the rule covers every Wiretap tool. Found in M7.
+- **Fix:** both comments state the code's behaviour.
+
 ## E2E build wrote into the repo root and accumulated stale hashed chunks
 
 - **Was:** `tests/e2e/global-setup.js` runs `npm run build:e2e` (`vite build --mode e2e`); `vite.config.mjs` set

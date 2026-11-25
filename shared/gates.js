@@ -312,7 +312,7 @@ export function resolveSettingKey(documentOrKey) {
 
 /**
  * The rule every write path applies to Setting writes, whatever the gate state: a Wiretap setting cannot be written,
- * so no skill can change a gate. Fails closed and never throws: input whose key cannot be resolved by
+ * so no Wiretap tool can change a gate. Fails closed and never throws: input whose key cannot be resolved by
  * `resolveSettingKey` is refused. The key is resolved once; callers must write the string `resolveSettingKey` returns.
  * @param {unknown} documentOrKey - A Setting key, or a Setting document or data object (see `resolveSettingKey`).
  * @returns {GateDenial | null} Null when the write goes on to the other checks, else a denial under 256 bytes.

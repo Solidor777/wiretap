@@ -247,8 +247,9 @@ export function initFoundryBridge(connection, { scripts = scriptRegistry } = {})
       /**
        * Send the complete script list to the sidecar, which replaces this endpoint's previous list with it. Only an
        * identified, connected endpoint sends: the sidecar refuses a registry from a socket it has not registered. The
-       * payload holds definitions only; handlers never leave the client, and plugin definitions are left out, newest
-       * first, while the payload would exceed the sidecar's message bound. The sidecar's ack reports how many entries
+       * payload holds definitions only; handlers never leave the client, and plugin definitions are left out, largest
+       * listed definition first (the later registration first among equal sizes), while the payload would exceed the
+       * sidecar's message bound. The sidecar's ack reports how many entries
        * it accepted and refused (the reasons are in the sidecar log).
        * @returns {void}
        */
