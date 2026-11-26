@@ -1164,6 +1164,31 @@ describe('unmeasured fields are dropped', () => {
       warn.mockRestore();
    });
 
+   it('writes the dropped-fields line to the log it is given, not to the console', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      /** @type {string[]} The lines the enforcer's log received. */
+      const lines = [];
+      /** @type {Function} The wrapped handler of a named tool. */
+      const wrapped = withResultBudget(async () => ({
+         content: [
+            {
+               type: 'text',
+               text: 'ok',
+            },
+         ],
+         extra: 1,
+      }), {
+         store: createHandleStore(),
+         ownerKey: OWNER,
+         toolName: 'mock_tool',
+         log: (line) => lines.push(line),
+      });
+      await wrapped({});
+      expect(lines).toEqual(['Wiretap sidecar | mock_tool result fields dropped: extra']);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+   });
+
    it('logs nothing when a result has no field to drop', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await enforce(textResult('ok'));

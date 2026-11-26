@@ -1,5 +1,6 @@
 import { getBudget } from '../shared/budgets.js';
 import { describeCause } from './logText.ts';
+import { createLogThrottle } from './logThrottle.ts';
 
 // Milliseconds an MCP session may go without a request before it expires (30 minutes).
 export const MCP_SESSION_IDLE_MS: number = 30 * 60 * 1000;
@@ -13,6 +14,13 @@ export const LIST_CHANGED_QUIET_MS: number = 200;
 // Longest wait in milliseconds from the first change of a burst to the notification, however long the changes
 // continue.
 export const LIST_CHANGED_MAX_WAIT_MS: number = 1000;
+
+// Length in milliseconds of one window of the session-count log throttle.
+const SESSION_COUNT_LOG_WINDOW_MS: number = 60_000;
+
+// Most session-count lines written per window; a local process can loop MCP `initialize`, so later lines in the window
+// are counted in one summary line.
+const SESSION_COUNT_LOG_LIMIT: number = 10;
 
 /** The timer functions the session manager and debouncer schedule with. */
 export interface SessionTimers {
@@ -51,8 +59,9 @@ export interface SessionManagerOptions {
 /** The set of live sessions with idle expiry and no cap on their number. */
 export interface SessionManager {
    /**
-    * Hold a session and return true, logging one line when the open count is then past the warning count; a
-    * disposed manager closes the session at once and returns false.
+    * Hold a session and return true, logging one line when the open count is then past the warning count (at most
+    * `SESSION_COUNT_LOG_LIMIT` per minute, then one summary line); a disposed manager closes the session at once and
+    * returns false.
     */
    add: (session: ManagedSession) => boolean;
    /** Look a session up without counting it as activity. */
@@ -138,6 +147,14 @@ export function createSessionManager(options: SessionManagerOptions = {}): Sessi
    const timers: SessionTimers = options.timers ?? DEFAULT_TIMERS;
    // The sidecar log sink.
    const log: (line: string) => void = options.log ?? ((line) => console.log(line));
+   // Writes a session-count line subject to the per-window limit, with one summary line per window.
+   const logSessionCount: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: SESSION_COUNT_LOG_LIMIT,
+      windowMs: SESSION_COUNT_LOG_WINDOW_MS,
+      noun: 'MCP session count warnings',
+   });
    // Held sessions, least recently active first.
    const sessions: Map<string, SessionEntry> = new Map();
    // The sweep interval handle while one runs.
@@ -227,7 +244,7 @@ export function createSessionManager(options: SessionManagerOptions = {}): Sessi
             lastActivity: now(),
          });
          if (sessions.size > warnSessions) {
-            log(
+            logSessionCount(
                `Wiretap sidecar | MCP session ${session.id} opened: ${sessions.size} sessions are open, ` +
                   `more than the ${warnSessions} recommended`,
             );

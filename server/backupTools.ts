@@ -50,6 +50,7 @@ import {
 } from './endpoints.ts';
 import type { IncomingPiece, OutgoingPiece, PieceSink } from './foundryBridge.ts';
 import { describeCause } from './logText.ts';
+import { createLogThrottle } from './logThrottle.ts';
 import type { ToolRegistration } from './mcp.ts';
 import { truncateUtf8 } from './utf8.ts';
 
@@ -144,6 +145,12 @@ const RESTORE_DIFFERENCES_MAX: number = 3;
 
 // The newline byte that ends every document line of a backup.
 const NEWLINE: number = 0x0a;
+
+// Length in milliseconds of one window of the guideline-warning log throttle.
+const GUIDELINE_LOG_WINDOW_MS: number = 60_000;
+
+// Most guideline-warning lines written per window; later lines in the window are counted in one summary line.
+const GUIDELINE_LOG_LIMIT: number = 10;
 
 // The refusal of a backup call that names no selector or more than one.
 const SELECTOR_MESSAGE: string = 'Give exactly one of uuids, folderUuid, documentName or pack.';
@@ -471,9 +478,19 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
    const now: () => number = deps.now ?? Date.now;
    // Whether a backup or restore is running.
    let busy: boolean = false;
+   // Writes a guideline warning subject to the per-window limit, with one summary line per window; a caller can repeat
+   // an over-guideline call without bound.
+   const logGuideline: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: GUIDELINE_LOG_LIMIT,
+      windowMs: GUIDELINE_LOG_WINDOW_MS,
+      noun: 'backup guideline warnings',
+   });
 
    /**
-    * Log one warning line when a measure of a call is over its guideline; nothing is refused.
+    * Log one warning line when a measure of a call is over its guideline (at most `GUIDELINE_LOG_LIMIT` per minute,
+    * then one summary line); nothing is refused.
     * @param {string} tool - The tool's name.
     * @param {string} measure - What was measured.
     * @param {number} value - The measured value.
@@ -482,7 +499,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
     */
    function warnPast(tool: string, measure: string, value: number, guideline: number): void {
       if (value > guideline) {
-         log(`Wiretap sidecar | ${tool} warning: ${measure} ${value} is over the ${guideline} guideline`);
+         logGuideline(`Wiretap sidecar | ${tool} warning: ${measure} ${value} is over the ${guideline} guideline`);
       }
    }
 

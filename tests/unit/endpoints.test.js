@@ -367,6 +367,28 @@ describe('createEndpointRegistry warning count', () => {
       ]);
    });
 
+   it('writes at most 10 endpoint-count lines per minute, then one summary line', () => {
+      /** @type {string[]} Log lines. */
+      const logs = [];
+      /** @type {number} The registry's clock in milliseconds. */
+      let clock = 0;
+      const registry = createEndpointRegistry(() => clock, (line) => logs.push(line));
+      const identity = validateIdentify(identify()).identity;
+      // Endpoints 65 to 89 are over the warning count: 25 lines asked for, 10 written.
+      for (let i = 0; i < ENDPOINTS_WARN + 25; i++) {
+         registry.register(`s${i}`, identity);
+      }
+      expect(registry.list()).toHaveLength(89);
+      expect(logs).toHaveLength(10);
+      clock = 60_000;
+      registry.register('late', identity);
+      expect(logs.slice(10)).toEqual([
+         'Wiretap sidecar | 15 further endpoint count warnings suppressed',
+         'Wiretap sidecar | Foundry endpoint late registered: 90 endpoints are registered, more than the 64 ' +
+            'recommended',
+      ]);
+   });
+
    it('logs nothing when a registered socket identifies again past the warning count', () => {
       /** @type {string[]} Log lines. */
       const logs = [];

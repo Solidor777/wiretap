@@ -9,6 +9,7 @@ import { createHarness, entry, rawSocket } from './mcpHarness.js';
 import { sanitizeRegistry } from '../../server/toolRegistry.ts';
 import { registryPayload } from '../unit/scriptFixtures.js';
 import { GATE_DENIED, TOOL_GONE } from '../../shared/protocol.js';
+import { getBudget } from '../../shared/budgets.js';
 
 /**
  * Pause for a number of milliseconds.
@@ -268,6 +269,94 @@ describe('MCP HTTP hardening and session robustness', () => {
          for (const socket of held) {
             socket.destroy();
          }
+      });
+
+      it('writes at most 10 connection-drop lines per minute, then one summary line', async () => {
+         await harness.start({ limits: { maxConnections: 2 } });
+         /** @type {net.Socket[]} The sockets that hold the allowed connections. */
+         const held = [];
+         for (let index = 0; index < 2; index += 1) {
+            const socket = net.connect(harness.mcp().port(), '127.0.0.1');
+            socket.on('error', () => undefined);
+            await new Promise((resolve) => socket.on('connect', resolve));
+            held.push(socket);
+         }
+         /**
+          * The connection-drop lines logged so far.
+          * @returns {string[]} The lines naming the connection limit.
+          */
+         const dropLines = () => harness.logs().filter((line) => line.includes('connection limit of 2 reached'));
+         // 15 connections beyond the limit are dropped: 10 lines are written and 5 are counted.
+         await Promise.all(Array.from({ length: 15 }, () => rawSocket(harness.mcp().port(), '', 400)));
+         expect(dropLines()).toHaveLength(10);
+         // The throttle reads `Date.now` at each drop; one more drop a window later writes the summary first.
+         vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+         await rawSocket(harness.mcp().port(), '', 400);
+         await expect
+            .poll(() => harness.logs().filter((line) => line.includes('further MCP connection drops suppressed')), {
+               timeout: 1000,
+            })
+            .toEqual(['Wiretap sidecar | 5 further MCP connection drops suppressed']);
+         expect(dropLines()).toHaveLength(11);
+         for (const socket of held) {
+            socket.destroy();
+         }
+      });
+   });
+
+   describe('throttled warning lines', () => {
+      it('writes at most 10 read_handle path-count lines per window, across sessions', async () => {
+         await harness.start();
+         /** @type {string[]} One path more than the best-practice count. */
+         const paths = Array.from({ length: getBudget('PATHS_PER_CALL_MAX').value + 1 }, (_, index) => `p${index}`);
+         for (let session = 0; session < 2; session += 1) {
+            const { client } = await harness.connectClient();
+            for (let call = 0; call < 8; call += 1) {
+               await client.callTool({
+                  name: 'read_handle',
+                  arguments: {
+                     handle: 'h_missing',
+                     paths,
+                  },
+               });
+            }
+         }
+         expect(harness.logs().filter((line) => line.includes('paths in one call, over the'))).toHaveLength(10);
+      });
+
+      it('writes at most 10 skipped-registry-tool lines per window, across sessions and syncs', async () => {
+         const [clash] = sanitizeRegistry(registryPayload([entry('clash')]), () => undefined).tools;
+         await harness.start({
+            tools: [
+               {
+                  name: 'clash',
+                  description: 'A fixed test tool.',
+                  inputSchema: {},
+                  handler: async () => ({
+                     content: [
+                        {
+                           type: 'text',
+                           text: 'fixed',
+                        },
+                     ],
+                  }),
+               },
+            ],
+            bridge: {
+               invokeTool: async () => ({
+                  result: 'unused',
+                  tool: clash,
+               }),
+               tools: () => [clash],
+               subscribe: () => () => undefined,
+            },
+         });
+         // Each initialize syncs the new session twice, so 8 sessions ask for 16 lines.
+         for (let session = 0; session < 8; session += 1) {
+            expect((await raw(harness.mcp().port(), { body: INITIALIZE })).status).toBe(200);
+         }
+         expect(harness.mcp().sessions()).toBe(8);
+         expect(harness.logs().filter((line) => line.includes('skipped registry tool clash'))).toHaveLength(10);
       });
    });
 

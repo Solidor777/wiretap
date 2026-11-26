@@ -89,7 +89,9 @@ export type RegistryOutcome =
         reason: string;
      };
 
-/** Who wrote a schema: Wiretap itself, or a plugin module; a plugin schema over a guideline warns instead of refusing. */
+/**
+ * Who wrote a schema: Wiretap itself, or a plugin module; a plugin schema over a guideline warns instead of refusing.
+ */
 export type SchemaSource = 'shipped' | 'plugin';
 
 /** The outcome of converting a JSON Schema; `warnings` is always empty for a shipped schema. */
@@ -622,10 +624,10 @@ function sanitizeTool(entry: unknown, seen: Set<string>): ToolOutcome {
 
 /**
  * Reduce an untrusted `bridge:registry` payload to the scripts that pass their checks. The payload must be
- * `{ apiVersion, scripts }`; every entry is judged, one by one: a refused entry is logged with its reason and dropped, an
- * accepted entry's warnings are logged, and the accepted entries are kept. There is no bound on the number of tools or
- * on their total size: the payload is bounded by the Socket.IO `maxHttpBufferSize` (1,000,000 bytes), and the caller's
- * throttled logger bounds the log output.
+ * `{ apiVersion, scripts }`; every entry is judged, one by one: a refused entry is logged with its reason and dropped,
+ * an accepted entry's warnings are logged, and the accepted entries are kept. There is no bound on the number of tools
+ * or on their total size: the payload is bounded by the Socket.IO `maxHttpBufferSize` (1,000,000 bytes), and the
+ * caller's throttled logger bounds the log output.
  * @param {unknown} payload - The untrusted payload.
  * @param {(line: string) => void} log - Receives one line per refusal or warning; callers pass a throttled logger.
  * @returns {RegistryOutcome} The accepted tools and the number of refused entries, or a failure when the payload is

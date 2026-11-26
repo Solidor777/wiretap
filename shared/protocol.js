@@ -34,7 +34,8 @@ export const TERMINAL_SCROLLBACK_DEFAULT = 64 * 1024;
 
 // Scrollback size in characters past which the sidecar writes one warning line at launch. A reattach sends the whole
 // replay as one Socket.IO message and the terminal parses it at once; 1,048,576 characters (16 times the default) is
-// up to 2 MB of string memory in each buffer and at least 1 MB on the wire. Inferred: past it a reattach is visibly slow.
+// up to 2 MB of string memory in each buffer and at least 1 MB on the wire. Inferred: past it a reattach is visibly
+// slow.
 export const TERMINAL_SCROLLBACK_WARN = 1024 * 1024;
 
 /**

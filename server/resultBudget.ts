@@ -73,6 +73,8 @@ export interface ResultBudgetOptions {
    budgetBytes?: number;
    /** The tool's name, written in the log line that names the result fields the enforcer drops. */
    toolName: string;
+   /** Receives the log line that names the dropped result fields (default: `console.warn`). */
+   log?: (line: string) => void;
 }
 
 /** The byte limit of one call and whether it is lower than the per-call `maxBytes` asked for. */
@@ -302,15 +304,16 @@ function droppedFields(result: CallToolResult): string[] {
  * names come from handler output, so `cleanForLog` replaces control characters and bounds the list.
  * @param {string} toolName - The tool's name.
  * @param {CallToolResult} result - The shape-checked result.
+ * @param {(line: string) => void} log - The sidecar log sink.
  * @returns {void}
  */
-function logDroppedFields(toolName: string, result: CallToolResult): void {
+function logDroppedFields(toolName: string, result: CallToolResult, log: (line: string) => void): void {
    // The dropped field names.
    const names: string[] = droppedFields(result);
    if (names.length > 0) {
       // The bounded, cleaned list of names.
       const list: string = cleanForLog(names.join(', '), LOG_DROPPED_BYTES);
-      console.warn(`Wiretap sidecar | ${toolName} result fields dropped: ${list}`);
+      log(`Wiretap sidecar | ${toolName} result fields dropped: ${list}`);
    }
 }
 
@@ -499,7 +502,7 @@ function enforce(raw: unknown, args: unknown, options: ResultBudgetOptions): Cal
    const content: CallToolResult['content'] = result.content.map(rebuildItem);
    // The rebuilt image items.
    const images: CallToolResult['content'] = content.filter((item) => item.type === 'image');
-   logDroppedFields(options.toolName, result);
+   logDroppedFields(options.toolName, result, options.log ?? ((line: string): void => console.warn(line)));
    // The limit of this call.
    const callLimit: CallLimit = resolveLimit(args, options.budgetBytes);
    if (bytes <= callLimit.limit) {
