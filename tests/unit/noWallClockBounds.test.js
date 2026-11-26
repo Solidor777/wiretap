@@ -20,8 +20,9 @@ const TEST_FILE = /\.(?:js|mjs|ts)$/;
  * An assertion on a duration measured with the wall clock: `expect(` followed directly by `performance.now() -` or
  * `Date.now() -`. The suite runs files in parallel on one machine, so such a bound fails under load while the code is
  * correct. A test proves an early stop or linear work by finishing inside its per-test limit instead. A poll deadline
- * (`expect(Date.now()).toBeLessThan(deadline)`) is a wait, not a duration bound, and is not matched. The pattern is
- * built from joined strings so that this file's own text never matches it.
+ * (`expect(Date.now()).toBeLessThan(deadline)`) is a wait, not a duration bound, and is not matched. The scan catches
+ * only this direct form: a duration first stored in a variable or passed through a helper is not matched. The pattern
+ * is built from joined strings so that this file's own text never matches it.
  * @type {RegExp}
  */
 const WALL_CLOCK_BOUND = new RegExp(['expect', '\\(\\s*(?:performance|Date)\\.now\\(\\)\\s*-'].join(''));

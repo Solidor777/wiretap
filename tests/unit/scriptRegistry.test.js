@@ -195,7 +195,7 @@ describe('script registry: refusals', () => {
       expect(registry.definitions()[0].version).toBe('1.0.0');
    });
 
-   it('accepts more scripts than any former cap', () => {
+   it('accepts 100 scripts', () => {
       const { registry } = make();
       for (let index = 0; index < 100; index += 1) {
          expect(registry.register(script(`tool_${index}`), () => null).ok).toBe(true);

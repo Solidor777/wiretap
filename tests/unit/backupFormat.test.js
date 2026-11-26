@@ -75,7 +75,7 @@ describe('header line', () => {
    });
 
    it('accepts a note whose JSON fills the header room and refuses one byte more or a control character', () => {
-      expect(BACKUP_NOTE_MAX_JSON_BYTES).toBeGreaterThan(200);
+      expect(BACKUP_NOTE_MAX_JSON_BYTES).toBe(837);
       expect(isBackupNote('x'.repeat(BACKUP_NOTE_MAX_JSON_BYTES))).toBe(true);
       expect(isBackupNote('x'.repeat(BACKUP_NOTE_MAX_JSON_BYTES + 1))).toBe(false);
       expect(isBackupNote('"'.repeat(Math.floor(BACKUP_NOTE_MAX_JSON_BYTES / 2) + 1))).toBe(false);

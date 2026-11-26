@@ -1,13 +1,5 @@
 # Closed bugs
 
-## Two comments contradicted the code (registry push order, gate wording)
-
-- **Was:** the `sendRegistry` JSDoc in `src/bridge/foundryBridge.js` said plugin definitions are left out of an over-size
-  registry push "newest first", while `buildRegistryPayload` (`src/bridge/scripts/registryPayload.js`) leaves out the
-  largest listed definition first, the later registration first only among equal sizes. The `denyWiretapSettingWrite`
-  JSDoc in `shared/gates.js` said "no skill can change a gate"; the rule covers every Wiretap tool. Found in M7.
-- **Fix:** both comments state the code's behaviour.
-
 ## E2E build wrote into the repo root and accumulated stale hashed chunks
 
 - **Was:** `tests/e2e/global-setup.js` runs `npm run build:e2e` (`vite build --mode e2e`); `vite.config.mjs` set
@@ -320,3 +312,14 @@
   (`tests/unit/mcpSessions.test.js`) failed before the fix (expected 0, received -100) and passes;
   `tests/unit/mcpSessions.test.js` and `tests/integration/mcpSessions.test.js`: 61 passed. The controller then saw 0
   `TimeoutNegativeWarning` lines in 4 runs of the four-file set (271 tests).
+
+## Two comments contradicted the code (registry push order, gate wording)
+
+- **Was:** the `sendRegistry` JSDoc in `src/bridge/foundryBridge.js` said plugin definitions are left out of an over-size
+  registry push "newest first", while `buildRegistryPayload` (`src/bridge/scripts/registryPayload.js`) leaves out the
+  largest listed definition first, the later registration first only among equal sizes. The `denyWiretapSettingWrite`
+  JSDoc in `shared/gates.js` said "no skill can change a gate"; the rule covers every Wiretap tool. Found in M7.
+- **Fix:** both comments state the code's behaviour.
+- **Verified:** both comments read against the code (`2657996`): the `sendRegistry` JSDoc says plugin definitions are
+  left out largest listed definition first, the later registration first among equal sizes, as
+  `buildRegistryPayload` does; the `denyWiretapSettingWrite` JSDoc says no Wiretap tool can change a gate.

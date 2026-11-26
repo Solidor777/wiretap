@@ -85,6 +85,9 @@ test.describe('wiretap plugin tools', () => {
       await restoreFixturePlugin(page);
       await teardownRecorded(page);
       await recordGateSettings(page);
+      // The stored gate may already list the fixture; the test starts from a gate without it, and the record restores
+      // the GM's value after the test.
+      await page.evaluate(() => game.settings.set('wiretap', 'allowedPluginModules', ''));
       expect(
          await page.evaluate((id) => game.modules.get(id) !== undefined, FIXTURE_MODULE_ID),
          `the Foundry server started before the fixture module was installed at ${fixtureInstallDir()}; restart ` +

@@ -25,7 +25,7 @@ Goals:
 - **G1 Core skills for every document type.** Read (whole, projected or path-scoped), create, update, replace and
   delete (D12) for all v14 primary and embedded types (READ `foundry/common/constants.mjs:332-424`), compendium
   content, open a sheet, rolls and table draws.
-- **G2 Plugin skills.** Modules that depend on Wiretap register their own MCP tools; handlers run in the Foundry
+- **G2 Plugin tools.** Modules that depend on Wiretap register their own MCP tools; handlers run in the Foundry
   client.
 - **G3 No human seat.** Skills work when no human has a GM tab open, on a headless server.
 - **G4 System agnostic.** Built and shipped code references no game system and works in any system. Game-system
@@ -458,7 +458,7 @@ World-scope settings, `restricted: true` (GM only), `config: true`, all default 
 | `allowOwnershipWrites` | Writes to `ownership` | Escalation-capable |
 | `allowCompendiumWrites` | Writes into compendium packs | Escalation-capable |
 | `allowModuleConfigWrites` | `core.moduleConfiguration` | Escalation-capable |
-| `allowedPluginModules` | Plugin skills and scripts per module id | Default: none enabled |
+| `allowedPluginModules` | Plugin tools per module id | Default: none enabled |
 | `allowSidecarPlugins` | Sidecar (Node) handlers of plugins the GM enables by id | Arbitrary Node code outside the browser; default OFF; see the known limit below |
 | `allowAgentScripts` |, `disable_script`, running agent-saved scripts | Only with D21 option (b); arbitrary-code caveat |
 
