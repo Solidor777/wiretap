@@ -145,9 +145,9 @@
 
 ## After M7: ideas from the foundry-vtt-mcp survey
 
-Accepted by the owner; each needs a design walkthrough when picked up. Survey:
-`C:\Users\emper\.claude\work\fvttmcp-survey\comparison-wiretap.md`. Every item stays system agnostic; game-system
-support goes in separate add-on modules that depend on Wiretap, after Wiretap is done.
+Accepted by the owner; each needs a design walkthrough when picked up. The survey is kept outside the repository.
+Every item stays system agnostic; game-system support goes in separate add-on modules that depend on Wiretap, after
+Wiretap is done.
 
 - [ ] Audit log of agent writes: one line per mutating call (time, tool, endpoint kind, uuids, changed paths, result
       code), no document contents, readable by the GM. File growth is handled by moving a full file to the recycle bin
