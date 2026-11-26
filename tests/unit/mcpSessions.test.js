@@ -214,6 +214,30 @@ describe('session manager: sessions past the warning count', () => {
       manager.dispose();
    });
 
+   it('writes at most 10 session-count lines per minute, then one summary line', () => {
+      /** @type {number} The manager's clock in milliseconds. */
+      let clock = 0;
+      const { manager, logs } = makeManager({
+         warnSessions: 3,
+         now: () => clock,
+      });
+      // Sessions 4 to 25 are over the warning count: 22 lines asked for, 10 written.
+      for (let index = 0; index < 25; index += 1) {
+         manager.add(fakeSession(`s${index}`));
+      }
+      expect(logs).toHaveLength(10);
+      expect(logs[9]).toBe(
+         'Wiretap sidecar | MCP session s12 opened: 13 sessions are open, more than the 3 recommended',
+      );
+      clock = 60_000;
+      manager.add(fakeSession('s25'));
+      expect(logs.slice(10)).toEqual([
+         'Wiretap sidecar | 12 further MCP session count warnings suppressed',
+         'Wiretap sidecar | MCP session s25 opened: 26 sessions are open, more than the 3 recommended',
+      ]);
+      manager.dispose();
+   });
+
    it('logs nothing once the open count is back at the warning count', async () => {
       const { manager, logs } = makeManager({ warnSessions: 1 });
       manager.add(fakeSession('a'));

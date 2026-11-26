@@ -162,6 +162,20 @@ const CONNECTION_DROP_LOG_WINDOW_MS: number = 60_000;
 // Most connection-drop lines written per window; later drops in the window are counted in one summary line.
 const CONNECTION_DROP_LOG_LIMIT: number = 10;
 
+// Length in milliseconds of one window of the `read_handle` path-count log throttle.
+const READ_HANDLE_PATHS_LOG_WINDOW_MS: number = 60_000;
+
+// Most `read_handle` path-count lines written per window, over every session; later lines in the window are counted
+// in one summary line.
+const READ_HANDLE_PATHS_LOG_LIMIT: number = 10;
+
+// Length in milliseconds of one window of the skipped-registry-tool log throttle.
+const SYNC_SKIP_LOG_WINDOW_MS: number = 60_000;
+
+// Most skipped-registry-tool lines written per window, over every session and sync; every sync of every session logs
+// each skipped tool again, so later lines in the window are counted in one summary line.
+const SYNC_SKIP_LOG_LIMIT: number = 10;
+
 // Milliseconds a connection may go without sending a request before it is closed. Node's own timeouts only start with
 // the first byte of a request, so a socket that never sends one would otherwise hold a `maxConnections` slot. It does
 // not apply while a request is in flight, so an open event stream is never closed by it.
@@ -180,7 +194,8 @@ const MCP_DRAIN_MAX_BYTES: number = 8 * 1024 * 1024;
  * size) logs one warning line.
  * @param {HandleStore} store - The store holding the results.
  * @param {string} ownerKey - The owner key whose handles may be read.
- * @param {(line: string) => void} log - The sidecar log sink, which receives the warning line.
+ * @param {(line: string) => void} log - The sink that receives the warning line; `startMcpServer` passes one
+ *        throttle shared by every session.
  * @returns {ToolHandler<ReadHandleArgs>} An async handler mapping tool args to an MCP tool result.
  */
 export function makeReadHandleHandler(
@@ -378,7 +393,9 @@ function makeRegistryToolHandler(
  * @param {string} instructions - The server instructions text.
  * @param {string} ownerKey - The session id, the owner of the session's handles.
  * @param {() => boolean} ownerLive - Whether that session is still held; a result is not stored for an ended one.
- * @param {(line: string) => void} log - The sidecar log sink `read_handle` writes its warning line to.
+ * @param {(line: string) => void} log - The sidecar log sink the result enforcer writes its dropped-fields line to.
+ * @param {(line: string) => void} logPaths - The throttled sink `read_handle` writes its path-count line to; one
+ *        throttle serves every session.
  * @returns {SessionMcpServer} A configured server, not yet connected.
  */
 function buildServer(
@@ -390,6 +407,7 @@ function buildServer(
    ownerKey: string,
    ownerLive: () => boolean,
    log: (line: string) => void,
+   logPaths: (line: string) => void,
 ): SessionMcpServer {
    // The per-session MCP server.
    const server: SessionMcpServer = new SessionMcpServer(
@@ -417,7 +435,7 @@ function buildServer(
                .optional()
                .describe('Result size limit.'),
          },
-         handler: makeReadHandleHandler(store, ownerKey, log),
+         handler: makeReadHandleHandler(store, ownerKey, logPaths),
       },
       ...backupTools,
       ...extraTools,
@@ -436,6 +454,7 @@ function buildServer(
             ownerLive,
             toolName: tool.name,
             budgetBytes: tool.budgetBytes,
+            log,
          }),
       );
    }
@@ -669,6 +688,23 @@ export function startMcpServer(
    const settings: McpSessionSettings = options.sessions ?? {};
    // The sidecar log sink.
    const log: (line: string) => void = settings.log ?? ((line) => console.log(line));
+   // Writes a `read_handle` path-count line subject to the per-window limit, with one summary line per window. Each
+   // throttle here reads `Date.now` at call time.
+   const logReadHandlePaths: (line: string) => void = createLogThrottle({
+      log,
+      now: () => Date.now(),
+      limit: READ_HANDLE_PATHS_LOG_LIMIT,
+      windowMs: READ_HANDLE_PATHS_LOG_WINDOW_MS,
+      noun: 'read_handle path-count warnings',
+   });
+   // Writes a skipped-registry-tool line subject to the per-window limit, with one summary line per window.
+   const logSyncSkip: (line: string) => void = createLogThrottle({
+      log,
+      now: () => Date.now(),
+      limit: SYNC_SKIP_LOG_LIMIT,
+      windowMs: SYNC_SKIP_LOG_WINDOW_MS,
+      noun: 'skipped registry tool lines',
+   });
    // The store behind every session's `read_handle`; it outlives the sessions, which own disjoint handles.
    const store: HandleStore = options.handleStore ?? createHandleStore({ log });
    // The caller's tools, registered on every session.
@@ -712,10 +748,10 @@ export function startMcpServer(
    /**
     * Make a session's registry tools equal to the wanted tools: remove the ones that are gone, replace the ones whose
     * definition changed and register the new ones. A tool named like a fixed tool, and a repeat of an earlier wanted
-    * name, is skipped with one log line each on every sync; every other wanted tool is listed, however many there
-    * are. The wanted tools are looked up by name in a map, so one sync costs time linear in the held and wanted tools;
-    * every session re-syncs on each change the bridge announces. The server's own change notifications are withheld;
-    * the caller notifies once.
+    * name, is skipped with one log line each on every sync (through `logSyncSkip`, at most `SYNC_SKIP_LOG_LIMIT` per
+    * minute over every session); every other wanted tool is listed, however many there are. The wanted tools are
+    * looked up by name in a map, so one sync costs time linear in the held and wanted tools; every session re-syncs on
+    * each change the bridge announces. The server's own change notifications are withheld; the caller notifies once.
     * @param {McpSession} session - The session.
     * @param {RegistryTool[]} wanted - The tools of the endpoint the session routes to.
     * @returns {boolean} Whether the session's tool list changed.
@@ -725,11 +761,15 @@ export function startMcpServer(
       const listed: Map<string, RegistryTool> = new Map();
       for (const tool of wanted) {
          if (fixedNames.has(tool.name)) {
-            log(`Wiretap sidecar | MCP session ${session.id} skipped registry tool ${tool.name}: the name belongs to a `
-               + 'fixed tool');
+            logSyncSkip(
+               `Wiretap sidecar | MCP session ${session.id} skipped registry tool ${tool.name}: the name belongs to `
+                  + 'a fixed tool',
+            );
          } else if (listed.has(tool.name)) {
-            log(`Wiretap sidecar | MCP session ${session.id} skipped registry tool ${tool.name}: the name repeats an `
-               + 'earlier tool');
+            logSyncSkip(
+               `Wiretap sidecar | MCP session ${session.id} skipped registry tool ${tool.name}: the name repeats `
+                  + 'an earlier tool',
+            );
          } else {
             listed.set(tool.name, tool);
          }
@@ -771,6 +811,7 @@ export function startMcpServer(
                   ownerLive: () => manager.get(session.id) !== undefined,
                   toolName: tool.name,
                   budgetBytes: tool.budgetBytes,
+                  log,
                }),
             ),
          });
@@ -843,6 +884,7 @@ export function startMcpServer(
          id,
          () => manager.get(id) !== undefined,
          log,
+         logReadHandlePaths,
       );
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
          sessionIdGenerator: () => id,
@@ -1041,7 +1083,7 @@ export function startMcpServer(
    // Writes a connection-drop line subject to the per-window limit, with one summary line per window.
    const logConnectionDrop: (line: string) => void = createLogThrottle({
       log,
-      now: Date.now,
+      now: () => Date.now(),
       limit: CONNECTION_DROP_LOG_LIMIT,
       windowMs: CONNECTION_DROP_LOG_WINDOW_MS,
       noun: 'MCP connection drops',

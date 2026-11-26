@@ -18,6 +18,7 @@ import { sanitizeBridgeSettings, type BridgeSettings } from '../shared/bridgeSet
 import { BACKUP_SIDECAR_CODES } from '../shared/backup.js';
 import type { RegistryTool } from './toolRegistry.ts';
 import { truncateUtf8 } from './utf8.ts';
+import { createLogThrottle } from './logThrottle.ts';
 
 /** The kind of a bridge endpoint: a person's browser tab or an agent-runner browser. */
 export type EndpointKind = 'human' | 'agent';
@@ -131,10 +132,10 @@ export interface Router {
    invoke: (op: string, params: object, options?: InvokeOptions) => Promise<unknown>;
    // Runs the `callTool` operation for a registry tool on the picked endpoint. The tool is resolved by name on that
    // endpoint: its own declaration (not the listed one) supplies the gates that are judged in order against that
-   // endpoint's snapshot and is returned with the result. Fails with TOOL_GONE when the endpoint no longer registers the
-   // name or declares other arguments for it, and with GATE_DENIED when its gates differ from the listed ones or one of
-   // them is closed. A different description or result budget does not fail the call; the picked endpoint's budget
-   // applies.
+   // endpoint's snapshot and is returned with the result. Fails with TOOL_GONE when the endpoint no longer registers
+   // the name or declares other arguments for it, and with GATE_DENIED when its gates differ from the listed ones or
+   // one of them is closed. A different description or result budget does not fail the call; the picked endpoint's
+   // budget applies.
    invokeTool: (
       name: string,
       args: Record<string, unknown>,
@@ -225,6 +226,13 @@ const DEFAULT_TIMERS: RouterTimers = {
 // Best-practice number of registered endpoints; every identify that passes validation registers, and each new socket
 // that takes the count past it logs one line.
 export const ENDPOINTS_WARN: number = 64;
+
+// Length in milliseconds of one window of the endpoint-count log throttle.
+const ENDPOINT_COUNT_LOG_WINDOW_MS: number = 60_000;
+
+// Most endpoint-count lines written per window; `isGM` in the identify is self-declared, so any local process can
+// register sockets, and later lines in the window are counted in one summary line.
+const ENDPOINT_COUNT_LOG_LIMIT: number = 10;
 
 // Maximum UTF-8 byte length of an identify `userId`.
 const MAX_USER_ID_BYTES: number = 64;
@@ -363,7 +371,8 @@ export class EndpointTimeoutError extends Error {
 
 /**
  * Create the endpoint registry. Entries keep insertion order, which is the tiebreak between endpoints of one kind.
- * @param {() => number} [now] - The clock used for `registeredAt` (default: `Date.now`).
+ * @param {() => number} [now] - The clock used for `registeredAt` and the endpoint-count log throttle (default:
+ *        `Date.now`).
  * @param {(line: string) => void} [log] - Receives one sidecar log line (default: `console.log`).
  * @returns {EndpointRegistry} An empty registry.
  */
@@ -375,6 +384,14 @@ export function createEndpointRegistry(
    const endpoints: Map<string, Endpoint> = new Map();
    // Listeners told about changes, in subscription order.
    const listeners: Set<() => void> = new Set();
+   // Writes an endpoint-count line subject to the per-window limit, with one summary line per window.
+   const logEndpointCount: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: ENDPOINT_COUNT_LOG_LIMIT,
+      windowMs: ENDPOINT_COUNT_LOG_WINDOW_MS,
+      noun: 'endpoint count warnings',
+   });
 
    /**
     * Tell every listener that the endpoint set, an endpoint's health, its tools or its allowed plugin modules changed.
@@ -391,7 +408,8 @@ export function createEndpointRegistry(
        * Add an endpoint, or update the identity of the socket's existing entry (its registration time, position and
        * health are kept, so a client cannot clear an unresponsive state by identifying again; only a ping ack, through
        * `setHealth`, restores it). A new socket starts healthy; the number of endpoints is the GM's choice, and a new
-       * socket that takes the count past `ENDPOINTS_WARN` logs one line.
+       * socket that takes the count past `ENDPOINTS_WARN` logs one line (at most `ENDPOINT_COUNT_LOG_LIMIT` per minute,
+       * then one summary line).
        * @param {string} socketId - The socket id.
        * @param {EndpointIdentity} identity - The validated identity.
        * @returns {void}
@@ -406,9 +424,9 @@ export function createEndpointRegistry(
             registeredAt: existing?.registeredAt ?? now(),
          });
          if (!existing && endpoints.size > ENDPOINTS_WARN) {
-            log(
-               `Wiretap sidecar | Foundry endpoint ${socketId} registered: ${endpoints.size} endpoints are registered, ` +
-                  `more than the ${ENDPOINTS_WARN} recommended`,
+            logEndpointCount(
+               `Wiretap sidecar | Foundry endpoint ${socketId} registered: ${endpoints.size} endpoints are ` +
+                  `registered, more than the ${ENDPOINTS_WARN} recommended`,
             );
          }
          notify();
@@ -939,7 +957,8 @@ export function createRouter(registry: EndpointRegistry, deps: RouterDeps): Rout
          requiredGates = declared.gates;
       }
       for (const required of requiredGates) {
-         // Each gate is judged on the snapshot of the endpoint picked above; the first denial is thrown before any send.
+         // Each gate is judged on the snapshot of the endpoint picked above; the first denial is thrown before any
+         // send.
          // The denial of the gate on the picked endpoint's snapshot, or null when it is open.
          const denial: ReturnType<typeof gateDenial> = gateDenial(endpoint.gateState, required.gate, required.moduleId);
          if (denial) {

@@ -159,7 +159,7 @@ function makeBridge() {
 
 /**
  * Build the store, the fake bridge and the tools.
- * @param {{ trash?: TrashFunction }} [options] - A recycle bin to use instead of the fake one.
+ * @param {{ trash?: TrashFunction, now?: () => number }} [options] - A recycle bin instead of the fake one; the clock.
  * @returns {Fixture} The fixture.
  */
 function setup(options = {}) {
@@ -183,6 +183,7 @@ function setup(options = {}) {
       bridge,
       store,
       log: (line) => logs.push(line),
+      now: options.now,
    })(undefined);
    return {
       root,
@@ -580,6 +581,24 @@ describe('guideline warnings', () => {
       await fixture.call('list_backups', { limit: 51 });
       expect(fixture.logs).toEqual([
          'Wiretap sidecar | list_backups warning: limit 51 is over the 50 guideline',
+      ]);
+   });
+
+   it('writes at most 10 guideline warnings per minute, then one summary line', async () => {
+      /** @type {number} The tools' clock in milliseconds. */
+      let clock = 0;
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup({ now: () => clock });
+      for (let index = 0; index < 15; index += 1) {
+         await fixture.call('list_backups', { limit: 51 });
+      }
+      expect(fixture.logs).toEqual(Array.from({ length: 10 }, () =>
+         'Wiretap sidecar | list_backups warning: limit 51 is over the 50 guideline'));
+      clock = 60_000;
+      await fixture.call('list_backups', { limit: 52 });
+      expect(fixture.logs.slice(10)).toEqual([
+         'Wiretap sidecar | 5 further backup guideline warnings suppressed',
+         'Wiretap sidecar | list_backups warning: limit 52 is over the 50 guideline',
       ]);
    });
 
