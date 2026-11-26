@@ -358,6 +358,37 @@ describe('MCP HTTP hardening and session robustness', () => {
          expect(harness.mcp().sessions()).toBe(8);
          expect(harness.logs().filter((line) => line.includes('skipped registry tool clash'))).toHaveLength(10);
       });
+
+      it('writes at most 10 dropped-result-fields lines per window, across sessions', async () => {
+         await harness.start({
+            tools: [
+               {
+                  name: 'extra_fields',
+                  description: 'A test tool whose result carries a field the enforcer drops.',
+                  inputSchema: {},
+                  handler: async () => ({
+                     content: [
+                        {
+                           type: 'text',
+                           text: 'ok',
+                        },
+                     ],
+                     extra: 1,
+                  }),
+               },
+            ],
+         });
+         for (let session = 0; session < 2; session += 1) {
+            const { client } = await harness.connectClient();
+            for (let call = 0; call < 8; call += 1) {
+               await client.callTool({
+                  name: 'extra_fields',
+                  arguments: {},
+               });
+            }
+         }
+         expect(harness.logs().filter((line) => line.includes('extra_fields result fields dropped'))).toHaveLength(10);
+      });
    });
 
    describe('sessions past the warning count', () => {

@@ -176,6 +176,13 @@ const SYNC_SKIP_LOG_WINDOW_MS: number = 60_000;
 // each skipped tool again, so later lines in the window are counted in one summary line.
 const SYNC_SKIP_LOG_LIMIT: number = 10;
 
+// Length in milliseconds of one window of the dropped-result-fields log throttle.
+const DROPPED_FIELDS_LOG_WINDOW_MS: number = 60_000;
+
+// Most dropped-result-fields lines written per window, over every session and tool; every result that loses a field
+// writes one, so later lines in the window are counted in one summary line.
+const DROPPED_FIELDS_LOG_LIMIT: number = 10;
+
 // Milliseconds a connection may go without sending a request before it is closed. Node's own timeouts only start with
 // the first byte of a request, so a socket that never sends one would otherwise hold a `maxConnections` slot. It does
 // not apply while a request is in flight, so an open event stream is never closed by it.
@@ -393,7 +400,8 @@ function makeRegistryToolHandler(
  * @param {string} instructions - The server instructions text.
  * @param {string} ownerKey - The session id, the owner of the session's handles.
  * @param {() => boolean} ownerLive - Whether that session is still held; a result is not stored for an ended one.
- * @param {(line: string) => void} log - The sidecar log sink the result enforcer writes its dropped-fields line to.
+ * @param {(line: string) => void} logDropped - The throttled sink the result enforcer writes its dropped-fields line
+ *        to; one throttle serves every session.
  * @param {(line: string) => void} logPaths - The throttled sink `read_handle` writes its path-count line to; one
  *        throttle serves every session.
  * @returns {SessionMcpServer} A configured server, not yet connected.
@@ -406,7 +414,7 @@ function buildServer(
    instructions: string,
    ownerKey: string,
    ownerLive: () => boolean,
-   log: (line: string) => void,
+   logDropped: (line: string) => void,
    logPaths: (line: string) => void,
 ): SessionMcpServer {
    // The per-session MCP server.
@@ -454,7 +462,7 @@ function buildServer(
             ownerLive,
             toolName: tool.name,
             budgetBytes: tool.budgetBytes,
-            log,
+            log: logDropped,
          }),
       );
    }
@@ -705,6 +713,15 @@ export function startMcpServer(
       windowMs: SYNC_SKIP_LOG_WINDOW_MS,
       noun: 'skipped registry tool lines',
    });
+   // Writes a dropped-result-fields line of the result enforcer subject to the per-window limit, with one summary line
+   // per window; the built-in, extra and registry tools of every session share it.
+   const logDroppedFields: (line: string) => void = createLogThrottle({
+      log,
+      now: () => Date.now(),
+      limit: DROPPED_FIELDS_LOG_LIMIT,
+      windowMs: DROPPED_FIELDS_LOG_WINDOW_MS,
+      noun: 'dropped-result-fields lines',
+   });
    // The store behind every session's `read_handle`; it outlives the sessions, which own disjoint handles.
    const store: HandleStore = options.handleStore ?? createHandleStore({ log });
    // The caller's tools, registered on every session.
@@ -811,7 +828,7 @@ export function startMcpServer(
                   ownerLive: () => manager.get(session.id) !== undefined,
                   toolName: tool.name,
                   budgetBytes: tool.budgetBytes,
-                  log,
+                  log: logDroppedFields,
                }),
             ),
          });
@@ -883,7 +900,7 @@ export function startMcpServer(
          instructions,
          id,
          () => manager.get(id) !== undefined,
-         log,
+         logDroppedFields,
          logReadHandlePaths,
       );
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
