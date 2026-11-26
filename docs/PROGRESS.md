@@ -24,17 +24,18 @@ document, so none are stated here; the count at the time this file was written i
 | M21 Document backups | Done | 2026-11-21 | `253257f`, `3914297` (design and plan); `393ac25`, `302d9f9`, `517fb81`, `723a3ad`, `76b9ad8`, `9a6f979`, `a8b78d1`, `9c30bb4`, `e4c2085`, `b61251f`, `cd2967a`, `d5b3960`, `da9bd16`, `fa9e809` (features and fixes); `80403c5`, `79f94ac`, `8f820be`, `f9bc54a` (tests); merges `1881516`, `8570e4f`, `18fc7b1`, `f5409a4`, `ec5a77e`, `8433951`, `176d540`, `eb570e0`, `b70cbc1`, `640f155`; `docs: close M21; progress, README and skills` | [`specs/2026-11-21-wiretap-backups-design.md`](specs/2026-11-21-wiretap-backups-design.md), [`plans/2026-11-21-wiretap-m21-backups.md`](plans/2026-11-21-wiretap-m21-backups.md); as-built notes below; `backup_documents`, `list_backups`, `restore_backup`, `delete_backup` in `server/backupTools.ts`; 19 tools, 10,426 B of definitions |
 | M18 Compendium pack tools | Done | 2026-11-21 | `10ffd14`, `75ef915` (design and plan); `a7ce589`, `b4f9f24`, `214426b`, `3b6787b`, `d372696`, `72c6af2`, `b41ab2e` (features and fix); `a48ffd2`, `869a36d`, `989582d`, `e15d83b`, `1361027` (tests); merges `c9773e5`, `ae02d1c`, `f239556`, `5d8da73`, `853581a`, `f47640c`, `9cbf590`, `bab19f8`, `02bda56`, `86aaa0e`, `bf0b67e`; `7c3bbb6`, `343465e` and the final-review docs commit (docs) | [`specs/2026-11-21-wiretap-pack-tools-design.md`](specs/2026-11-21-wiretap-pack-tools-design.md), [`plans/2026-11-21-wiretap-m18-pack-tools.md`](plans/2026-11-21-wiretap-m18-pack-tools.md); as-built notes below; `create_pack`, `delete_pack` in `src/bridge/scripts/`; the `allowPackDeletion` gate; 21 tools, 11,330 B of definitions |
 | M15a Copy by uuid and content versions | Done | 2026-11-21 to 2026-11-22 | `f883eb8`, `d42de9f` (design and plan); `bbea2d4`, `2c58019`, `6a9fcd2`, `1bed934`, `64c9b78`, `f88bb0c`, `db6e6a2`, `d5d897b`, `786c5a6` (features and fixes); `9595303`, `b54fb70`, `0abefeb`, `c7a7e58`, `c5de351`, `f549e95`, `0ae7ff5`, `2865459` (tests); `144ca8a`, `cb2adf2`, `31643e4`, `6eec27c`, `d27bf23` and `docs: close M15a; progress, README and skills` (docs); `c102166`, `9a23dc6`, `d38825c` and `docs: M15a final-review progress` (final-review fixes) | [`plans/2026-11-21-wiretap-m15a-design.md`](plans/2026-11-21-wiretap-m15a-design.md), [`plans/2026-11-21-wiretap-m15a-plan.md`](plans/2026-11-21-wiretap-m15a-plan.md); as-built notes below; `fromUuids` on `create_documents`, `version` and `ifChanged` on `get_document`, the copy, actor and change-only recipes in `skills/wiretap/SKILL.md`; D35; 21 tools, 11,393 B of definitions |
-| M7 Plugin tools | In review (final review, skills and the e2e review fixes pending) | 2026-11-23 to 2026-11-25 | `b4020a8`, `245f56b`, `608ef8a` (spec and plan edits); `4472d8b`, `cb42e50`, `74c54bf`, `506e55d`, `647cc81`, `07fa66e`, `29beb90`, `e6cfad7`, `cdebcc1`, `031f0b4`, `2475596`, `0b1a4e4`, `92243f3`, `b4f2136`, `59f74c6`, `9928f2d` (plugin route, gates, API, no tool cap); `91d7639`, `f036fc5`, `ebbdd92`, `39a0846`, `5b69b12`, `14a8545`, `88d7db7`, `aed3d38` (no limits on the GM's choices); `802d0e2`, `36fa963`, `189b1f7`, `76bfb28` (no silent cuts); `d60adf1`, `7586c54`, `c5a82a7` (fixes); `27ae471`, `4edad93` (tests); `5c5593c` (example); `a270248` (shared resources) | [`specs/2026-11-23-wiretap-m7-plugin-tools-design.md`](specs/2026-11-23-wiretap-m7-plugin-tools-design.md), [`plans/2026-11-23-wiretap-m7-plugin-tools.md`](plans/2026-11-23-wiretap-m7-plugin-tools.md); as-built notes below; `api.registerTool` and the `wiretap.registerTools` hook in `src/bridge/pluginApi.js`; `examples/spell-text-plugin/`; 21 tools, 10,918 B of definitions |
+| M7 Plugin tools | Done 2026-11-25 | 2026-11-23 to 2026-11-25 | `b4020a8`, `245f56b`, `608ef8a` (spec and plan edits); `4472d8b`, `cb42e50`, `74c54bf`, `506e55d`, `647cc81`, `07fa66e`, `29beb90`, `e6cfad7`, `cdebcc1`, `031f0b4`, `2475596`, `0b1a4e4`, `92243f3`, `b4f2136`, `59f74c6`, `9928f2d` (plugin route, gates, API, no tool cap); `91d7639`, `f036fc5`, `ebbdd92`, `39a0846`, `5b69b12`, `14a8545`, `88d7db7`, `aed3d38` (no limits on the GM's choices); `802d0e2`, `36fa963`, `189b1f7`, `76bfb28` (no silent cuts); `d60adf1`, `7586c54`, `c5a82a7` (fixes); `27ae471`, `4edad93` (tests); `5c5593c` (example); `3f0a2b0`, `2e980bb`, `db6ebb8`, `2657996`, `39a8a74` (docs, skills and comments); `b93a747`, `f65190a`, `abd7cfc`, `b51dfa2`, `eb89741` (final review fixes); `a270248` (shared resources) | [`specs/2026-11-23-wiretap-m7-plugin-tools-design.md`](specs/2026-11-23-wiretap-m7-plugin-tools-design.md), [`plans/2026-11-23-wiretap-m7-plugin-tools.md`](plans/2026-11-23-wiretap-m7-plugin-tools.md); as-built notes below; `api.registerTool` and the `wiretap.registerTools` hook in `src/bridge/pluginApi.js`; `examples/spell-text-plugin/`; 21 tools, 10,918 B of definitions |
 
-Current suite (MEASURED by the controller on 2026-11-25, `npm test` on `m7` at `41c008c`): 141 test files, 3197
-tests passed, 2 skipped; `OPEN_BUGS.md` holds two comment defects found in M7. Headless e2e: the last full run (before
+Current suite (MEASURED by the controller on 2026-11-25, `npx vitest run` on `m7` at `b51dfa2`): 141 test files, 3205
+tests passed, 2 skipped; `OPEN_BUGS.md` is empty. Headless e2e: the last full run (before
 M6) was 56 passed, 1 skipped (`keyFields.measure.spec.js`, skipped unless `WIRETAP_MEASURE_KEYFIELDS=1`); the three
 M6 specs, the M21 specs `backupTools.spec.js` and `gates.spec.js`, the M18 spec `packTools.spec.js`, the M15a specs
 `readTools.spec.js`, `copyTools.spec.js` and `writeTools.spec.js` and the M7 spec `pluginTools.spec.js` were run on
 their own (see M6, M21, M18, M15a and M7 below). A full e2e run after M6 has not been made.
 
-M7 is in review. In the order of PLAN.md section 5, M17 was dropped by D29 (revision 7), and M21 (added by D33,
-revision 8), M18 and M15a are done.
+M7 is done. The next milestone is the owner's choice: PLAN.md section 5 lists M16 next, and TODO.md lists the
+system-agnostic work right after M7. In the order of PLAN.md section 5, M17 was dropped by D29 (revision 7), and
+M21 (added by D33, revision 8), M18 and M15a are done.
 
 ## M0 status and deviations
 
@@ -754,6 +755,15 @@ notice at every silent cut):**
 - Two test families failed only in full runs: duration bounds in the schema scale tests (removed, with a scan test
   `tests/unit/noWallClockBounds.test.js`, `c5a82a7`) and tests that still asserted a removed bound (`writeUpdate`
   and `readTools`, caught by the wave-end full suite and fixed in `14a8545` and `88d7db7`).
+- Final review: one whole-branch review in three parts (product code, tests, docs; the diff was about 1.2 MB). Its
+  Important findings were warning lines that untrusted input can cause written without a throttle (session count,
+  endpoint count, `read_handle` paths, skipped registry tools, backup guidelines, dropped result fields), the guide not
+  saying where a plugin adds its hook listener, and this file's stale M7 status. All were fixed (`f65190a`, `abd7cfc`,
+  `b51dfa2`, `b93a747`, `eb89741`), with Minor fixes to test texts, wraps and the e2e gate start state; one re-check
+  found every taken finding resolved.
+- Final suite (MEASURED by the controller, `npx vitest run` on `b51dfa2`): 141 test files, 3205 passed, 2 skipped;
+  `npm run typecheck` and `npm run eslint` exit 0. The plugin e2e spec passed again after the gate start-state change,
+  and `npm run check:release` exited 0 (MEASURED by the builder).
 
 ## Decision provenance (moved from PLAN.md section 3)
 

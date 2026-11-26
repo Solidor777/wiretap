@@ -224,3 +224,25 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
 
 - Title: `scripts/` is linted by nothing. Summary: `eslint.config.js` lists `scripts/` among its ignores, so
   `npm run eslint` never checks `scripts/e2e-foundry-server.mjs` (or any other launcher there). Status: Needs review.
+
+- Title: The tool-failure log line is not throttled. Summary: `logFailure` in `server/resultBudget.ts` writes
+  "tool failed" and "tool result rejected" with `console.warn`, not through the caller's log sink or a
+  `createLogThrottle`; a failing or malformed tool result from an endpoint writes one line each time. The line is older
+  than M7, which throttled the new warning lines only. Status: Needs review.
+
+- Title: The dropped-result-fields line has no Foundry source today. Summary: the sidecar builds a Foundry tool's result
+  itself as one text item (`server/mcp.ts`, the registry tool handler), so the enforcer drops fields only for the
+  sidecar's own tools and extra tools; the line is throttled either way (INFERRED from reading the code). Status:
+  Informational.
+
+- Title: Compact view tuples past the 40-tuple cap. Summary: tuples left out at the cap do not set `cut`; each
+  collection's `total` shows that more exist. Status: Informational.
+
+- Title: Plugin e2e first absence check. Summary: `tests/e2e/pluginTools.spec.js` waits up to 1000 ms for the shipped
+  listing before each "not listed" check; a stale endpoint from before the reload could still let the first check pass
+  (INFERRED unlikely). The case where the stored `allowedPluginModules` already lists the fixture was not run; the spec
+  clears the gate after recording it. Status: Informational.
+
+- Title: One Node stack trace in a passing full run. Summary: one `npx vitest run` on 2026-11-25 printed a Node stack
+  trace (`Module._load`, Node.js v26.11.1) and still exited 0 with every test passed; two reruns on the same tree
+  printed none. Status: Needs review if it recurs.
