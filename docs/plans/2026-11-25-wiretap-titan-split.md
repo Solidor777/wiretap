@@ -79,9 +79,8 @@ None: no security boundary, process spawn, protocol or public API change.
     long-named items": one Actor of type `player`, `system` holding 30 groups `g0`…`g29` each `{ value: 'V'.repeat(200) }`,
     the same 120 items; expects `bytes(view) <= getBudget('COMPACT_VIEW_MAX_BYTES').value`,
     `Object.keys(view.fields).length <= 24` and `view.cut === true`.
-- [ ] **Step 2:** `npx vitest run tests/unit/getDocument.test.js`: the renamed key-leaves test FAILS (the Titan list
-  still applies to type `player` only when the system id is `titan`; if it passes because the id is now
-  `mock-system`, note that and continue: the code change is still required by the spec).
+- [ ] **Step 2:** `npx vitest run tests/unit/getDocument.test.js` passes. No red step exists: with the synthetic system
+  id the old lookup finds no list, so the tests pass before and after Step 3; they pin the behaviour Step 3 keeps.
 - [ ] **Step 3:** In `getDocument.js` remove the `keyPathsFor` import and lookup; the compact branch returns
   `ctx.shape.compact(data, { version, partial })`. Trash both `keyFields` files; verify they are gone.
 - [ ] **Step 4:** In `tests/e2e/readTools.spec.js` remove the `KEY_FIELDS` import, the `lists` constant and the
