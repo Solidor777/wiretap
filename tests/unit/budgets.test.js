@@ -192,13 +192,13 @@ const EXPECTED = [
       'IMAGE_MAX_SIDE_PIXELS',
       1280,
       'pixels',
-      'hard',
+      'warn',
    ],
    [
       'IMAGE_MAX_PER_RESULT',
       1,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'IMAGE_DATA_MAX_BYTES',

@@ -734,7 +734,9 @@ notice at every silent cut):**
   reply budgets kept; a warning at every silent cut; the 837-byte backup note bound kept; pack and document id length
   caps lifted; the 1,000-item cap lifted for the read and write lists; the 64 MB handle-input total; font size 8 to 32
   kept; `MCP_CONNECTIONS_MAX` 128 kept with a throttled drop line; the compact view's `cut` only for real loss.
-- Controller decisions: plugin results carry no image, so the plugin image limits were dropped rather than built; the
+- Controller decisions: the image count and image side refusals were removed for every tool, at the owner's word
+  (2026-11-25): a result with more than one image, or an image past 1280 px longest side, passes and the sidecar logs
+  one warning line for each; plugin results still carry no image; the
   compact view keeps `cut` at the depth bound (an unentered object may hold leaves); the e2e fixture task ran in the
   main tree, because Foundry loads `Data/modules/wiretap`; the new plugin-tool skill goes into the
   `wiretap@personal-skills` plugin with no `paths:` (the owner moved the skills there on 2026-11-25).
