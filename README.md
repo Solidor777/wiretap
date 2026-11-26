@@ -456,16 +456,15 @@ Hooks.once('wiretap.registerTools', (api) => {
 
 **When to register.** Wiretap fires `wiretap.registerTools` once, from its own `ready` hook, on every client, and that
 call is the only way the API reaches your module (`game.modules.get('wiretap').api` does not hold it). Add the listener
-while your module's code runs: at the top level of your entry script, as the example does, or in your `init` or
-`setup` hook. Foundry runs every module's code and calls `init` and `setup` before `ready`, so such a listener is in
-place whether your module loads before or after Wiretap. A listener added inside your own `ready` hook misses the call
+while your module's code runs: at the top level of your entry script, as the example does, or in your `init` or `setup`
+hook. Foundry runs every module's code and calls `init` and `setup` before `ready`, so such a listener is in place
+whether your module loads before or after Wiretap. A listener added inside your own `ready` hook misses the call
 whenever Wiretap's `ready` hook runs first: your module then gets no API and no error. On a GM client the hook fires
 after Wiretap's own tools are registered. To register later in the session, keep the `api` object the hook passed you
 and call `api.registerTool` on it: each accepted tool is sent to the sidecar and every agent session gets a tool-list
-change. Registration
-works on every client, so your module needs no role check, but only GM clients connect to the sidecar, so only the
-tools of a GM's browser reach the agent. There is no unregister call: a disabled module's tools disappear after the
-next reload.
+change. Registration works on every client, so your module needs no role check, but only GM clients connect to the
+sidecar, so only the tools of a GM's browser reach the agent. There is no unregister call: a disabled module's tools
+disappear after the next reload.
 
 **Naming.** You pass the short `name`; Wiretap registers `<moduleId>__<name>`. `moduleId` is your module's id from
 `module.json`, exactly as Foundry accepts it: one or more of `A-Z`, `a-z`, `0-9`, `_` and `-` (no dots or spaces),
@@ -513,9 +512,10 @@ gate. A handler that runs longer than 8 s fails with `SCRIPT_TIMEOUT`; a thrown 
 browser judges both again from its own world settings.
 
 **The three groups of checks.** Wiretap holds its own tools to the size guidelines below and refuses them past one: the
-browser refuses such a tool at registration, so it is not listed, and the test suite fails. A plugin tool past a guideline is accepted, and Wiretap writes one warning line to the browser console
-(`Wiretap | script registry warning for "<name>": <text>`) and to the sidecar log
-(`Wiretap sidecar | registry warning for tool "<name>": <text>`). A rule the tool needs to work refuses every tool.
+browser refuses such a tool at registration, so it is not listed, and the test suite fails. A plugin tool past a
+guideline is accepted, and Wiretap writes one warning line to the browser console (`Wiretap | script registry warning
+for "<name>": <text>`) and to the sidecar log (`Wiretap sidecar | registry warning for tool "<name>": <text>`). A rule
+the tool needs to work refuses every tool.
 
 1. **Best practice (a plugin tool gets a warning).** `<n>` is the measured value:
    - `description is <n> characters, over the 240-character guideline`, or below that
