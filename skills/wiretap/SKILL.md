@@ -5,28 +5,29 @@ description: Use when working with the live Foundry VTT world through the Wireta
 # Wiretap: Foundry VTT tools
 Wiretap acts on the live Foundry world through MCP tools that work via a connected GM's browser. With none connected, a
 call fails with `NO_ENDPOINT`, naming what to start. An undeclared argument (a misspelled `dryrun`) is refused.
-- **Read a document.** `mcp__wiretap__get_document` with `uuid`, or `documentName` and `id` (add `parentUuid` for an
-embedded one, `pack` for a compendium one). The default is a compact view (name, type, `version`, key fields, embedded
-`[id, name, type]` rows); `paths` (up to 20, like `items.*.name`, keyed by `_id`; `derived: true` reads prepared values)
-and `fields` give `version` too; `mode: "full"` gives all (large becomes a handle). `version` hashes all you can read,
-embedded too; `ifChanged: <version>` gives `{unchanged: true}` (derived vs derived). `maxBytes` allows up to 16,000.
-Passwords, credential and `wiretap.*` settings are unreadable; secret-named keys in settings and flags are dropped.
+- **Read a document.** `mcp__wiretap__get_document` with `uuid`, or `documentName` and `id` (plus `parentUuid` if
+embedded, `pack` if in a compendium). The default is a compact view (name, type, `version`, key fields, embedded `[id,
+name, type]` rows; `cut: true`: data left out, not just a name shortened with "…"); `paths` (like `items.*.name`, keyed
+by `_id`; `derived: true` reads prepared values) and `fields` give `version` too; `mode: "full"` gives all (large
+becomes a handle). `version` hashes all you can read, embedded too; `ifChanged: <version>` gives `{unchanged: true}`
+(derived vs derived). `maxBytes` allows up to 16,000. `partial: true` (any read): even a full export lacks part.
+Passwords, credential and `wiretap.*` settings are unreadable; secret-named setting and flag keys are dropped.
 - **Find documents.** `mcp__wiretap__list_document_types` lists classes and subtypes. `mcp__wiretap__search_documents`
-needs `documentName`; narrow with `type`, `query` (name text), `filters` (up to 5 `path=value`), `pack` or `parentUuid`.
-Rows are `[uuid, name, type]`, 20 per page (`limit` up to 100); follow `nextCursor` as `cursor`, also after a `cut`.
+needs `documentName`; narrow with `type`, `query` (name text), `filters` (`path=value`), `pack` or `parentUuid`. Rows
+are `[uuid, name, type]`, 20 per page by default (`limit`); follow `nextCursor` as `cursor`, also after a `cut`.
 `mcp__wiretap__describe_schema` (`documentName`, `subtype`; `path` narrows it) shows the data shape to create.
 - **Create documents.** `mcp__wiretap__create_documents` takes `documentName` and `data`: one JSON object text per
-document (up to 50), for example `["{\"name\":\"Bob\",\"type\":\"npc\"}"]`. Add `parentUuid` for embedded documents (an
-Item under an Actor), `pack` for a compendium, `keepId` to keep each `_id`. The ack is `{uuid, name, type}` per
-document; `paths` adds those paths of each. Pass `idempotencyKey` (up to 64 letters, digits, `._:-`) so a retry after a
-timeout returns the first ack; the same key with other data is `IDEMPOTENCY_CONFLICT`.
-- **Copy documents.** `mcp__wiretap__create_documents` with `fromUuids` (up to 50 world, embedded or compendium
-documents of class `documentName`) instead of `data`, plus `pack` or `parentUuid` as for `data`: one call; the source
-body never enters your context. A copy gets a new `_id` (unless `keepId`), no `folder`, `sort` or `flags.wiretap`,
-and no ownership of its source: Foundry makes the creating user its OWNER, as for any create. A `User` cannot be
-copied; rename or adjust a copy with `update_documents`. **Build an actor** in two calls: the Actor with its own items
-and effects inline in `data`, then `documentName: "Item"`, `parentUuid` the new actor, `fromUuids` the compendium
-items. **Re-read only on change:** keep the `version` of a `get_document` result and pass it as `ifChanged`.
+document, for example `["{\"name\":\"Bob\",\"type\":\"npc\"}"]`. Add `parentUuid` for embedded documents (an Item under
+an Actor), `pack` for a compendium, `keepId` to keep each `_id`. The ack is `{uuid, name, type}` per document; `paths`
+adds those paths of each. Pass `idempotencyKey` (up to 64 letters, digits, `._:-`) so a retry after a timeout returns
+the first ack; the same key with other data is `IDEMPOTENCY_CONFLICT`.
+- **Copy documents.** `mcp__wiretap__create_documents` with `fromUuids` (world, embedded or compendium documents of
+class `documentName`) instead of `data`, plus `pack` or `parentUuid` as for `data`: one call; the source body never
+enters your context. A copy gets a new `_id` (unless `keepId`), no `folder`, `sort` or `flags.wiretap`, and no ownership
+of its source: Foundry makes the creating user its OWNER, as for any create. A `User` cannot be copied; rename or adjust
+a copy with `update_documents`. **Build an actor** in two calls: the Actor with its own items and effects inline in
+`data`, then `documentName: "Item"`, `parentUuid` the new actor, `fromUuids` the compendium items. **Re-read only on
+change:** keep the `version` of a `get_document` result and pass it as `ifChanged`.
 - **Update documents.** `mcp__wiretap__update_documents` takes `updates`, one patch per entry: `uuid`, `path`, `value`
 (JSON text, so a string is `"\"x\""`) and `op`: `set` merges (default), `replace` swaps the whole value, `delete`
 removes the field (no value). Entries with one uuid form one update; embedded documents use `items.<_id>.system.x` (ids
@@ -34,22 +35,21 @@ from `get_document`; no wildcards; `_id` itself is never a path). The ack is `{u
 Foundry applied nothing (no change, or a hook cancelled it). `dryRun: true` on a write previews it (and works with every
 gate closed); on `mcp__wiretap__delete_documents` (irreversible) it lists what would go.
 - **Replace and batch.** `mcp__wiretap__replace_document` takes `uuid` and `data`, the JSON text of a full read,
-changed: the import replaces each top-level field, so a field left out resets to its default (omit `items`: they are
-deleted; omit `flags`: other modules' flags go). Leave `ownership` out; `_id`, `sort`, `folder` stay. Not for Users: use
-`update_documents`. `mcp__wiretap__batch` takes `creates` (`documentName`, `data`, `parentUuid` per document), `updates`
-(patches) and `deletes`, run in that order; a key an entry does not list (`parent` for `parentUuid`) is refused. Not
-atomic: Foundry checks all first, stops at the first failure and keeps what it did; `WRITE_NOT_APPLIED` says "N of M
-operations applied". Result rows follow the entries. `actAs` (a user id) on any write only checks that user's
-permission first (`ACT_AS_DENIED`).
+changed: each top-level field is replaced, so one left out resets to its default (omit `items`: they go; omit `flags`:
+other modules' flags go). Leave `ownership` out; `_id`, `sort`, `folder` stay. Not for Users: use `update_documents`.
+`mcp__wiretap__batch` takes `creates` (`documentName`, `data`, `parentUuid` each), `updates` (patches) and `deletes`,
+run in that order; an unlisted key (`parent` for `parentUuid`) is refused. Not atomic: Foundry checks all first, stops
+at the first failure and keeps what it did; `WRITE_NOT_APPLIED` says "N of M operations applied". Rows follow the
+entries. `actAs` (a user id) on a write only checks that user's permission first (`ACT_AS_DENIED`).
 - **Compendium packs.** `mcp__wiretap__create_pack` (`label`, `type` a document type like `Actor`, optional `name`)
 makes an empty world pack; needs `allowCompendiumWrites`. `mcp__wiretap__delete_pack` (`id` is `world.<name>`) removes
 an unlocked world pack and every document in it for good; needs `allowPackDeletion`; marked so Claude Code (per its
-docs; untested here) prompts the human on every call. `dryRun` on both works with every gate closed (delete's
-lists the count). Locked: `PACK_LOCKED` (the GM unlocks it); absent: `PACK_NOT_FOUND`; system, module packs refused.
+docs; untested here) prompts the human on every call. `dryRun` on both works with every gate closed (delete's lists the
+count). Locked: `PACK_LOCKED` (the GM unlocks it); absent: `PACK_NOT_FOUND`; system, module packs refused.
 - **Backups.** Before a bulk update (about 10+ documents), any `replace_document`, delete or `delete_pack`, or a
-document-changing `execute_macro`, make or offer `mcp__wiretap__backup_documents`: `uuids` (up to 200; an embedded one
-saves its parent) or one `folderUuid`, `documentName` or `pack` (`pack` before `delete_pack`), and a `note`. Tell the
-user its `file` and `folder` (`default`: the module's `.wiretap/backups`; `setting`: the GM's Backup folder).
+document-changing `execute_macro`, make or offer `mcp__wiretap__backup_documents`: `uuids` (an embedded one saves its
+parent) or one `folderUuid`, `documentName` or `pack` (`pack` before `delete_pack`), and a `note`. Tell the user its
+`file` and `folder` (`default`: the module's `.wiretap/backups`; `setting`: the GM's Backup folder).
 `mcp__wiretap__list_backups` lists them and `mcp__wiretap__delete_backup` moves one to the recycle bin, both also with
 no GM (default folder only). Another `folder` needs `allowBackupAnyFolder`. `mcp__wiretap__restore_backup` (`file`,
 `uuids`, `dryRun`) only if the user asks: not atomic, hooks run. Needs `allowReplace`; `allowOwnershipWrites` if
@@ -57,26 +57,26 @@ ownership differs or to re-create a deleted document; `allowDelete` if embedded 
 `allowCompendiumWrites` and an unlocked pack. `dryRun` checks the real gates, writes nothing. Embedded documents below
 the first level get default ownership. Whole world: Foundry's setup screen, world shut down.
 - **Read a large result.** A result over 8,000 bytes is returned as `{"handle", "bytes", "summary"}`. Call
-`mcp__wiretap__read_handle` with that `handle` and `paths` (up to 20, `*` is one wildcard over a list), or `offset` and
-`length` for non-JSON text, or a larger `maxBytes`. A handle expires after 30 minutes unused (`HANDLE_NOT_FOUND`). To
-write a stored full read, give `"handle:<handle>"` as a `data` text of `create_documents` or `replace_document`; the
-gates still judge it (up to 100,000 bytes a text, 200,000 in all; `HANDLE_NOT_DOCUMENT` if it is not one document).
+`mcp__wiretap__read_handle` with that `handle` and `paths` (`*` is one wildcard over a list), or `offset` and `length`
+for non-JSON text, or a larger `maxBytes`. A handle expires after 30 minutes unused (`HANDLE_NOT_FOUND`). To write a
+stored full read, give `"handle:<handle>"` as a `data` text of `create_documents` or `replace_document`; the gates still
+judge it (`HANDLE_TOO_LARGE` past 64,000,000 bytes in all; `HANDLE_NOT_DOCUMENT` if it is not one document).
 - **Sheets, dice and macros.** `mcp__wiretap__open_sheet` with `uuid` opens a sheet on the client running the call, or
 with `userId` on every tab that connected user has open (who needs OBSERVER; the first answer is reported);
 `mcp__wiretap__close_sheet` with the same arguments closes it there. With no human connected no one sees a sheet: read
 the data instead. `mcp__wiretap__roll` takes a `formula` (no `@` references), `mcp__wiretap__draw_table` a RollTable
 `uuid` (drawn results are marked); `toChat` (default false) posts to chat. `mcp__wiretap__execute_macro` runs a Macro
 `uuid` for `actorUuid` / `tokenUuid` (on the viewed scene), needs `allowMacroExecution` and returns its value within
-`timeoutMs` (1 s to 5 min; default 8 s). A null chat `value`: no message of its own, or its command failed; a `/macro`
-or a module may have. `tooLarge: true` (with `bytes`): it ran, its value dropped: that alone does not show it worked.
+`timeoutMs` (default 8 s). A null chat `value`: no message of its own, or its command failed; a `/macro` or a module may
+have. `tooLarge: true` (with `bytes`): it ran, its value dropped: that alone does not show it worked.
 - **Errors you may meet.** `ARGS_INVALID` (names the argument), `DOC_NOT_FOUND`, `DOC_EXCLUDED`, `PATH_*`,
 `CURSOR_INVALID`, `SCRIPT_BUSY` (retry), `VALIDATION_FAILED` (up to 10 failures and the count; nothing written),
 `TABLE_EMPTY` (nothing left to draw), `MACRO_FAILED` (did not compile, so nothing ran; or threw, so it may have partly
 run), `USER_OFFLINE`, `SHEET_DENIED` (no OBSERVER), `SHEET_UNAVAILABLE`, `SHEET_QUERY_FAILED`, `DELETE_REFUSED` (the
-signed-in user or last GM), `BACKUP_NOT_FOUND`, `BACKUP_BUSY` (one at a time; retry), `BACKUP_TOO_LARGE` (10,000
-documents or 64,000,000 bytes). `RESULT_TOO_LARGE`: read with `paths`. `WRITE_NOT_APPLIED`, `SCRIPT_TIMEOUT`,
-`ENDPOINT_TIMEOUT`, or your MCP client giving up before `timeoutMs` (a macro may run on): it may still have applied;
-check before retrying. `GATE_DENIED`: a GM setting is closed (`allowDelete`: delete_documents, batch deletes, removing
-embedded documents; `allowReplace`: replace_document; `allowMacroExecution`: execute_macro, writing macro code (a Macro
-command, a type set to script, an Adventure's macros); others), or the write is never allowed (a `wiretap.*` setting, a
-User password, the `flags.wiretap` scope, erasing `flags`). Tell the user which gate; you cannot open it.
+signed-in user or last GM), `BACKUP_NOT_FOUND`, `BACKUP_BUSY` (one at a time; retry). `RESULT_TOO_LARGE`: read with
+`paths`. `WRITE_NOT_APPLIED`, `SCRIPT_TIMEOUT`, `ENDPOINT_TIMEOUT`, or your MCP client giving up before `timeoutMs` (a
+macro may run on): it may still have applied; check before retrying. `GATE_DENIED`: a GM setting is closed
+(`allowDelete`: delete_documents, batch deletes, removing embedded documents; `allowReplace`: replace_document;
+`allowMacroExecution`: execute_macro, writing macro code (a Macro command, a type set to script, an Adventure's macros);
+others), or the write is never allowed (a `wiretap.*` setting, a User password, the `flags.wiretap` scope, erasing
+`flags`). Tell the user which gate; you cannot open it.

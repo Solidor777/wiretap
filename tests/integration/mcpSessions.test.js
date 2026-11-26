@@ -25,6 +25,10 @@ import {
    PROTOCOL_VERSION,
 } from '../../shared/protocol.js';
 
+/** @type {string} The answer for a handle that cannot be read, with the default store bounds. */
+const HANDLE_NOT_FOUND_TEXT = 'HANDLE_NOT_FOUND: Handle not found: it may have expired (1800 s unread) or been evicted '
+   + '(1024 handles and 64000000 bytes are kept).';
+
 /** @type {string[]} The timer functions the tests fake once everything is connected. */
 const FAKED = [
    'setTimeout',
@@ -683,7 +687,6 @@ describe('stateful MCP sessions', () => {
          expect(names).not.toContain('ok_name');
          expect(names).not.toContain('wrapped');
          expect(names.filter((name) => name === 'read_handle')).toHaveLength(1);
-         expect(names.length).toBeLessThanOrEqual(getBudget('ALWAYS_LISTED_TOOLS_MAX').value);
          expect({}.polluted).toBeUndefined();
          // A valid registry still works afterwards.
          expect(await gm.register([entry('fine_tool')])).toEqual({
@@ -713,14 +716,17 @@ describe('stateful MCP sessions', () => {
          ]);
       });
 
-      it('never lists more than the always-listed tool budget', async () => {
+      it('lists every tool an endpoint registers', async () => {
          await start();
          const gm = await connectGm();
          const ack = await gm.register(Array.from({ length: 40 }, (_, index) => entry(`many_${index}`)));
-         expect(ack.accepted).toBe(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length);
-         expect(ack.refused).toBe(40 - ack.accepted);
+         expect(ack).toEqual({
+            ok: true,
+            accepted: 40,
+            refused: 0,
+         });
          const { client } = await connectClient();
-         expect((await toolNames(client)).length).toBe(getBudget('ALWAYS_LISTED_TOOLS_MAX').value);
+         expect(await toolNames(client)).toHaveLength(40 + RESERVED_SCRIPT_NAMES.length);
       });
    });
 
@@ -869,7 +875,7 @@ describe('stateful MCP sessions', () => {
             arguments: { handle },
          });
          expect(stolen.isError).toBe(true);
-         expect(stolen.content[0].text).toBe('HANDLE_NOT_FOUND: Handle not found or expired.');
+         expect(stolen.content[0].text).toBe(HANDLE_NOT_FOUND_TEXT);
          const own = await owner.client.callTool({
             name: 'read_handle',
             arguments: {
@@ -917,7 +923,7 @@ describe('stateful MCP sessions', () => {
       });
    });
 
-   describe('idle expiry, session cap and disposal', () => {
+   describe('idle expiry and disposal', () => {
       it('expires an idle session, releases its handles and answers 404 afterwards', async () => {
          const big = {
             name: 'test_big',
@@ -976,15 +982,14 @@ describe('stateful MCP sessions', () => {
          expect(mcp.sessions()).toBe(0);
       });
 
-      it('refuses an initialize at the cap with 503 and Retry-After, and ends no session', async () => {
-         await start({ sessions: { maxSessions: 2 } });
+      it('opens a session past the warning count, logs one line for it and ends no session', async () => {
+         await start({ sessions: { warnSessions: 2 } });
          const first = await connectClient();
-         const second = await connectClient();
-         const refused = await raw(mcp.port(), { body: INITIALIZE });
-         expect(refused.status).toBe(503);
-         expect(Number(refused.headers['retry-after'])).toBeGreaterThanOrEqual(1);
-         expect(refused.headers['mcp-session-id']).toBeUndefined();
-         expect(mcp.sessions()).toBe(2);
+         await connectClient();
+         const third = await raw(mcp.port(), { body: INITIALIZE });
+         expect(third.status).toBe(200);
+         expect(third.headers['mcp-session-id']).toBeTypeOf('string');
+         expect(mcp.sessions()).toBe(3);
          expect(await toolNames(first.client)).toEqual([
             'backup_documents',
             'delete_backup',
@@ -992,18 +997,15 @@ describe('stateful MCP sessions', () => {
             'read_handle',
             'restore_backup',
          ]);
-         expect(await toolNames(second.client)).toEqual([
-            'backup_documents',
-            'delete_backup',
-            'list_backups',
-            'read_handle',
-            'restore_backup',
+         // The one line names the new session and the open count.
+         expect(logs.filter((line) => line.includes('more than the 2 recommended'))).toEqual([
+            `Wiretap sidecar | MCP session ${third.headers['mcp-session-id']} opened: 3 sessions are open, ` +
+               'more than the 2 recommended',
          ]);
-         expect(logs.some((line) => line.includes('cap of 2 reached: initialize refused'))).toBe(true);
       });
 
       it('lets a flood of initialize requests neither end another session nor drop its handles', async () => {
-         await start({ sessions: { maxSessions: 2 } });
+         await start({ sessions: { warnSessions: 2 } });
          const gm = await connectGm({ answer: () => ({
             ok: true,
             result: 'x'.repeat(20_000),
@@ -1021,9 +1023,9 @@ describe('stateful MCP sessions', () => {
          await connectClient();
          for (let index = 0; index < 20; index += 1) {
             const res = await raw(mcp.port(), { body: INITIALIZE });
-            expect(res.status).toBe(503);
+            expect(res.status).toBe(200);
          }
-         expect(mcp.sessions()).toBe(2);
+         expect(mcp.sessions()).toBe(22);
          expect(store.stats().entries).toBe(1);
          const read = await victim.client.callTool({
             name: 'read_handle',
@@ -1033,39 +1035,28 @@ describe('stateful MCP sessions', () => {
          expect(read.content[0].text.length).toBeGreaterThan(0);
       });
 
-      it('accepts a new session once the idle sweep has freed a slot', async () => {
-         await start({ sessions: {
-            maxSessions: 1,
-            idleMs: 5_000,
-            sweepMs: 500,
-         } });
-         vi.useFakeTimers({ toFake: FAKED });
-         await connectClient();
-         expect((await raw(mcp.port(), { body: INITIALIZE })).status).toBe(503);
-         await vi.advanceTimersByTimeAsync(6_000);
-         expect(mcp.sessions()).toBe(0);
-         expect((await raw(mcp.port(), { body: INITIALIZE })).status).toBe(200);
-         expect(mcp.sessions()).toBe(1);
-      });
-
-      it('holds at most the budgeted number of sessions by default', async () => {
+      it('opens a 33rd session with the default warning count and logs the line once', async () => {
          await start();
-         const limit = getBudget('MCP_SESSIONS_MAX').value;
-         for (let index = 0; index < limit + 3; index += 1) {
+         const warnAt = getBudget('MCP_SESSIONS_MAX').value;
+         expect(warnAt).toBe(32);
+         for (let index = 0; index < warnAt + 1; index += 1) {
             const res = await raw(mcp.port(), { body: INITIALIZE });
-            expect(res.status).toBe(index < limit ? 200 : 503);
+            expect(res.status).toBe(200);
          }
-         expect(mcp.sessions()).toBe(limit);
+         expect(mcp.sessions()).toBe(33);
+         expect(logs.filter((line) => line.includes('33 sessions are open, more than the 32 recommended')))
+            .toHaveLength(1);
+         expect(logs.filter((line) => line.includes('recommended'))).toHaveLength(1);
       });
 
-      it('counts concurrent initializes against the cap', async () => {
-         await start({ sessions: { maxSessions: 3 } });
+      it('opens every one of concurrent initializes', async () => {
+         await start({ sessions: { warnSessions: 3 } });
          const results = await Promise.all(
             Array.from({ length: 10 }, () => raw(mcp.port(), { body: INITIALIZE })),
          );
-         expect(results.filter((res) => res.status === 200)).toHaveLength(3);
-         expect(results.filter((res) => res.status === 503)).toHaveLength(7);
-         expect(mcp.sessions()).toBe(3);
+         expect(results.filter((res) => res.status === 200)).toHaveLength(10);
+         expect(mcp.sessions()).toBe(10);
+         expect(logs.filter((line) => line.includes('more than the 3 recommended'))).toHaveLength(7);
       });
 
       it('ends every session and leaves no timer on close', async () => {

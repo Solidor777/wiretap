@@ -8,6 +8,12 @@ import { summarizeResult, withResultBudget } from '../../server/resultBudget.ts'
 const OWNER = 'owner-a';
 
 /**
+ * The log sink of the tests that read no log line.
+ * @returns {void}
+ */
+const IGNORE_LOG = () => {};
+
+/**
  * Build a text tool result.
  * @param {string} text - The text of the single content item.
  * @returns {{ content: { type: 'text', text: string }[] }} The one-item text result.
@@ -28,20 +34,26 @@ function textResult(text) {
  * @param {object} result - The result the handler returns.
  * @param {object} [args] - The tool arguments.
  * @param {object} [options] - Extra enforcer options (`budgetBytes`, `store`).
- * @returns {Promise<{ out: object, store: ReturnType<typeof createHandleStore> }>} The enforced result and the store.
+ * @returns {Promise<{ out: object, store: ReturnType<typeof createHandleStore>, lines: string[] }>} The result, store
+ * and log lines.
  */
 async function enforce(result, args = {}, options = {}) {
    /** @type {ReturnType<typeof createHandleStore>} The store receiving large results. */
    const store = options.store ?? createHandleStore();
+   /** @type {string[]} The lines the enforcer's log received. */
+   const lines = [];
    /** @type {Function} The wrapped handler. */
    const wrapped = withResultBudget(async () => result, {
       store,
       ownerKey: OWNER,
+      toolName: 'mock_tool',
       budgetBytes: options.budgetBytes,
+      log: (line) => lines.push(line),
    });
    return {
       out: await wrapped(args),
       store,
+      lines,
    };
 }
 
@@ -175,6 +187,23 @@ describe('threshold', () => {
       expect(out.content[0].text.startsWith('{"handle"')).toBe(expectHandle);
    });
 
+   it('says in the handle response that a maxBytes over 16,000 was lowered, and to what', async () => {
+      const { out } = await enforce(textResult('a'.repeat(16001)), { maxBytes: 99999 });
+      expect(JSON.parse(out.content[0].text).maxBytesLowered).toBe(16000);
+   });
+
+   it('says a maxBytes over the tool budget was lowered to the budget', async () => {
+      const { out } = await enforce(textResult('a'.repeat(1001)), { maxBytes: 5000 }, { budgetBytes: 1000 });
+      expect(JSON.parse(out.content[0].text).maxBytesLowered).toBe(1000);
+   });
+
+   it('adds no lowering note when maxBytes was not lowered', async () => {
+      const { out } = await enforce(textResult('a'.repeat(16001)), { maxBytes: 16000 });
+      expect(JSON.parse(out.content[0].text)).not.toHaveProperty('maxBytesLowered');
+      const plain = await enforce(textResult('a'.repeat(8001)));
+      expect(JSON.parse(plain.out.content[0].text)).not.toHaveProperty('maxBytesLowered');
+   });
+
    it.each([
       0,
       -5,
@@ -230,6 +259,7 @@ describe('threshold', () => {
          {
             store: createHandleStore(),
             ownerKey: OWNER,
+            log: IGNORE_LOG,
          },
       );
       await wrapped({ a: 1 }, { sessionId: 's' });
@@ -468,6 +498,7 @@ describe('errors', () => {
          {
             store: createHandleStore(),
             ownerKey: OWNER,
+            log: IGNORE_LOG,
          },
       );
       const out = await wrapped({});
@@ -745,6 +776,7 @@ describe('the enforcer never fails open', () => {
       const wrapped = withResultBudget(async () => value, {
          store: createHandleStore(),
          ownerKey: OWNER,
+         log: IGNORE_LOG,
       });
       return wrapped({});
    }
@@ -882,6 +914,7 @@ describe('the enforcer never fails open', () => {
             {
                store: createHandleStore(),
                ownerKey: OWNER,
+               log: IGNORE_LOG,
             },
          );
          const out = await wrapped({});
@@ -911,6 +944,7 @@ describe('the enforcer never fails open', () => {
             {
                store: createHandleStore(),
                ownerKey: OWNER,
+               log: IGNORE_LOG,
             },
          );
          await wrapped({});
@@ -932,6 +966,7 @@ describe('the enforcer never fails open', () => {
          {
             store: createHandleStore(),
             ownerKey: OWNER,
+            log: IGNORE_LOG,
          },
       );
       const out = await wrapped({});
@@ -948,6 +983,7 @@ describe('the enforcer never fails open', () => {
          {
             store: createHandleStore(),
             ownerKey: OWNER,
+            log: IGNORE_LOG,
          },
       );
       const out = await wrapped({});
@@ -966,6 +1002,7 @@ describe('the enforcer never fails open', () => {
             {
                store: createHandleStore(),
                ownerKey: OWNER,
+               log: IGNORE_LOG,
             },
          );
          await wrapped({});
@@ -991,6 +1028,7 @@ describe('the enforcer never fails open', () => {
             {
                store: createHandleStore(),
                ownerKey: OWNER,
+               log: IGNORE_LOG,
             },
          );
          expect(JSON.stringify(await wrapped({}))).not.toContain('SECRET_TOKEN_123');
@@ -1030,6 +1068,7 @@ describe('owner liveness', () => {
          store,
          ownerKey: OWNER,
          ownerLive: () => true,
+         log: IGNORE_LOG,
       });
       const out = await wrapped({});
       expect(JSON.parse(out.content[0].text).handle).toBeTruthy();
@@ -1042,6 +1081,7 @@ describe('owner liveness', () => {
          store,
          ownerKey: OWNER,
          ownerLive: () => false,
+         log: IGNORE_LOG,
       });
       const out = await wrapped({});
       expect(out.isError).toBe(true);
@@ -1056,6 +1096,7 @@ describe('owner liveness', () => {
          store,
          ownerKey: OWNER,
          ownerLive: () => false,
+         log: IGNORE_LOG,
       });
       const out = await wrapped({});
       expect(out.content[0].text).toBe('ok');
@@ -1119,6 +1160,54 @@ describe('unmeasured fields are dropped', () => {
       ]);
       expect(out.structuredContent).toEqual({ value: 1 });
       expect(Buffer.byteLength(JSON.stringify(out), 'utf8')).toBeLessThan(1000);
+   });
+
+   it('logs the tool and the names of the fields it drops', async () => {
+      const { lines } = await enforce({
+         content: [
+            {
+               type: 'text',
+               text: 'ok',
+               annotations: { audience: ['user'] },
+            },
+         ],
+         _meta: { pad: 'p' },
+         extra: 1,
+      });
+      expect(lines).toEqual(['Wiretap sidecar | mock_tool result fields dropped: _meta, extra, content.annotations']);
+   });
+
+   it('writes the dropped-fields line to the log it is given, not to the console', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      /** @type {string[]} The lines the enforcer's log received. */
+      const lines = [];
+      /** @type {Function} The wrapped handler of a named tool. */
+      const wrapped = withResultBudget(async () => ({
+         content: [
+            {
+               type: 'text',
+               text: 'ok',
+            },
+         ],
+         extra: 1,
+      }), {
+         store: createHandleStore(),
+         ownerKey: OWNER,
+         toolName: 'mock_tool',
+         log: (line) => lines.push(line),
+      });
+      await wrapped({});
+      expect(lines).toEqual(['Wiretap sidecar | mock_tool result fields dropped: extra']);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+   });
+
+   it('logs nothing when a result has no field to drop', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { lines } = await enforce(textResult('ok'));
+      expect(lines).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
    });
 
    it('drops top-level _meta and unknown fields from a result with only content', async () => {

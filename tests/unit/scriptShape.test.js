@@ -378,17 +378,26 @@ describe('shape.project', () => {
       });
    });
 
-   it('refuses a wildcard, an unsafe segment, too many fields and a non-list', () => {
+   it('refuses a wildcard, an unsafe segment and a non-list', () => {
       expect(shape.project(mockActor(), ['items.*.name'])).toMatchObject({
          ok: false,
          error: expect.stringContaining('wildcard'),
       });
       expect(shape.project(mockActor(), ['__proto__.x']).ok).toBe(false);
       expect(shape.project(mockActor(), ['constructor']).ok).toBe(false);
-      expect(shape.project(mockActor(), Array.from({ length: 21 }, (_, index) => `system.v${index}`)).ok).toBe(false);
       expect(shape.project(mockActor(), 'name').ok).toBe(false);
       expect(shape.project(mockActor(), []).ok).toBe(false);
       expect(shape.project(mockActor(), [1]).ok).toBe(false);
+   });
+
+   it('projects more fields than the best-practice size', () => {
+      const outcome = shape.project(mockActor(), [
+         ...Array.from({ length: 30 }, (_, index) => `system.v${index}`),
+         'name',
+      ]);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.value.name).toBe(mockActor().name);
+      expect(outcome.missing).toHaveLength(30);
    });
 
    it('keeps every error within 256 bytes', () => {
@@ -445,7 +454,16 @@ describe('shape.paths', () => {
       expect(outcome.error).toMatch(/^PATH_UNSAFE_SEGMENT: /);
       expect(ENCODER.encode(outcome.error).length).toBeLessThanOrEqual(256);
       expect(shape.paths(mockActor(), []).ok).toBe(false);
-      expect(shape.paths(mockActor(), Array.from({ length: 21 }, () => 'name')).error).toMatch(/PATH_LIMIT/);
+   });
+
+   it('reads more paths than the best-practice size', () => {
+      const outcome = shape.paths(mockActor(), [
+         ...Array.from({ length: 30 }, (_, index) => `system.v${index}`),
+         'name',
+      ]);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.values.name).toBe(mockActor().name);
+      expect(outcome.missing).toHaveLength(30);
    });
 });
 
@@ -714,5 +732,159 @@ describe('shape.compact: key paths', () => {
          'system.resource.stamina.value': 6,
          'system.resource.resolve.value': 1,
       });
+   });
+});
+
+describe('compact view: notices for values and leaves left out', () => {
+   /**
+    * Build a small export with the given system tree and header overrides.
+    * @param {Record<string, unknown>} system - The system tree.
+    * @param {Record<string, unknown>} [header] - Fields replacing the default header.
+    * @returns {Record<string, unknown>} The export.
+    */
+   function small(system, header = {}) {
+      return {
+         uuid: 'Actor.MOCKACTOR0000001',
+         name: 'MOCK_Actor',
+         type: 'npc',
+         system,
+         ...header,
+      };
+   }
+
+   it('leaves a view with nothing left out unmarked', () => {
+      expect(shape.compact(small({ hp: { value: 3 } })).cut).toBeUndefined();
+      /** @type {Record<string, unknown>} Exactly as many matching leaves as the view holds. */
+      const full = Object.fromEntries(Array.from({ length: 24 }, (_, index) => [
+         `a${index}`,
+         { value: index },
+      ]));
+      expect(shape.compact(small(full)).cut).toBeUndefined();
+   });
+
+   it('marks the view cut when the uuid or the version is cut to its compact length', () => {
+      /** @type {string} A pack document uuid longer than the 96-byte bound. */
+      const uuid = `Compendium.world.${'p'.repeat(60)}.Actor.${'MOCKACTOR0000001'.repeat(2)}`;
+      /** @type {Record<string, unknown>} The view of the long-uuid export. */
+      const view = shape.compact(small({}, { uuid }));
+      expect(view.uuid.endsWith('…')).toBe(true);
+      expect(view.cut).toBe(true);
+      expect(shape.compact(small({}), { version: 'v'.repeat(40) }).cut).toBe(true);
+   });
+
+   it('leaves the view unmarked when only a name, a type or a collection name is shortened', () => {
+      /** @type {Record<string, unknown>} The view of an export whose name and type are past their bounds. */
+      const header = shape.compact(small({}, {
+         name: `MOCK_${'n'.repeat(80)}`,
+         type: `MOCK_${'t'.repeat(40)}`,
+      }));
+      expect(header.name.endsWith('…')).toBe(true);
+      expect(header.type.endsWith('…')).toBe(true);
+      expect(header.cut).toBeUndefined();
+      /** @type {string} An embedded collection name past the 32-byte bound. */
+      const collection = `MOCK_${'c'.repeat(40)}`;
+      /** @type {Record<string, unknown>} An export with one embedded item whose name and type are past the bounds. */
+      const named = {
+         ...small({}),
+         [collection]: [{
+            _id: 'MOCKITEM00000001',
+            name: `MOCK_${'i'.repeat(30)}`,
+            type: `MOCK_${'g'.repeat(20)}`,
+         }],
+      };
+      /** @type {Record<string, unknown>} The view of the long-named item. */
+      const view = shape.compact(named);
+      /** @type {[string, string, string]} The item's tuple. */
+      const [row] = Object.values(view.embedded)[0].rows;
+      expect(Object.keys(view.embedded)[0].endsWith('…')).toBe(true);
+      expect(row[1].endsWith('…')).toBe(true);
+      expect(row[2].endsWith('…')).toBe(true);
+      expect(view.cut).toBeUndefined();
+   });
+
+   it('marks the view cut when a leaf value or an embedded tuple id is cut', () => {
+      expect(shape.compact(small({ hp: { value: 'v'.repeat(80) } })).cut).toBe(true);
+      /** @type {Record<string, unknown>} An export with one embedded item whose id is past the tuple bound. */
+      const longId = {
+         ...small({}),
+         items: [{
+            _id: 'MOCKITEM00000001'.repeat(2),
+            name: 'MOCK_Item',
+            type: 'gear',
+         }],
+      };
+      expect(shape.compact(longId).cut).toBe(true);
+   });
+
+   it('marks the view cut when more embedded collections exist than it lists', () => {
+      /** @type {Record<string, unknown>} An export with one more non-empty collection than the view lists. */
+      const many = small({});
+      for (let index = 0; index < 9; index += 1) {
+         many[`c${index}`] = [{
+            _id: `MOCKITEM0000000${index}`,
+            name: 'MOCK_Item',
+            type: 'gear',
+         }];
+      }
+      /** @type {Record<string, unknown>} The view of the many-collection export. */
+      const view = shape.compact(many);
+      expect(Object.keys(view.embedded)).toHaveLength(8);
+      expect(view.cut).toBe(true);
+   });
+
+   it('marks the view cut when more matching leaves exist than it holds', () => {
+      /** @type {Record<string, unknown>} One more matching leaf than the view holds. */
+      const many = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [
+         `a${index}`,
+         { value: index },
+      ]));
+      /** @type {Record<string, unknown>} The compact view of the many-leaf export. */
+      const view = shape.compact(small(many));
+      expect(Object.keys(view.fields)).toHaveLength(24);
+      expect(view.cut).toBe(true);
+   });
+
+   it('marks the view cut when a matching leaf path is too long, too deep or past the object bound', () => {
+      expect(shape.compact(small({ [`k${'x'.repeat(100)}`]: { value: 1 } })).cut).toBe(true);
+      /** @type {Record<string, unknown>} A matching leaf below the deepest level the walk enters. */
+      let deep = { value: 1 };
+      for (let level = 0; level < 6; level += 1) {
+         deep = { d: deep };
+      }
+      /** @type {Record<string, unknown>} The view of the deep tree. */
+      const deepView = shape.compact(small(deep));
+      expect(deepView.fields).toBeUndefined();
+      expect(deepView.cut).toBe(true);
+      /** @type {Record<string, unknown>} More objects than the walk visits, then a matching leaf. */
+      const wide = Object.fromEntries(Array.from({ length: 2100 }, (_, index) => [
+         `o${index}`,
+         {},
+      ]));
+      wide.zz = { value: 1 };
+      /** @type {Record<string, unknown>} The view of the wide tree. */
+      const wideView = shape.compact(small(wide));
+      expect(wideView.fields).toBeUndefined();
+      expect(wideView.cut).toBe(true);
+   });
+
+   it('marks the view cut when key paths name more scalar leaves than it holds, or a path that is too long', () => {
+      /** @type {Record<string, unknown>} Twenty-five scalar leaves. */
+      const system = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [
+         `k${index}`,
+         index,
+      ]));
+      /** @type {string[]} A key path for each leaf. */
+      const keyPaths = Object.keys(system);
+      expect(shape.compact(small(system), { keyPaths: keyPaths.slice(0, 24) }).cut).toBeUndefined();
+      expect(shape.compact(small(system), { keyPaths }).cut).toBe(true);
+      expect(shape.compact(small(system), { keyPaths: [`k${'x'.repeat(100)}`] }).cut).toBe(true);
+   });
+
+   it('marks the view partial when the option says the export left part of the document out', () => {
+      /** @type {Record<string, unknown>} The view of a partial export. */
+      const view = shape.compact(small({}), { partial: true });
+      expect(view.partial).toBe(true);
+      expect(view.cut).toBeUndefined();
+      expect(shape.compact(small({})).partial).toBeUndefined();
    });
 });

@@ -30,35 +30,34 @@ export const HEADER_LINE_BYTES = 2048;
 // Largest piece of a backup or restore stream, in bytes.
 export const BACKUP_PIECE_MAX_BYTES = 512_000;
 
-// Most documents one backup holds.
-export const BACKUP_MAX_DOCUMENTS = 10_000;
-
-// Largest backup file, in bytes, header included.
-export const BACKUP_MAX_BYTES = 64_000_000;
-
-// Longest backup note, in UTF-8 bytes.
-export const BACKUP_NOTE_MAX_BYTES = 200;
-
 // Longest world field of a header (world id, Foundry version, system id, system version), in UTF-8 bytes.
 export const BACKUP_WORLD_FIELD_MAX_BYTES = 128;
-
-// Most uuids one backup call names.
-export const BACKUP_UUIDS_MAX = 200;
-
-// Shortest `timeoutMs` a backup or restore call may set.
-export const BACKUP_TIMEOUT_MIN_MS = 1_000;
 
 // The `timeoutMs` of a backup or restore call that sets none.
 export const BACKUP_TIMEOUT_DEFAULT_MS = 120_000;
 
-// Longest `timeoutMs` a backup or restore call may set.
-export const BACKUP_TIMEOUT_MAX_MS = 300_000;
-
 // Backups one `list_backups` call returns when it sets no limit.
 export const LIST_LIMIT_DEFAULT = 10;
 
-// Most backups one `list_backups` call returns.
-export const LIST_LIMIT_MAX = 50;
+// --- Guidelines: no call is refused past them; the sidecar logs one warning line per call that passes one ---
+
+// Documents in one backup.
+export const BACKUP_DOCUMENTS_GUIDELINE = 10_000;
+
+// Bytes of one backup file, header included.
+export const BACKUP_BYTES_GUIDELINE = 64_000_000;
+
+// UTF-8 bytes of one backup note.
+export const BACKUP_NOTE_GUIDELINE_BYTES = 200;
+
+// Uuids one backup or restore call names.
+export const BACKUP_UUIDS_GUIDELINE = 200;
+
+// The `timeoutMs` of one backup or restore call.
+export const BACKUP_TIMEOUT_GUIDELINE_MS = 300_000;
+
+// Rows one `list_backups` call asks for.
+export const LIST_LIMIT_GUIDELINE = 50;
 
 // Most header lines one `list_backups` call reads.
 export const LIST_HEADER_READS_MAX = 1000;
@@ -82,9 +81,6 @@ export const BACKUP_INVALID = 'BACKUP_INVALID';
 
 // Another backup or restore is running.
 export const BACKUP_BUSY = 'BACKUP_BUSY';
-
-// The backup would exceed `BACKUP_MAX_DOCUMENTS` or `BACKUP_MAX_BYTES`.
-export const BACKUP_TOO_LARGE = 'BACKUP_TOO_LARGE';
 
 // The requested documents resolved to nothing to back up.
 export const BACKUP_EMPTY = 'BACKUP_EMPTY';
@@ -122,7 +118,7 @@ export const BACKUP_SIDECAR_CODES = Object.freeze([
  * @property {string} foundryVersion - The Foundry version that exported them.
  * @property {string} systemId - The id of the world's game system.
  * @property {string} systemVersion - The version of that system.
- * @property {string} note - The caller's note, at most `BACKUP_NOTE_MAX_BYTES` bytes.
+ * @property {string} note - The caller's note; its JSON text takes at most `BACKUP_NOTE_MAX_JSON_BYTES` bytes.
  * @property {number} documents - The number of document lines after the header.
  * @property {number} bytes - The file size in bytes, header included.
  */
@@ -165,6 +161,26 @@ const CREATED_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 // A control character; none is allowed in a world field or a note.
 const CONTROL_CHARACTER = /\p{Cc}/u;
+
+/**
+ * The most bytes a note's JSON text, its quotes left out, may take: what the header line leaves when every other field
+ * takes its longest form. That form is a world field of `BACKUP_WORLD_FIELD_MAX_BYTES` quote characters (with control
+ * characters refused, no character takes more than two JSON bytes per UTF-8 byte) and counts of
+ * `Number.MAX_SAFE_INTEGER`. The header line has a fixed size so the sidecar can fill it in place after the documents,
+ * so any note that passes this check fits whatever world the documents come from.
+ * @type {number}
+ */
+export const BACKUP_NOTE_MAX_JSON_BYTES = HEADER_LINE_BYTES - 1 - utf8Bytes(JSON.stringify({
+   wiretapBackup: BACKUP_FORMAT_VERSION,
+   created: new Date(0).toISOString(),
+   worldId: '"'.repeat(BACKUP_WORLD_FIELD_MAX_BYTES),
+   foundryVersion: '"'.repeat(BACKUP_WORLD_FIELD_MAX_BYTES),
+   systemId: '"'.repeat(BACKUP_WORLD_FIELD_MAX_BYTES),
+   systemVersion: '"'.repeat(BACKUP_WORLD_FIELD_MAX_BYTES),
+   note: '',
+   documents: Number.MAX_SAFE_INTEGER,
+   bytes: Number.MAX_SAFE_INTEGER,
+}));
 
 /**
  * Pad a number with leading zeros.
@@ -229,14 +245,15 @@ export function isWorldField(value) {
 }
 
 /**
- * Check a backup note: a string of at most `BACKUP_NOTE_MAX_BYTES` UTF-8 bytes with no control character.
+ * Check a backup note: a string with no control character (the header is one line) whose JSON text, its quotes left
+ * out, takes at most `BACKUP_NOTE_MAX_JSON_BYTES` UTF-8 bytes, so the header fits its line.
  * @param {unknown} value - The value to check.
  * @returns {boolean} True when the value is a valid note.
  */
 export function isBackupNote(value) {
    return typeof value === 'string'
-      && utf8Bytes(value) <= BACKUP_NOTE_MAX_BYTES
-      && !CONTROL_CHARACTER.test(value);
+      && !CONTROL_CHARACTER.test(value)
+      && utf8Bytes(JSON.stringify(value)) - 2 <= BACKUP_NOTE_MAX_JSON_BYTES;
 }
 
 /**
@@ -281,8 +298,8 @@ export function parseHeaderLine(text) {
       || !isWorldField(header.systemId)
       || !isWorldField(header.systemVersion)
       || !isBackupNote(header.note)
-      || !isIntegerIn(header.documents, 0, BACKUP_MAX_DOCUMENTS)
-      || !isIntegerIn(header.bytes, HEADER_LINE_BYTES, BACKUP_MAX_BYTES)) {
+      || !isIntegerIn(header.documents, 0, Number.MAX_SAFE_INTEGER)
+      || !isIntegerIn(header.bytes, HEADER_LINE_BYTES, Number.MAX_SAFE_INTEGER)) {
       return null;
    }
    return /** @type {BackupHeader} */ (/** @type {unknown} */ (header));

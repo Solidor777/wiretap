@@ -20,5 +20,8 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "wiretap@personal-skills": true
   }
 }

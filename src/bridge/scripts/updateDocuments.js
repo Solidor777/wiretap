@@ -5,12 +5,12 @@
  */
 
 import { ScriptError } from '~/bridge/scripts/registry.js';
-import { checkDataBytes, checkReadbackPaths, parseJson, shapeRefusal } from '~/bridge/scripts/writeArgs.js';
+import { BEST_PRACTICE, SizeNotes, longest, totalBytes } from '~/bridge/scripts/sizeNotes.js';
+import { checkReadbackPaths, parseJson, shapeRefusal } from '~/bridge/scripts/writeArgs.js';
 import { ackUpdates, attachReadback } from '~/bridge/scripts/writeAck.js';
 
 /**
- * Group the patch entries by uuid, in first-use order, parsing each value as JSON. The caller bounds the size of the
- * values (`checkDataBytes`), alone or together with other texts of the same call.
+ * Group the patch entries by uuid, in first-use order, parsing each value as JSON.
  * @param {Array<{ uuid: string, path: string, value?: string, op?: string }>} entries - The validated entries.
  * @returns {Array<{ uuid: string, patches: Array<{ path: string, value?: unknown, op?: string }> }>} The updates.
  * @throws {ScriptError} `ARGS_INVALID` for a value that is not JSON, or a value given with `op: 'delete'`.
@@ -38,15 +38,31 @@ export function groupPatches(entries) {
 }
 
 /**
- * Bound the values of the patch entries as one total, then group them by uuid.
- * @param {Array<{ uuid: string, path: string, value?: string, op?: string }>} entries - The validated entries.
- * @returns {ReturnType<typeof groupPatches>} The updates.
- * @throws {ScriptError} `ARGS_INVALID` for values over the data bound, a value that is not JSON, or a value given
- * with `op: 'delete'`.
+ * Note the best-practice sizes of a list of patch entries: the entries, the bytes and the longest of their values.
+ * @param {SizeNotes} notes - The size notes of the call.
+ * @param {Array<{ value?: string }>} entries - The validated entries.
+ * @returns {void}
  */
-export function groupEntries(entries) {
-   checkDataBytes(entries.map((entry) => entry.value ?? ''));
-   return groupPatches(entries);
+export function notePatchEntries(notes, entries) {
+   /** @type {unknown[]} The value texts of the entries. */
+   const values = entries.map((entry) => entry.value);
+   notes.note(entries.length, 'update entries in one call', BEST_PRACTICE.updateEntries);
+   notes.note(totalBytes(values), 'bytes of data in one call', BEST_PRACTICE.dataBytes);
+   notes.note(longest(values), 'characters in one update value', BEST_PRACTICE.textChars);
+}
+
+/**
+ * Note the most patches the grouped updates give one document.
+ * @param {SizeNotes} notes - The size notes of the call.
+ * @param {ReturnType<typeof groupPatches>} updates - The updates, one per uuid.
+ * @returns {void}
+ */
+export function notePatchesPerDocument(notes, updates) {
+   notes.note(
+      updates.reduce((most, update) => Math.max(most, update.patches.length), 0),
+      'patches on one document',
+      BEST_PRACTICE.paths,
+   );
 }
 
 /**
@@ -58,8 +74,19 @@ export function groupEntries(entries) {
  * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED` or a `PATH_*` code.
  */
 export async function updateDocumentsHandler(args, ctx) {
-   /** @type {ReturnType<typeof groupEntries>} The updates, one per uuid. */
-   const updates = groupEntries(args.updates);
+   /** @type {SizeNotes} The best-practice sizes this call passes, written as one line before the updates run. */
+   const notes = new SizeNotes('update_documents');
+   notePatchEntries(notes, args.updates);
+   notes.note(args.paths?.length ?? 0, 'paths in one call', BEST_PRACTICE.paths);
+   /** @type {ReturnType<typeof groupPatches>} The updates, one per uuid. */
+   let updates;
+   try {
+      updates = groupPatches(args.updates);
+      notes.note(updates.length, 'documents in one call', BEST_PRACTICE.documents);
+      notePatchesPerDocument(notes, updates);
+   } finally {
+      notes.write(ctx.log);
+   }
    checkReadbackPaths(ctx, args.paths);
    /** @type {Awaited<ReturnType<typeof ctx.core.updateDocuments>>} The updated documents. */
    const updated = await ctx.core.updateDocuments({
@@ -84,7 +111,12 @@ export async function updateDocumentsHandler(args, ctx) {
          if (!sliced.ok) {
             throw shapeRefusal(sliced.error);
          }
-         return sliced;
+         return document.partial === true
+            ? {
+               ...sliced,
+               partial: true,
+            }
+            : sliced;
       }),
    );
 }

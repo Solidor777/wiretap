@@ -3,6 +3,11 @@ import http from 'node:http';
 import { describe, it, expect } from 'vitest';
 import { makeReadHandleHandler, startMcpServer } from '../../server/mcp.ts';
 import { createHandleStore } from '../../server/handles.ts';
+import { getBudget } from '../../shared/budgets.js';
+
+/** @type {string} The answer for a handle that cannot be read, with the default store bounds. */
+const HANDLE_NOT_FOUND_TEXT = 'HANDLE_NOT_FOUND: Handle not found: it may have expired (1800 s unread) or been evicted '
+   + '(1024 handles and 64000000 bytes are kept).';
 
 /**
  * Build a bridge that has no endpoint: no tools and no changes.
@@ -83,10 +88,13 @@ describe('makeReadHandleHandler', () => {
    function setup(text) {
       /** @type {ReturnType<typeof createHandleStore>} The empty store the handler reads. */
       const store = createHandleStore();
+      /** @type {string[]} The sidecar log lines the handler wrote. */
+      const logs = [];
       return {
          handle: store.put(OWNER, text).handle,
-         handler: makeReadHandleHandler(store, OWNER),
+         handler: makeReadHandleHandler(store, OWNER, (line) => logs.push(line)),
          store,
+         logs,
       };
    }
 
@@ -190,16 +198,42 @@ describe('makeReadHandleHandler', () => {
       });
    });
 
+   it('reads more paths than the best-practice size and logs one warning line for the call', async () => {
+      const { handle, handler, logs } = setup(JSON.stringify({ name: 'MOCK_ACTOR' }));
+      /** @type {number} The best-practice path count. */
+      const size = getBudget('PATHS_PER_CALL_MAX').value;
+      const atSize = await handler({
+         handle,
+         paths: Array.from({ length: size }, () => 'name'),
+      });
+      expect(atSize.isError).toBeFalsy();
+      expect(logs).toEqual([]);
+      /** @type {string[]} Five times the best-practice count, the last one a path that exists. */
+      const many = [
+         ...Array.from({ length: size * 5 - 1 }, (_, index) => `missing${index}`),
+         'name',
+      ];
+      const result = await handler({
+         handle,
+         paths: many,
+      });
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(result.content[0].text).values).toEqual({ name: 'MOCK_ACTOR' });
+      expect(logs).toEqual([
+         `Wiretap sidecar | read_handle: ${size * 5} paths in one call, over the ${size} best-practice size`,
+      ]);
+   });
+
    it('maps a store failure to an isError result formatted <code>: <message>', async () => {
       const { handler } = setup('x');
       const result = await handler({ handle: 'AAAAAAAAAAAAAAAAAAAAAA' });
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe('HANDLE_NOT_FOUND: Handle not found or expired.');
+      expect(result.content[0].text).toBe(HANDLE_NOT_FOUND_TEXT);
    });
 
    it('refuses a handle that belongs to another owner', async () => {
       const { handle, store } = setup('secret');
-      const result = await makeReadHandleHandler(store, 'owner-b')({ handle });
+      const result = await makeReadHandleHandler(store, 'owner-b', () => undefined)({ handle });
       expect(result.isError).toBe(true);
       expect(result.content[0].text.startsWith('HANDLE_NOT_FOUND')).toBe(true);
    });

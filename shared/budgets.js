@@ -70,8 +70,9 @@ function table(entries) {
 export const BUDGETS = table([
    // Core and shipped tool name length. Names are always in the client's context.
    budget('CORE_TOOL_NAME_MAX_CHARS', 32, 'chars', BUDGET_SEVERITY.HARD),
-   // Plugin and agent-saved tool name length. Module ids are outside Wiretap's control, so the limit is looser.
-   budget('PLUGIN_TOOL_NAME_MAX_CHARS', 64, 'chars', BUDGET_SEVERITY.HARD),
+   // Plugin and agent-saved tool name length. Claude Code lists each tool as `mcp__wiretap__<name>` (a 14-character
+   // prefix) and the Anthropic API refuses tool names over 64 characters, so a longer name could not be called.
+   budget('PLUGIN_TOOL_NAME_MAX_CHARS', 50, 'chars', BUDGET_SEVERITY.HARD),
    // Script `version` string length (a semver-like string).
    budget('SCRIPT_VERSION_MAX_CHARS', 32, 'chars', BUDGET_SEVERITY.HARD),
    // Serialized `{name, description, inputSchema}` of one tool.
@@ -82,14 +83,11 @@ export const BUDGETS = table([
    budget('DESCRIPTION_MAX_CHARS', 240, 'chars', BUDGET_SEVERITY.HARD),
    // Server `instructions` text sent to the client at session start; it names the tool families.
    budget('INSTRUCTIONS_MAX_CHARS', 600, 'chars', BUDGET_SEVERITY.HARD),
-   // MCP sessions held at once; an initialize beyond it is refused until the idle sweep frees a slot.
-   budget('MCP_SESSIONS_MAX', 32, 'count', BUDGET_SEVERITY.HARD),
+   // Best-practice number of MCP sessions open at once; every initialize opens a session, and the sidecar logs one
+   // line for each new session that takes the open count past it.
+   budget('MCP_SESSIONS_MAX', 32, 'count', BUDGET_SEVERITY.WARN),
    // Request body bytes the MCP endpoint reads; a larger body is refused with 413 and the request is destroyed.
    budget('MCP_BODY_MAX_BYTES', 1_048_576, 'bytes', BUDGET_SEVERITY.HARD),
-   // Tools listed to the client at all times (core plus shipped).
-   budget('ALWAYS_LISTED_TOOLS_MAX', 30, 'count', BUDGET_SEVERITY.HARD),
-   // Serialized size of all core and shipped definitions together (16 KB).
-   budget('ALL_DEFINITIONS_MAX_BYTES', 16000, 'bytes', BUDGET_SEVERITY.HARD),
    // Acknowledgement of a write, per document.
    budget('ACK_MAX_BYTES', 256, 'bytes', BUDGET_SEVERITY.HARD),
    // Default compact view of one document (2 KB).
@@ -106,16 +104,18 @@ export const BUDGETS = table([
    budget('SEARCH_PAGE_MAX_BYTES', 4000, 'bytes', BUDGET_SEVERITY.HARD),
    // Search rows per page when the caller gives no limit.
    budget('SEARCH_DEFAULT_LIMIT', 20, 'count', BUDGET_SEVERITY.HARD),
-   // Largest search page size a caller may request.
-   budget('SEARCH_MAX_LIMIT', 100, 'count', BUDGET_SEVERITY.HARD),
+   // Best-practice search page size; a larger `limit` runs and the client logs one warning line. The page stays within
+   // `SEARCH_PAGE_MAX_BYTES` either way.
+   budget('SEARCH_MAX_LIMIT', 100, 'count', BUDGET_SEVERITY.WARN),
    // Candidates one search call examines after its cursor; a search that reaches it reports `cut` and resumes.
    budget('SEARCH_SCAN_MAX', 2000, 'count', BUDGET_SEVERITY.HARD),
    // Documents one search call exports to test a filter; a search that reaches it reports `cut` and resumes.
    budget('SEARCH_EXPORT_MAX', 300, 'count', BUDGET_SEVERITY.HARD),
    // Candidates a search examines between two yields to the event loop (and checks of the abort signal).
    budget('SEARCH_BATCH_SIZE', 25, 'count', BUDGET_SEVERITY.HARD),
-   // Longest `fields` path of a search row, in bytes; a longer path is refused because rows echo it as a key.
-   budget('SEARCH_FIELD_PATH_MAX_BYTES', 64, 'bytes', BUDGET_SEVERITY.HARD),
+   // Best-practice length of a search `fields` path, in bytes; rows echo it as a key, so a longer path takes more of
+   // the page. A longer path runs and the client logs one warning line.
+   budget('SEARCH_FIELD_PATH_MAX_BYTES', 64, 'bytes', BUDGET_SEVERITY.WARN),
    // Distinct paths a compendium search asks the pack index for; the index is shared and keeps what is requested.
    budget('SEARCH_INDEX_FIELDS_MAX', 5, 'count', BUDGET_SEVERITY.HARD),
    // Most segments of a path asked of a compendium index.
@@ -145,8 +145,10 @@ export const BUDGETS = table([
    budget('HANDLE_MAX_COUNT', 1024, 'count', BUDGET_SEVERITY.HARD),
    // Live calibration runs of the manual measurement script; the script reports, it never fails a build.
    budget('LIVE_RECALIBRATION_MAX_RUNS', 6, 'count', BUDGET_SEVERITY.WARN),
-   // Paths in one path-scoped read or write call.
-   budget('PATHS_PER_CALL_MAX', 20, 'count', BUDGET_SEVERITY.HARD),
+   // The best-practice number of paths in one `read_handle` call, and of paths, fields or patches of one document in
+   // the read and write scripts: a call past it runs and logs one warning line (the sidecar's for `read_handle`, the
+   // client's for the scripts).
+   budget('PATHS_PER_CALL_MAX', 20, 'count', BUDGET_SEVERITY.WARN),
    // A path-grammar error text.
    budget('PATH_ERROR_MAX_BYTES', 256, 'bytes', BUDGET_SEVERITY.HARD),
    // A path string, in UTF-8 bytes; longer paths are refused before they are split.
@@ -161,12 +163,14 @@ export const BUDGETS = table([
    budget('REGISTRY_PUSHES_PER_SECOND_MAX', 2, 'count', BUDGET_SEVERITY.HARD),
    // Most script executions one client runs at once; a call beyond it is answered with a short busy error.
    budget('SCRIPT_CONCURRENCY_MAX', 8, 'count', BUDGET_SEVERITY.HARD),
-   // Acknowledgement of a whole write call that touches up to `WRITE_DOCUMENTS_MAX` documents (4 KB).
+   // Acknowledgement of a whole write call (4 KB); past it the rows keep only their uuids and count the rest.
    budget('ACK_BATCH_MAX_BYTES', 4000, 'bytes', BUDGET_SEVERITY.HARD),
-   // Documents (or update entries, or uuids) one create, update or delete call may carry.
-   budget('WRITE_DOCUMENTS_MAX', 50, 'count', BUDGET_SEVERITY.HARD),
-   // Total JSON text of the data one create or update call carries; a larger call is refused before it is parsed.
-   budget('WRITE_DATA_MAX_BYTES', 200000, 'bytes', BUDGET_SEVERITY.HARD),
+   // Best-practice number of documents one create, update, delete or batch call carries; a larger call runs and the
+   // client logs one warning line.
+   budget('WRITE_DOCUMENTS_MAX', 50, 'count', BUDGET_SEVERITY.WARN),
+   // Best-practice total JSON text of the data one write call carries; a larger call runs and the client logs one
+   // warning line.
+   budget('WRITE_DATA_MAX_BYTES', 200000, 'bytes', BUDGET_SEVERITY.WARN),
    // The result of `open_sheet` or `close_sheet`.
    budget('SHEET_RESULT_MAX_BYTES', 128, 'bytes', BUDGET_SEVERITY.HARD),
    // The result of `roll`.

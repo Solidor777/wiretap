@@ -87,6 +87,8 @@ const FAILURE_TEXT_MAX_BYTES = 160;
  * @property {string} [actAs] - The id of a user whose permission to create is checked in advance (advisory).
  * @property {unknown} [requestData] - The request as the caller gave it, hashed for `idempotencyKey` in place of
  * `data` when `data` was built from it (a copy's `{ fromUuids }`), so a source edited between two calls is no conflict.
+ * @property {import('~/bridge/scripts/sizeNotes.js').SizeNotes} [sizeNotes] - The call's best-practice size notes;
+ * the `idempotencyKey` lookup adds the size of the collection it reads.
  */
 
 /**
@@ -96,6 +98,7 @@ const FAILURE_TEXT_MAX_BYTES = 160;
  * @property {string} type - The subtype, or an empty text.
  * @property {boolean} [dryRun] - True when nothing was written.
  * @property {Record<string, unknown>} [exported] - The canonical export, only when read-back was requested.
+ * @property {true} [partial] - Set with `exported` when the export left part of the document out at a redaction bound.
  */
 
 /**
@@ -248,17 +251,15 @@ export function validationError(failures, invalid, total) {
 }
 
 /**
- * Check the list a call carries: a non-empty array of at most `WRITE_DOCUMENTS_MAX` plain objects.
+ * Check the list a call carries: a non-empty array of plain objects.
  * @param {unknown} data - The list.
  * @param {string} label - What the entries are called in the error.
  * @returns {void}
  * @throws {ScriptError} `ARGS_INVALID`.
  */
 function checkObjects(data, label) {
-   /** @type {number} The most entries one call may carry. */
-   const max = getBudget('WRITE_DOCUMENTS_MAX').value;
-   if (!Array.isArray(data) || data.length === 0 || data.length > max) {
-      throw new ScriptError('ARGS_INVALID', `Give 1 to ${max} ${label}.`);
+   if (!Array.isArray(data) || data.length === 0) {
+      throw new ScriptError('ARGS_INVALID', `Give one or more ${label}.`);
    }
    for (const [index, entry] of data.entries()) {
       if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
@@ -346,9 +347,9 @@ async function resolveCreateTarget(documentName, parentUuid, pack) {
 /**
  * Refuse `keepId` data whose `_id` is already taken in the collection it would land in, with one early `ARGS_INVALID`.
  * Foundry 14.364's server `_createDocuments` (`dist/database/backend/server-backend.mjs`) throws "The _id [..] already
- * exists within the parent collection" for a taken embedded id and has no such check for a top-level document; for a
- * world document it overwrites the stored document (MEASURED) while the client keeps its old copy, so the world and
- * the client disagree afterwards.
+ * exists within the parent collection" for a taken embedded id (MEASURED: the create rejects with that text and the
+ * stored item is unchanged) and has no such check for a top-level document: a taken world id resolves and overwrites
+ * the stored document (MEASURED), and the client's world collection then holds the new document under that id.
  * @param {string} documentName - The class created.
  * @param {Awaited<ReturnType<typeof resolveCreateTarget>>} target - Where the documents land.
  * @param {Record<string, unknown>[]} data - The data of each document.
@@ -383,7 +384,7 @@ async function refuseTakenIds(documentName, target, data) {
       if (taken) {
          throw new ScriptError(
             'ARGS_INVALID',
-            `keepId: ${documentName} '${shown}' already exists and would be overwritten. Use update_documents or ` +
+            `keepId: ${documentName} '${shown}' already exists. Use update_documents or ` +
                'replace_document, or leave out keepId.',
          );
       }
@@ -432,6 +433,8 @@ export function rowOf(document, dryRun) {
  * @param {unknown} [params.requestData] - What the idempotency hash reads in place of `data`, when given.
  * @param {object | null} [params.actAsUser] - The user whose permission is checked in advance, if any.
  * @param {string} [params.prefix] - The path prefix of reported failures, for example `creates[1]`.
+ * @param {import('~/bridge/scripts/sizeNotes.js').SizeNotes} [params.sizeNotes] - The call's best-practice size
+ * notes, given to the idempotency lookup.
  * @returns {Promise<CreatePlan>} The plan to run.
  * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED`, `ACT_AS_DENIED` or
  * `IDEMPOTENCY_CONFLICT`.
@@ -446,6 +449,7 @@ export async function prepareCreate({
    requestData,
    actAsUser = null,
    prefix = '',
+   sizeNotes,
 }) {
    checkObjects(data, 'documents');
    for (const item of data) {
@@ -487,6 +491,7 @@ export async function prepareCreate({
          ],
          data,
          keepId,
+         sizeNotes,
       });
       if (idempotent.replay !== null) {
          checkActAs(
@@ -630,6 +635,9 @@ export async function runCreate(plan, readback = false) {
          const exported = exportDocument(document, {});
          if (exported.ok) {
             row.exported = exported.data;
+            if (exported.partial === true) {
+               row.partial = true;
+            }
          }
       }
       return row;
@@ -644,7 +652,7 @@ export async function runCreate(plan, readback = false) {
  * @param {CreateParams} params - What to create.
  * @returns {Promise<CreatedRow[]>} One row per document, in the order of `data`.
  * @throws {ScriptError} `ARGS_INVALID`, `DOC_NOT_FOUND`, `GATE_DENIED`, `VALIDATION_FAILED`, `ACT_AS_DENIED`,
- * `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_UNAVAILABLE` or `WRITE_NOT_APPLIED`.
+ * `IDEMPOTENCY_CONFLICT` or `WRITE_NOT_APPLIED`.
  */
 export async function createDocuments(params) {
    if (params.idempotencyKey === undefined) {
@@ -673,6 +681,7 @@ async function createChecked({
    idempotencyKey,
    actAs,
    requestData,
+   sizeNotes,
 }) {
    /** @type {CreatePlan} The checked plan. */
    const plan = await prepareCreate({
@@ -684,6 +693,7 @@ async function createChecked({
       idempotencyKey,
       requestData,
       actAsUser: resolveActAs(actAs),
+      sizeNotes,
    });
    if (plan.replay !== null) {
       return plan.replay.map((row, index) => {
@@ -698,6 +708,7 @@ async function createChecked({
                }
                : {}),
             ...(exported.ok ? { exported: exported.data } : {}),
+            ...(exported.ok && exported.partial === true ? { partial: true } : {}),
          };
       });
    }
@@ -718,7 +729,7 @@ async function createChecked({
 /**
  * @typedef {object} UpdateEntry
  * @property {string} uuid - The document to update, a world, embedded or pack document.
- * @property {UpdatePatch[]} patches - The path-scoped writes, at most 20.
+ * @property {UpdatePatch[]} patches - The path-scoped writes.
  */
 
 /**
@@ -736,6 +747,7 @@ async function createChecked({
  * a hook cancelled the update). For a dry run, the paths that would be written.
  * @property {boolean} [dryRun] - True when nothing was written.
  * @property {Record<string, unknown>} [exported] - The canonical export, only when read-back was requested.
+ * @property {true} [partial] - Set with `exported` when the export left part of the document out at a redaction bound.
  */
 
 /**
@@ -1089,6 +1101,9 @@ export async function runUpdates(plans, { dryRun = false, readback = false } = {
          const exported = exportDocument(plan.document, {});
          if (exported.ok) {
             row.exported = exported.data;
+            if (exported.partial === true) {
+               row.partial = true;
+            }
          }
       }
       rows.push(row);
@@ -1190,10 +1205,8 @@ export async function resolveWritable(uuid) {
  * @throws {ScriptError} `ARGS_INVALID` or `DOC_NOT_FOUND`.
  */
 async function resolveDeletions(uuids) {
-   /** @type {number} The most uuids one call may carry. */
-   const max = getBudget('WRITE_DOCUMENTS_MAX').value;
-   if (!Array.isArray(uuids) || uuids.length === 0 || uuids.length > max) {
-      throw new ScriptError('ARGS_INVALID', `Give 1 to ${max} uuids.`);
+   if (!Array.isArray(uuids) || uuids.length === 0) {
+      throw new ScriptError('ARGS_INVALID', 'Give one or more uuids.');
    }
    /** @type {object[]} The live documents the uuids resolve to. */
    const documents = [];

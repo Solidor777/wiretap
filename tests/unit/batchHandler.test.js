@@ -141,27 +141,90 @@ describe('batchHandler', () => {
       }
    });
 
-   it('bounds the creates and the update values as one total', async () => {
-      /** @type {number} Half of the data bound plus a margin. */
-      const half = Math.floor(getBudget('WRITE_DATA_MAX_BYTES').value / 2) + 100;
-      const error = await failure({
-         creates: [{
-            documentName: 'Actor',
-            data: JSON.stringify({ name: 'x'.repeat(half) }),
-         }],
-         updates: [{
-            uuid: 'Actor.MOCKACTOR0000001',
-            path: 'name',
-            value: JSON.stringify('y'.repeat(half)),
-         }],
-      });
-      expect(error.code).toBe('ARGS_INVALID');
+   it('sends creates and update values past the best-practice data size together, and logs one line', async () => {
+      const { ctx, core } = makeContext();
+      /** @type {ReturnType<typeof vi.fn>} The script log sink. */
+      const log = vi.fn();
+      /** @type {number} The best-practice data size. */
+      const size = getBudget('WRITE_DATA_MAX_BYTES').value;
+      /** @type {string} A create text of half the size plus a margin. */
+      const data = JSON.stringify({ name: 'x'.repeat(Math.floor(size / 2) + 100) });
+      /** @type {string} An update value of half the size plus a margin. */
+      const value = JSON.stringify('y'.repeat(Math.floor(size / 2) + 100));
+      await batchHandler(
+         {
+            creates: [{
+               documentName: 'Actor',
+               data,
+            }],
+            updates: [{
+               uuid: 'Actor.MOCKACTOR0000001',
+               path: 'name',
+               value,
+            }],
+         },
+         {
+            ...ctx,
+            log,
+         },
+      );
+      expect(core).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls).toEqual([
+         [
+            `Wiretap | batch: ${data.length + value.length} bytes of data in one call, over the ${size} ` +
+               'best-practice size',
+         ],
+      ]);
+   });
+
+   it('logs every size a batch passes in one line, and nothing at the best-practice sizes', async () => {
+      /** @type {number} The best-practice document count. */
+      const documents = getBudget('WRITE_DOCUMENTS_MAX').value;
+      /**
+       * Run a batch of creates and update entries through the handler and return its log calls.
+       * @param {number} creates - The create entries.
+       * @param {number} updates - The update entries, each on its own document.
+       * @returns {Promise<unknown[][]>} The calls of the log sink.
+       */
+      async function logged(creates, updates) {
+         const { ctx } = makeContext();
+         /** @type {ReturnType<typeof vi.fn>} The script log sink. */
+         const log = vi.fn();
+         await batchHandler(
+            {
+               creates: Array.from({ length: creates }, (_, index) => ({
+                  documentName: 'Actor',
+                  data: `{"name":"MOCK_${index}"}`,
+               })),
+               updates: Array.from({ length: updates }, (_, index) => ({
+                  uuid: `Actor.MOCKACTOR${String(index).padStart(7, '0')}`,
+                  path: 'name',
+                  value: '"MOCK_x"',
+               })),
+            },
+            {
+               ...ctx,
+               log,
+            },
+         );
+         return log.mock.calls;
+      }
+      expect(await logged(documents - 10, 10)).toEqual([]);
+      expect(await logged(documents, 201)).toEqual([
+         [
+            `Wiretap | batch: 201 update entries in one call, over the 200 best-practice size; ` +
+               `${documents + 201} documents in one call, over the ${documents} best-practice size`,
+         ],
+      ]);
    });
 });
 
 describe('the batch definition', () => {
    /** @type {ReturnType<typeof compileSchema>} The compiled schema, nested objects strict. */
-   const compiled = compileSchema(batchDefinition.inputSchema, { strictNested: batchDefinition.strictNested === true });
+   const compiled = compileSchema(batchDefinition.inputSchema, {
+      strictNested: batchDefinition.strictNested === true,
+      tool: batchDefinition.name,
+   });
 
    it('asks for strict entries, which is not listed', () => {
       expect(batchDefinition.strictNested).toBe(true);

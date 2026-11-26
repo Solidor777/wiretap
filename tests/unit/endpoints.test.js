@@ -3,8 +3,8 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
    BridgeError,
    EndpointGoneError,
+   ENDPOINTS_WARN,
    EndpointTimeoutError,
-   MAX_ENDPOINTS,
    ROUTE_ORDER,
    createEndpointRegistry,
    createRouter,
@@ -21,7 +21,6 @@ import { BACKUP_SIDECAR_CODES, TRASH_FAILED } from '../../shared/backup.js';
 import {
    ENDPOINT_GONE,
    GATE_DENIED,
-   ENDPOINT_LIMIT,
    ENDPOINT_TIMEOUT,
    ENDPOINT_UNAVAILABLE,
    NOT_GM,
@@ -280,15 +279,51 @@ describe('createEndpointRegistry change notifications', () => {
       expect(listener).not.toHaveBeenCalled();
    });
 
-   it('does not notify for a registration the limit refused', () => {
+   it('notifies subscribers when allowedPluginModules changes and not for another gate', () => {
       const { registry, listener } = setup();
-      const identity = validateIdentify(identify()).identity;
-      for (let index = 0; index < MAX_ENDPOINTS; index += 1) {
-         registry.register(`s${index}`, identity);
-      }
+      add(registry, 'a', 'agent');
       listener.mockClear();
-      expect(registry.register('extra', identity)).toBe(false);
-      expect(listener).not.toHaveBeenCalled();
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowDelete: true,
+      });
+      expect(listener).toHaveBeenCalledTimes(0);
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: ['my-mod'],
+      });
+      expect(listener).toHaveBeenCalledTimes(1);
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: ['my-mod'],
+      });
+      expect(listener).toHaveBeenCalledTimes(1);
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: [],
+      });
+      expect(listener).toHaveBeenCalledTimes(2);
+   });
+
+   it('notifies when the allowed modules are reordered', () => {
+      const { registry, listener } = setup();
+      add(registry, 'a', 'agent');
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: [
+            'mod-a',
+            'mod-b',
+         ],
+      });
+      listener.mockClear();
+      registry.setGateState('a', {
+         ...closedGateState(),
+         allowedPluginModules: [
+            'mod-b',
+            'mod-a',
+         ],
+      });
+      expect(listener).toHaveBeenCalledTimes(1);
    });
 
    it('stops notifying a listener after it unsubscribes and serves several listeners', () => {
@@ -305,29 +340,70 @@ describe('createEndpointRegistry change notifications', () => {
    });
 });
 
-describe('createEndpointRegistry limit', () => {
-   it('exports a limit of 64 endpoints', () => {
-      expect(MAX_ENDPOINTS).toBe(64);
+describe('createEndpointRegistry warning count', () => {
+   it('warns past 64 endpoints', () => {
+      expect(ENDPOINTS_WARN).toBe(64);
    });
 
-   it('refuses a new socket beyond the limit and reports it', () => {
-      const registry = createEndpointRegistry();
+   it('registers a 65th endpoint, notifies for it and logs one line for it', () => {
+      /** @type {string[]} Log lines. */
+      const logs = [];
+      const registry = createEndpointRegistry(Date.now, (line) => logs.push(line));
+      const listener = vi.fn();
+      registry.subscribe(listener);
       const identity = validateIdentify(identify()).identity;
-      for (let i = 0; i < MAX_ENDPOINTS; i++) {
-         expect(registry.register(`s${i}`, identity)).toBe(true);
-      }
-      expect(registry.register('extra', identity)).toBe(false);
-      expect(registry.list()).toHaveLength(MAX_ENDPOINTS);
-   });
-
-   it('still lets an already registered socket re-identify at the limit', () => {
-      const registry = createEndpointRegistry();
-      const identity = validateIdentify(identify()).identity;
-      for (let i = 0; i < MAX_ENDPOINTS; i++) {
+      for (let i = 0; i < ENDPOINTS_WARN; i++) {
          registry.register(`s${i}`, identity);
       }
-      expect(registry.register('s3', { ...identity, kind: 'agent' })).toBe(true);
+      expect(logs).toEqual([]);
+      listener.mockClear();
+      registry.register('extra', identity);
+      expect(registry.list()).toHaveLength(65);
+      expect(registry.get('extra')).toBeDefined();
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(logs).toEqual([
+         'Wiretap sidecar | Foundry endpoint extra registered: 65 endpoints are registered, more than the 64 ' +
+            'recommended',
+      ]);
+   });
+
+   it('writes at most 10 endpoint-count lines per minute, then one summary line', () => {
+      /** @type {string[]} Log lines. */
+      const logs = [];
+      /** @type {number} The registry's clock in milliseconds. */
+      let clock = 0;
+      const registry = createEndpointRegistry(() => clock, (line) => logs.push(line));
+      const identity = validateIdentify(identify()).identity;
+      // Endpoints 65 to 89 are over the warning count: 25 lines asked for, 10 written.
+      for (let i = 0; i < ENDPOINTS_WARN + 25; i++) {
+         registry.register(`s${i}`, identity);
+      }
+      expect(registry.list()).toHaveLength(89);
+      expect(logs).toHaveLength(10);
+      clock = 60_000;
+      registry.register('late', identity);
+      expect(logs.slice(10)).toEqual([
+         'Wiretap sidecar | 15 further endpoint count warnings suppressed',
+         'Wiretap sidecar | Foundry endpoint late registered: 90 endpoints are registered, more than the 64 ' +
+            'recommended',
+      ]);
+   });
+
+   it('logs nothing when a registered socket identifies again past the warning count', () => {
+      /** @type {string[]} Log lines. */
+      const logs = [];
+      const registry = createEndpointRegistry(Date.now, (line) => logs.push(line));
+      const identity = validateIdentify(identify()).identity;
+      for (let i = 0; i < ENDPOINTS_WARN + 1; i++) {
+         registry.register(`s${i}`, identity);
+      }
+      expect(logs).toHaveLength(1);
+      registry.register('s3', {
+         ...identity,
+         kind: 'agent',
+      });
       expect(registry.list().find((e) => e.socketId === 's3').kind).toBe('agent');
+      expect(logs).toHaveLength(1);
    });
 });
 
@@ -486,7 +562,6 @@ describe('normalizeAckError', () => {
       NO_ENDPOINT,
       ENDPOINT_TIMEOUT,
       ENDPOINT_GONE,
-      ENDPOINT_LIMIT,
       ENDPOINT_UNAVAILABLE,
       PROTOCOL_MISMATCH,
       NOT_GM,
@@ -1303,6 +1378,7 @@ describe('createRouter tools', () => {
                name: `tool_${id}`,
                description: 'A synthetic tool.',
                shape: {},
+               gates: [],
                signature: id,
             },
          ]);
@@ -1633,6 +1709,127 @@ describe('router invokeTool', () => {
       const { router, sent } = setup([['a', 'agent', [tool('shot', { mutates: true })]]]);
       await expect(router.invokeTool('shot', {}, { listed })).rejects.toMatchObject({ code: TOOL_GONE });
       expect(sent).toEqual([]);
+   });
+
+   describe('plugin tools', () => {
+      /**
+       * Build the plugin tool of module `my-mod` that declares the `allowDelete` gate.
+       * @returns {object} The sanitized tool.
+       */
+      function plugin() {
+         return tool('my-mod__echo', {
+            moduleId: 'my-mod',
+            gate: 'allowDelete',
+         });
+      }
+
+      it('denies a plugin tool whose module the picked endpoint does not allow, sending nothing', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowDelete: true,
+         });
+         const error = await router.invokeTool('my-mod__echo', {}, { listed }).catch((cause) => cause);
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowedPluginModules');
+         expect(sent).toEqual([]);
+      });
+
+      it('denies a plugin tool whose declared gate is closed while its module is allowed', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowedPluginModules: ['my-mod'],
+         });
+         const error = await router.invokeTool('my-mod__echo', {}, { listed }).catch((cause) => cause);
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowDelete');
+         expect(sent).toEqual([]);
+      });
+
+      it('judges the module gate before the declared gate when both are closed, sending nothing', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', closedGateState());
+         const error = await router.invokeTool('my-mod__echo', {}, { listed }).catch((cause) => cause);
+         expect(error.code).toBe(GATE_DENIED);
+         expect(error.message).toContain('allowedPluginModules');
+         expect(error.message).not.toContain('allowDelete');
+         expect(sent).toEqual([]);
+      });
+
+      it('runs a plugin tool when its module and its declared gate are both open', async () => {
+         const listed = plugin();
+         const { router, registry, sent } = setup([['a', 'agent', [listed]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowDelete: true,
+            allowedPluginModules: ['my-mod'],
+         });
+         const outcome = await router.invokeTool('my-mod__echo', {}, { listed });
+         expect(outcome.result).toBe('ran');
+         expect(sent).toHaveLength(1);
+      });
+
+      it('denies when the picked endpoint\'s gates differ from the listed tool\'s', async () => {
+         const listed = tool('my-mod__echo', { moduleId: 'my-mod' });
+         const { router, registry, sent } = setup([['a', 'agent', [plugin()]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowDelete: true,
+            allowedPluginModules: ['my-mod'],
+         });
+         await expect(router.invokeTool('my-mod__echo', {}, { listed })).rejects.toMatchObject({ code: GATE_DENIED });
+         expect(sent).toEqual([]);
+      });
+
+      it('lists a plugin tool only while the routed endpoint\'s snapshot allows its module', () => {
+         const { router, registry } = setup([['a', 'agent', [
+            tool('shipped_one'),
+            plugin(),
+         ]]]);
+         expect(router.tools().map((entry) => entry.name)).toEqual(['shipped_one']);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            allowedPluginModules: ['my-mod'],
+         });
+         expect(router.tools().map((entry) => entry.name)).toEqual([
+            'shipped_one',
+            'my-mod__echo',
+         ]);
+      });
+
+      it('lists 3,000 plugin tools against a 30,000-id module list, keeping only the allowed modules\' tools', () => {
+         /** @type {object} One sanitized plugin tool, copied for each module. */
+         const base = plugin();
+         /** @type {object[]} One plugin tool for each of the modules m0 to m2999. */
+         const plugins = Array.from({ length: 3000 }, (_, index) => ({
+            ...base,
+            name: `m${index}__echo`,
+            gates: [
+               {
+                  gate: 'allowedPluginModules',
+                  moduleId: `m${index}`,
+               },
+               { gate: 'allowDelete' },
+            ],
+         }));
+         const { router, registry } = setup([['a', 'agent', [
+            tool('shipped_one'),
+            ...plugins,
+         ]]]);
+         registry.setGateState('a', {
+            ...closedGateState(),
+            // The even-numbered modules m0 to m59998: half of the tools' modules and 28,500 others.
+            allowedPluginModules: Array.from({ length: 30000 }, (_, index) => `m${index * 2}`),
+         });
+         expect(router.tools().map((entry) => entry.name)).toEqual([
+            'shipped_one',
+            ...Array.from({ length: 1500 }, (_, index) => `m${index * 2}__echo`),
+         ]);
+      });
    });
 });
 

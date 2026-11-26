@@ -438,3 +438,45 @@ describe('stepInto', () => {
       expect(stepInto(root, 'hasOwnProperty', state()).ok).toBe(false);
    });
 });
+
+describe('describeField and outlineFields: counts of the lists they shorten', () => {
+   it('counts the categories and types a node leaves out', () => {
+      /** @type {string[]} Fifteen categories, three past the listed bound. */
+      const categories = Array.from({ length: 15 }, (_, index) => `MOCK_C${index}`);
+      /** @type {Record<string, unknown>} The node of the file path field. */
+      const node = walk(new F.FilePathField({ categories })).node;
+      expect(node.categories).toHaveLength(12);
+      expect(node.categoriesMore).toBe(3);
+      expect(walk(new F.FilePathField({ categories: categories.slice(0, 12) })).node.categoriesMore).toBeUndefined();
+      const typed = new F.TypedSchemaField();
+      typed.types = Object.fromEntries(categories.map((name) => [
+         name,
+         new F.SchemaField({}),
+      ]));
+      /** @type {Record<string, unknown>} The node of the typed schema field. */
+      const typedNode = walk(typed).node;
+      expect(typedNode.types).toHaveLength(12);
+      expect(typedNode.typesMore).toBe(3);
+   });
+
+   it('marks the walk cut when the outline stops at its bound', () => {
+      /** @type {Record<string, object>} One more field than an outline lists. */
+      const fields = Object.fromEntries(Array.from({ length: 81 }, (_, index) => [
+         `f${index}`,
+         new F.StringField(),
+      ]));
+      const state = createWalkState({
+         documentName: 'Actor',
+         subtype: 'player',
+      });
+      expect(outlineFields(new F.SchemaField(fields), state)).toHaveLength(80);
+      expect(state.cut).toBe(true);
+      const exact = createWalkState({
+         documentName: 'Actor',
+         subtype: 'player',
+      });
+      delete fields.f80;
+      expect(outlineFields(new F.SchemaField(fields), exact)).toHaveLength(80);
+      expect(exact.cut).toBe(false);
+   });
+});

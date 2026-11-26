@@ -142,15 +142,6 @@ describe('shipped scripts', () => {
          'delete_pack',
       ]);
    });
-
-   it('keep the whole listed definition set within the total budget', () => {
-      let total = 0;
-      for (const definition of registry.definitions()) {
-         const { listed } = compileSchema(definition.inputSchema);
-         total += definitionBytes(definition.name, definition.description, listed);
-      }
-      expect(total).toBeLessThanOrEqual(getBudget('ALL_DEFINITIONS_MAX_BYTES').value);
-   });
 });
 
 describe.each([
@@ -185,7 +176,7 @@ describe.each([
    });
 
    it('lists within the definition budget and the description limit', () => {
-      const compiled = compileSchema(definition.inputSchema);
+      const compiled = compileSchema(definition.inputSchema, { tool: definition.name });
       expect(compiled.ok).toBe(true);
       expect(definitionBytes(definition.name, definition.description, compiled.listed)).toBeLessThanOrEqual(
          getBudget('DEFINITION_MAX_BYTES').value,
@@ -297,27 +288,38 @@ describe('create_documents', () => {
       expect(world.calls).toEqual([]);
    });
 
-   it('refuses more JSON text than the data bound before parsing it', async () => {
-      const big = JSON.stringify({ name: 'x'.repeat(90_000) });
-      const error = await failure('create_documents', {
+   it('creates from more JSON text than the best-practice data size, and one text past the document size', async () => {
+      const big = JSON.stringify({ name: 'x'.repeat(150_000) });
+      const rows = await call('create_documents', {
          documentName: 'Actor',
          data: [
             big,
             big,
-            big,
          ],
       });
-      expect(error.code).toBe('ARGS_INVALID');
-      expect(error.message).toContain('200000');
-      expect(world.calls).toEqual([]);
+      expect(rows).toHaveLength(2);
+      expect(world.classes.Actor.createDocuments.mock.calls[0][0]).toHaveLength(2);
    });
 
-   it('refuses more than 50 documents through the argument schema', async () => {
+   it('creates more than 50 documents in one call', async () => {
+      const rows = await call('create_documents', {
+         documentName: 'Actor',
+         data: Array.from({ length: 120 }, (_, index) => `{"name":"MOCK_${index}"}`),
+      });
+      expect(world.classes.Actor.createDocuments.mock.calls[0][0]).toHaveLength(120);
+      expect(bytes(rows)).toBeLessThanOrEqual(getBudget('ACK_BATCH_MAX_BYTES').value);
+   });
+
+   it('refuses data nested past the value depth protection with a message that says so', async () => {
+      /** @type {string} A data object nested 40 levels deep. */
+      const deep = `{"name":"MOCK_deep","system":${'{"a":'.repeat(40)}1${'}'.repeat(40)}}`;
       const error = await failure('create_documents', {
          documentName: 'Actor',
-         data: Array.from({ length: 51 }, () => '{"name":"MOCK"}'),
+         data: [deep],
       });
-      expect(error.code).toBe('ARGS_INVALID');
+      expect(error.code).toBe('PATH_UNSAFE_VALUE');
+      expect(error.message).toBe('Data may be nested at most 32 levels.');
+      expect(world.calls).toEqual([]);
    });
 
    it('dry-runs: rows marked dryRun and no write API called', async () => {
@@ -583,17 +585,32 @@ describe('update_documents', () => {
       }
    });
 
-   it('refuses updates of more than 50 documents', async () => {
+   it('updates more than 50 documents and more than 200 entries in one call', async () => {
       const documents = Array.from({ length: 51 }, (_, index) => world.add('Item', { name: `MOCK_item${index}` }));
-      const error = await failure('update_documents', {
-         updates: documents.map((document) => ({
-            uuid: document.uuid,
-            path: 'name',
-            value: '"MOCK_x"',
+      const result = await call('update_documents', {
+         updates: documents.flatMap((document) =>
+            Array.from({ length: 5 }, (_, index) => ({
+               uuid: document.uuid,
+               path: `system.f${index}`,
+               value: String(index),
+            })),
+         ),
+      });
+      expect(world.calls.filter((name) => name === 'Item.update')).toHaveLength(51);
+      expect(result).toHaveLength(51);
+      expect(bytes(result)).toBeLessThanOrEqual(getBudget('ACK_BATCH_MAX_BYTES').value);
+   });
+
+   it('updates more than 20 paths of one document', async () => {
+      const result = await call('update_documents', {
+         updates: Array.from({ length: 30 }, (_, index) => ({
+            uuid: actor.uuid,
+            path: `system.f${index}`,
+            value: String(index),
          })),
       });
-      expect(error.code).toBe('ARGS_INVALID');
-      expect(world.calls).toEqual([]);
+      expect(result).toHaveLength(1);
+      expect(result[0].uuid).toBe(actor.uuid);
    });
 
    it('returns at most 10 failures with the true count of 30 for invalid values', async () => {
@@ -710,10 +727,10 @@ describe('delete_documents', () => {
       expect(world.calls).toEqual([]);
    });
 
-   it('refuses more than 50 uuids through the argument schema', async () => {
-      const error = await failure('delete_documents', {
-         uuids: Array.from({ length: 51 }, (_, index) => `Actor.${index}`),
-      });
-      expect(error.code).toBe('ARGS_INVALID');
+   it('deletes more than 50 documents in one call', async () => {
+      const documents = Array.from({ length: 51 }, (_, index) => world.add('Item', { name: `MOCK_item${index}` }));
+      const rows = await call('delete_documents', { uuids: documents.map((document) => document.uuid) });
+      expect(world.classes.Item.deleteDocuments.mock.calls[0][0]).toHaveLength(51);
+      expect(bytes(rows)).toBeLessThanOrEqual(getBudget('ACK_BATCH_MAX_BYTES').value);
    });
 });

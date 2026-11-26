@@ -3,13 +3,13 @@ import http from 'node:http';
 import net from 'node:net';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { INITIALIZE, raw } from './mcpHttp.js';
 import { createHarness, entry, rawSocket } from './mcpHarness.js';
 import { sanitizeRegistry } from '../../server/toolRegistry.ts';
 import { registryPayload } from '../unit/scriptFixtures.js';
 import { GATE_DENIED, TOOL_GONE } from '../../shared/protocol.js';
+import { getBudget } from '../../shared/budgets.js';
 
 /**
  * Pause for a number of milliseconds.
@@ -248,7 +248,7 @@ describe('MCP HTTP hardening and session robustness', () => {
          expect(harness.mcp().sessions()).toBe(1);
       });
 
-      it('closes a connection beyond the connection cap', async () => {
+      it('closes a connection beyond the connection count and logs a line for it', async () => {
          await harness.start({ limits: { maxConnections: 2 } });
          /** @type {net.Socket[]} The sockets that hold the allowed connections. */
          const held = [];
@@ -261,15 +261,139 @@ describe('MCP HTTP hardening and session robustness', () => {
          const third = await rawSocket(harness.mcp().port(), 'GET /mcp HTTP/1.1\r\nHost: x\r\n\r\n', 400);
          expect(third.closed).toBe(true);
          expect(third.answer).toBe('');
+         await expect
+            .poll(() => harness.logs().filter((line) => line.includes('connection limit of 2 reached')), {
+               timeout: 1000,
+            })
+            .toHaveLength(1);
+         for (const socket of held) {
+            socket.destroy();
+         }
+      });
+
+      it('writes at most 10 connection-drop lines per minute, then one summary line', async () => {
+         await harness.start({ limits: { maxConnections: 2 } });
+         /** @type {net.Socket[]} The sockets that hold the allowed connections. */
+         const held = [];
+         for (let index = 0; index < 2; index += 1) {
+            const socket = net.connect(harness.mcp().port(), '127.0.0.1');
+            socket.on('error', () => undefined);
+            await new Promise((resolve) => socket.on('connect', resolve));
+            held.push(socket);
+         }
+         /**
+          * The connection-drop lines logged so far.
+          * @returns {string[]} The lines naming the connection limit.
+          */
+         const dropLines = () => harness.logs().filter((line) => line.includes('connection limit of 2 reached'));
+         // 15 connections beyond the limit are dropped: 10 lines are written and 5 are counted.
+         await Promise.all(Array.from({ length: 15 }, () => rawSocket(harness.mcp().port(), '', 400)));
+         expect(dropLines()).toHaveLength(10);
+         // The throttle reads `Date.now` at each drop; one more drop a window later writes the summary first.
+         vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+         await rawSocket(harness.mcp().port(), '', 400);
+         await expect
+            .poll(() => harness.logs().filter((line) => line.includes('further MCP connection drops suppressed')), {
+               timeout: 1000,
+            })
+            .toEqual(['Wiretap sidecar | 5 further MCP connection drops suppressed']);
+         expect(dropLines()).toHaveLength(11);
          for (const socket of held) {
             socket.destroy();
          }
       });
    });
 
-   describe('session cap', () => {
-      it('counts initializes still being opened against the cap', async () => {
-         await harness.start({ sessions: { maxSessions: 3 } });
+   describe('throttled warning lines', () => {
+      it('writes at most 10 read_handle path-count lines per window, across sessions', async () => {
+         await harness.start();
+         /** @type {string[]} One path more than the best-practice count. */
+         const paths = Array.from({ length: getBudget('PATHS_PER_CALL_MAX').value + 1 }, (_, index) => `p${index}`);
+         for (let session = 0; session < 2; session += 1) {
+            const { client } = await harness.connectClient();
+            for (let call = 0; call < 8; call += 1) {
+               await client.callTool({
+                  name: 'read_handle',
+                  arguments: {
+                     handle: 'h_missing',
+                     paths,
+                  },
+               });
+            }
+         }
+         expect(harness.logs().filter((line) => line.includes('paths in one call, over the'))).toHaveLength(10);
+      });
+
+      it('writes at most 10 skipped-registry-tool lines per window, across sessions and syncs', async () => {
+         const [clash] = sanitizeRegistry(registryPayload([entry('clash')]), () => undefined).tools;
+         await harness.start({
+            tools: [
+               {
+                  name: 'clash',
+                  description: 'A fixed test tool.',
+                  inputSchema: {},
+                  handler: async () => ({
+                     content: [
+                        {
+                           type: 'text',
+                           text: 'fixed',
+                        },
+                     ],
+                  }),
+               },
+            ],
+            bridge: {
+               invokeTool: async () => ({
+                  result: 'unused',
+                  tool: clash,
+               }),
+               tools: () => [clash],
+               subscribe: () => () => undefined,
+            },
+         });
+         // Each initialize syncs the new session twice, so 8 sessions ask for 16 lines.
+         for (let session = 0; session < 8; session += 1) {
+            expect((await raw(harness.mcp().port(), { body: INITIALIZE })).status).toBe(200);
+         }
+         expect(harness.mcp().sessions()).toBe(8);
+         expect(harness.logs().filter((line) => line.includes('skipped registry tool clash'))).toHaveLength(10);
+      });
+
+      it('writes at most 10 dropped-result-fields lines per window, across sessions', async () => {
+         await harness.start({
+            tools: [
+               {
+                  name: 'extra_fields',
+                  description: 'A test tool whose result carries a field the enforcer drops.',
+                  inputSchema: {},
+                  handler: async () => ({
+                     content: [
+                        {
+                           type: 'text',
+                           text: 'ok',
+                        },
+                     ],
+                     extra: 1,
+                  }),
+               },
+            ],
+         });
+         for (let session = 0; session < 2; session += 1) {
+            const { client } = await harness.connectClient();
+            for (let call = 0; call < 8; call += 1) {
+               await client.callTool({
+                  name: 'extra_fields',
+                  arguments: {},
+               });
+            }
+         }
+         expect(harness.logs().filter((line) => line.includes('extra_fields result fields dropped'))).toHaveLength(10);
+      });
+   });
+
+   describe('sessions past the warning count', () => {
+      it('opens every overlapping initialize and logs one line per session held over the warning count', async () => {
+         await harness.start({ sessions: { warnSessions: 3 } });
          // Slow every session's connect so the initializes overlap.
          const original = McpServer.prototype.connect;
          vi.spyOn(McpServer.prototype, 'connect').mockImplementation(async function (...args) {
@@ -279,46 +403,9 @@ describe('MCP HTTP hardening and session robustness', () => {
          const results = await Promise.all(
             Array.from({ length: 10 }, () => raw(harness.mcp().port(), { body: INITIALIZE })),
          );
-         expect(results.filter((res) => res.status === 200)).toHaveLength(3);
-         expect(results.filter((res) => res.status === 503)).toHaveLength(7);
-         expect(harness.mcp().sessions()).toBe(3);
-         expect(harness.logs().some((line) => line.includes('the session cap was reached'))).toBe(false);
-      });
-
-      it('stops counting a held session as a pending one while its response is still being written', async () => {
-         await harness.start({ sessions: { maxSessions: 2 } });
-         const original = StreamableHTTPServerTransport.prototype.handleRequest;
-         // The session is held by the time the original resolves; the response then lingers for a while.
-         vi.spyOn(StreamableHTTPServerTransport.prototype, 'handleRequest').mockImplementation(
-            async function (...args) {
-               await original.apply(this, args);
-               await sleep(300);
-            },
-         );
-         const first = raw(harness.mcp().port(), { body: INITIALIZE });
-         await expect.poll(() => harness.mcp().sessions(), { timeout: 1000 }).toBe(1);
-         const second = await raw(harness.mcp().port(), { body: INITIALIZE });
-         expect(second.status).toBe(200);
-         expect((await first).status).toBe(200);
-         expect(harness.mcp().sessions()).toBe(2);
-      });
-
-      it('names the sweep period in Retry-After', async () => {
-         await harness.start({ sessions: { maxSessions: 1 } });
-         await harness.connectClient();
-         const refused = await raw(harness.mcp().port(), { body: INITIALIZE });
-         expect(refused.status).toBe(503);
-         expect(refused.headers['retry-after']).toBe('60');
-      });
-
-      it('rounds a sweep period up to whole seconds in Retry-After', async () => {
-         await harness.start({ sessions: {
-            maxSessions: 1,
-            sweepMs: 2500,
-         } });
-         await harness.connectClient();
-         const refused = await raw(harness.mcp().port(), { body: INITIALIZE });
-         expect(refused.headers['retry-after']).toBe('3');
+         expect(results.filter((res) => res.status === 200)).toHaveLength(10);
+         expect(harness.mcp().sessions()).toBe(10);
+         expect(harness.logs().filter((line) => line.includes('more than the 3 recommended'))).toHaveLength(7);
       });
    });
 
@@ -392,6 +479,53 @@ describe('MCP HTTP hardening and session robustness', () => {
          };
       }
 
+      it('logs each registry tool a session sync skips: a fixed name and a repeated name', async () => {
+         const [clash, twice] = sanitizeRegistry(
+            registryPayload([
+               entry('clash'),
+               entry('twice'),
+            ]),
+            () => undefined,
+         ).tools;
+         await harness.start({
+            tools: [
+               {
+                  name: 'clash',
+                  description: 'A fixed test tool.',
+                  inputSchema: {},
+                  handler: async () => ({
+                     content: [
+                        {
+                           type: 'text',
+                           text: 'fixed',
+                        },
+                     ],
+                  }),
+               },
+            ],
+            bridge: {
+               invokeTool: async () => ({
+                  result: 'unused',
+                  tool: twice,
+               }),
+               tools: () => [
+                  clash,
+                  twice,
+                  twice,
+               ],
+               subscribe: () => () => undefined,
+            },
+         });
+         const { client } = await harness.connectClient();
+         expect(await harness.toolNames(client)).toContain('twice');
+         expect(harness.logs().some((text) =>
+            /^Wiretap sidecar \| MCP session \S+ skipped registry tool clash: the name /.test(text)
+            && text.endsWith('belongs to a fixed tool'))).toBe(true);
+         expect(harness.logs().some((text) =>
+            /^Wiretap sidecar \| MCP session \S+ skipped registry tool twice: the name /.test(text)
+            && text.endsWith('repeats an earlier tool'))).toBe(true);
+      });
+
       it('lists a tool registered between creating a session and holding it', async () => {
          const [tool] = sanitizeRegistry(registryPayload([entry('late_tool')]), () => undefined).tools;
          await harness.start({ bridge: lateBridge(tool) });
@@ -404,6 +538,55 @@ describe('MCP HTTP hardening and session robustness', () => {
             'read_handle',
             'restore_backup',
          ]);
+      });
+
+      it('leaves a session listing thousands of tools unchanged when the same tools are synced again', async () => {
+         /** @type {number} How many registry tools the bridge offers. */
+         const count = 3000;
+         /** @type {object[]} The sanitized tools, all offered on every ask. */
+         const tools = sanitizeRegistry(
+            registryPayload(Array.from({ length: count }, (_, index) => entry(`many_${index}`))),
+            () => undefined,
+         ).tools;
+         expect(tools).toHaveLength(count);
+         /** @type {number} How many times the bridge was asked for tools. */
+         let asked = 0;
+         /**
+          * Announces a bridge change; replaced when the MCP server subscribes.
+          * @returns {void}
+          */
+         let announce = () => undefined;
+         await harness.start({ bridge: {
+            invokeTool: async () => ({
+               result: 'unused',
+               tool: tools[0],
+            }),
+            tools: () => {
+               asked += 1;
+               return tools;
+            },
+            subscribe: (listener) => {
+               announce = listener;
+               return () => undefined;
+            },
+         } });
+         const { client } = await harness.connectClient();
+         /** @type {number} How many `tools/list_changed` notifications the client received. */
+         let notified = 0;
+         client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+            notified += 1;
+         });
+         const before = await harness.toolNames(client);
+         // The registry tools plus `read_handle` and the four backup tools.
+         expect(before).toHaveLength(count + 5);
+         // The session was built and then held, so the bridge has been asked twice; the change below asks once more.
+         expect(asked).toBe(2);
+         const register = vi.spyOn(McpServer.prototype, 'registerTool');
+         announce();
+         await expect.poll(() => asked, { timeout: 1000 }).toBe(3);
+         expect(register).not.toHaveBeenCalled();
+         expect(await harness.toolNames(client)).toEqual(before);
+         expect(notified).toBe(0);
       });
 
       it('fails the initialize and ends the session when the sync right after holding it throws', async () => {

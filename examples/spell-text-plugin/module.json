@@ -1,0 +1,20 @@
+{
+   "id": "wiretap-example-spells",
+   "title": "Wiretap Example: Spells From Text",
+   "version": "1.0.0",
+   "compatibility": {
+      "minimum": "14",
+      "verified": "14"
+   },
+   "esmodules": [
+      "index.js"
+   ],
+   "relationships": {
+      "requires": [
+         {
+            "id": "wiretap",
+            "type": "module"
+         }
+      ]
+   }
+}

@@ -16,7 +16,6 @@ import { createHandleStore, type HandleStore, type SliceResult } from './handles
 import {
    LIST_CHANGED_MAX_WAIT_MS,
    LIST_CHANGED_QUIET_MS,
-   MCP_SESSION_SWEEP_MS,
    createDebouncer,
    createSessionManager,
    type Debouncer,
@@ -24,6 +23,7 @@ import {
    type SessionManager,
    type SessionTimers,
 } from './mcpSessions.ts';
+import { createLogThrottle } from './logThrottle.ts';
 import { describeCause } from './logText.ts';
 import { isMcpHostAllowed, isOriginAllowed } from './origins.ts';
 import { failureResult, withResultBudget, type ResultBudgetOptions, type ToolHandler } from './resultBudget.ts';
@@ -68,8 +68,8 @@ export interface ToolRegistration {
 
 /** Injectable settings of the MCP sessions. */
 export interface McpSessionSettings {
-   /** Most sessions held at once (default: the `MCP_SESSIONS_MAX` budget). */
-   maxSessions?: number;
+   /** Open sessions past which each new session logs one line (default: the `MCP_SESSIONS_MAX` budget). */
+   warnSessions?: number;
    /** Idle milliseconds before a session expires (default 30 minutes). */
    idleMs?: number;
    /** Milliseconds between idle-expiry sweeps (default one minute). */
@@ -94,7 +94,7 @@ export interface McpHttpLimits {
    headersTimeoutMs?: number;
    /** Milliseconds between the server's checks for requests past those timeouts. */
    timeoutCheckMs?: number;
-   /** Most simultaneous connections; one beyond it is closed at once. */
+   /** Most simultaneous connections; one beyond it is closed at once and logged. */
    maxConnections?: number;
    /** Milliseconds a connection may wait without sending any request before it is closed. */
    socketIdleMs?: number;
@@ -151,8 +151,37 @@ const MCP_HEADERS_TIMEOUT_MS: number = 10_000;
 // Milliseconds between the HTTP server's checks for requests past the timeouts (Node's own default is 30 s).
 const MCP_TIMEOUT_CHECK_MS: number = 1_000;
 
-// Most simultaneous connections: the session cap of event streams plus room for in-flight requests.
+// Most simultaneous connections, open event streams and in-flight requests together. It protects the sidecar's sockets
+// and file handles from a flood of connections. Each session with an open event stream holds one, so this also bounds
+// how many sessions can stream at once. A connection closed by it is logged through `logConnectionDrop`.
 const MCP_CONNECTIONS_MAX: number = 128;
+
+// Length in milliseconds of one window of the connection-drop log throttle.
+const CONNECTION_DROP_LOG_WINDOW_MS: number = 60_000;
+
+// Most connection-drop lines written per window; later drops in the window are counted in one summary line.
+const CONNECTION_DROP_LOG_LIMIT: number = 10;
+
+// Length in milliseconds of one window of the `read_handle` path-count log throttle.
+const READ_HANDLE_PATHS_LOG_WINDOW_MS: number = 60_000;
+
+// Most `read_handle` path-count lines written per window, over every session; later lines in the window are counted
+// in one summary line.
+const READ_HANDLE_PATHS_LOG_LIMIT: number = 10;
+
+// Length in milliseconds of one window of the skipped-registry-tool log throttle.
+const SYNC_SKIP_LOG_WINDOW_MS: number = 60_000;
+
+// Most skipped-registry-tool lines written per window, over every session and sync; every sync of every session logs
+// each skipped tool again, so later lines in the window are counted in one summary line.
+const SYNC_SKIP_LOG_LIMIT: number = 10;
+
+// Length in milliseconds of one window of the dropped-result-fields log throttle.
+const DROPPED_FIELDS_LOG_WINDOW_MS: number = 60_000;
+
+// Most dropped-result-fields lines written per window, over every session and tool; every result that loses a field
+// writes one, so later lines in the window are counted in one summary line.
+const DROPPED_FIELDS_LOG_LIMIT: number = 10;
 
 // Milliseconds a connection may go without sending a request before it is closed. Node's own timeouts only start with
 // the first byte of a request, so a socket that never sends one would otherwise hold a `maxConnections` slot. It does
@@ -168,15 +197,30 @@ const MCP_DRAIN_MAX_BYTES: number = 8 * 1024 * 1024;
  * it.
  * The window text is the first content item and a footer `{offset, length, total}` (plus `truncated: true` when a
  * paths result was cut at the window size) the second; together they stay within the call's `maxBytes` (default: the
- * result hard cap).
+ * result hard cap). `paths` takes any number of paths; a call with more than `PATHS_PER_CALL_MAX` (the best-practice
+ * size) logs one warning line.
  * @param {HandleStore} store - The store holding the results.
  * @param {string} ownerKey - The owner key whose handles may be read.
+ * @param {(line: string) => void} log - The sink that receives the warning line; `startMcpServer` passes one
+ *        throttle shared by every session.
  * @returns {ToolHandler<ReadHandleArgs>} An async handler mapping tool args to an MCP tool result.
  */
-export function makeReadHandleHandler(store: HandleStore, ownerKey: string): ToolHandler<ReadHandleArgs> {
+export function makeReadHandleHandler(
+   store: HandleStore,
+   ownerKey: string,
+   log: (line: string) => void,
+): ToolHandler<ReadHandleArgs> {
    // The result size limit when the call gives no `maxBytes`.
    const defaultBytes: number = getBudget('RESULT_HARD_CAP_DEFAULT_BYTES').value;
+   // The path count a call is warned past.
+   const pathsSize: number = getBudget('PATHS_PER_CALL_MAX').value;
    return async ({ handle, paths, offset, length, maxBytes }) => {
+      if (paths !== undefined && paths.length > pathsSize) {
+         log(
+            `Wiretap sidecar | read_handle: ${paths.length} paths in one call, over the ${pathsSize} `
+               + 'best-practice size',
+         );
+      }
       if (maxBytes !== undefined && maxBytes < READ_HANDLE_MIN_BYTES) {
          return {
             content: [
@@ -356,6 +400,10 @@ function makeRegistryToolHandler(
  * @param {string} instructions - The server instructions text.
  * @param {string} ownerKey - The session id, the owner of the session's handles.
  * @param {() => boolean} ownerLive - Whether that session is still held; a result is not stored for an ended one.
+ * @param {(line: string) => void} logDropped - The throttled sink the result enforcer writes its dropped-fields line
+ *        to; one throttle serves every session.
+ * @param {(line: string) => void} logPaths - The throttled sink `read_handle` writes its path-count line to; one
+ *        throttle serves every session.
  * @returns {SessionMcpServer} A configured server, not yet connected.
  */
 function buildServer(
@@ -366,6 +414,8 @@ function buildServer(
    instructions: string,
    ownerKey: string,
    ownerLive: () => boolean,
+   logDropped: (line: string) => void,
+   logPaths: (line: string) => void,
 ): SessionMcpServer {
    // The per-session MCP server.
    const server: SessionMcpServer = new SessionMcpServer(
@@ -382,11 +432,7 @@ function buildServer(
          description: 'Read a slice of a stored large result: optional document paths, then offset and length.',
          inputSchema: {
             handle: z.string().max(64).describe('Handle from an earlier large result.'),
-            paths: z
-               .array(z.string())
-               .max(getBudget('PATHS_PER_CALL_MAX').value)
-               .optional()
-               .describe('Document paths to read.'),
+            paths: z.array(z.string()).optional().describe('Document paths to read.'),
             offset: z.number().int().min(0).optional().describe('First UTF-16 unit to return.'),
             length: z.number().int().min(1).optional().describe('Most UTF-16 units to return.'),
             maxBytes: z
@@ -397,7 +443,7 @@ function buildServer(
                .optional()
                .describe('Result size limit.'),
          },
-         handler: makeReadHandleHandler(store, ownerKey),
+         handler: makeReadHandleHandler(store, ownerKey, logPaths),
       },
       ...backupTools,
       ...extraTools,
@@ -414,7 +460,9 @@ function buildServer(
             store,
             ownerKey,
             ownerLive,
+            toolName: tool.name,
             budgetBytes: tool.budgetBytes,
+            log: logDropped,
          }),
       );
    }
@@ -493,7 +541,6 @@ function rejectRequest(
  * @param {number} status - The HTTP status.
  * @param {number} code - The JSON-RPC error code.
  * @param {string} message - The error message.
- * @param {Record<string, string>} [headers] - Extra response headers.
  * @returns {void}
  */
 function sendError(
@@ -502,16 +549,12 @@ function sendError(
    status: number,
    code: number,
    message: string,
-   headers: Record<string, string> = {},
 ): void {
    rejectRequest(
       req,
       res,
       status,
-      {
-         'Content-Type': 'application/json',
-         ...headers,
-      },
+      { 'Content-Type': 'application/json' },
       JSON.stringify({
          jsonrpc: '2.0',
          error: {
@@ -633,7 +676,8 @@ function sessionIdOf(req: http.IncomingMessage): string | undefined {
  * with its own server, transport, tool set and result-handle owner; GET opens the session's event stream, POST carries
  * requests and DELETE ends the session. The tool set of a session is the built-in tools, the caller's tools and the
  * tools registered by the Foundry endpoint it routes to; when those change, the session is sent one debounced
- * `notifications/tools/list_changed`. Sessions expire after an idle period and are capped in number.
+ * `notifications/tools/list_changed`. Sessions expire after an idle period; their number is not capped, and a log line
+ * warns past `MCP_SESSIONS_MAX`.
  * @param {FoundryBridge} bridge - The Foundry bridge the tools execute against.
  * @param {number} port - The TCP port to listen on.
  * @param {McpServerOptions} [options] - Extra tools, the server instructions, a handle store, session settings, HTTP
@@ -650,14 +694,40 @@ export function startMcpServer(
 ): { close: () => void; ready: Promise<void>; port: () => number; sessions: () => number } {
    // The settings of the sessions.
    const settings: McpSessionSettings = options.sessions ?? {};
+   // The sidecar log sink.
+   const log: (line: string) => void = settings.log ?? ((line) => console.log(line));
+   // Writes a `read_handle` path-count line subject to the per-window limit, with one summary line per window. Each
+   // throttle here reads `Date.now` at call time.
+   const logReadHandlePaths: (line: string) => void = createLogThrottle({
+      log,
+      now: () => Date.now(),
+      limit: READ_HANDLE_PATHS_LOG_LIMIT,
+      windowMs: READ_HANDLE_PATHS_LOG_WINDOW_MS,
+      noun: 'read_handle path-count warnings',
+   });
+   // Writes a skipped-registry-tool line subject to the per-window limit, with one summary line per window.
+   const logSyncSkip: (line: string) => void = createLogThrottle({
+      log,
+      now: () => Date.now(),
+      limit: SYNC_SKIP_LOG_LIMIT,
+      windowMs: SYNC_SKIP_LOG_WINDOW_MS,
+      noun: 'skipped registry tool lines',
+   });
+   // Writes a dropped-result-fields line of the result enforcer subject to the per-window limit, with one summary line
+   // per window; the built-in, extra and registry tools of every session share it.
+   const logDroppedFields: (line: string) => void = createLogThrottle({
+      log,
+      now: () => Date.now(),
+      limit: DROPPED_FIELDS_LOG_LIMIT,
+      windowMs: DROPPED_FIELDS_LOG_WINDOW_MS,
+      noun: 'dropped-result-fields lines',
+   });
    // The store behind every session's `read_handle`; it outlives the sessions, which own disjoint handles.
-   const store: HandleStore = options.handleStore ?? createHandleStore();
+   const store: HandleStore = options.handleStore ?? createHandleStore({ log });
    // The caller's tools, registered on every session.
    const extraTools: ToolRegistration[] = options.tools ?? [];
    // The instructions text every session receives.
    const instructions: string = options.instructions ?? WIRETAP_INSTRUCTIONS;
-   // The sidecar log sink.
-   const log: (line: string) => void = settings.log ?? ((line) => console.log(line));
    // Builds a session's backup tools for its endpoint kind; one store and one busy lock serve every session.
    const backupTools: (endpoint: EndpointKind | undefined) => ToolRegistration[] = createBackupTools({
       bridge,
@@ -672,25 +742,16 @@ export function startMcpServer(
       ...RESERVED_SCRIPT_NAMES,
       ...extraTools.map((tool) => tool.name),
    ]);
-   // Registry tools a session can list beside the fixed ones without exceeding the always-listed budget.
-   const registryRoom: number = Math.max(getBudget('ALWAYS_LISTED_TOOLS_MAX').value - fixedNames.size, 0);
    // The limits of the HTTP server.
    const limits: McpHttpLimits = options.limits ?? {};
    // The most request body bytes read.
    const bodyMaxBytes: number = limits.bodyMaxBytes ?? getBudget('MCP_BODY_MAX_BYTES').value;
-   // Seconds a refused initialize should wait before retrying: the idle sweep is what frees a slot.
-   const retryAfterSeconds: number = Math.max(1, Math.ceil((settings.sweepMs ?? MCP_SESSION_SWEEP_MS) / 1000));
-   // The session cap.
-   const maxSessions: number = settings.maxSessions ?? getBudget('MCP_SESSIONS_MAX').value;
-   // Slots reserved by initialize requests the manager does not hold yet; they count against the session cap until the
-   // manager holds (or refuses) their session.
-   let opening: number = 0;
    // The port the server is bound to; differs from `port` when 0 requested an ephemeral port. The Host check reads it.
    let boundPort: number = port;
 
    // The open sessions; ending one releases the result handles it owns.
    const manager: SessionManager = createSessionManager({
-      maxSessions,
+      warnSessions: settings.warnSessions,
       idleMs: settings.idleMs,
       sweepMs: settings.sweepMs,
       now: settings.now,
@@ -703,26 +764,44 @@ export function startMcpServer(
 
    /**
     * Make a session's registry tools equal to the wanted tools: remove the ones that are gone, replace the ones whose
-    * definition changed and register the new ones. A tool named like a fixed tool, or beyond the always-listed budget,
-    * is skipped. The server's own change notifications are withheld; the caller notifies once.
+    * definition changed and register the new ones. A tool named like a fixed tool, and a repeat of an earlier wanted
+    * name, is skipped with one log line each on every sync (through `logSyncSkip`, at most `SYNC_SKIP_LOG_LIMIT` per
+    * minute over every session); every other wanted tool is listed, however many there are. The wanted tools are
+    * looked up by name in a map, so one sync costs time linear in the held and wanted tools; every session re-syncs on
+    * each change the bridge announces. The server's own change notifications are withheld; the caller notifies once.
     * @param {McpSession} session - The session.
     * @param {RegistryTool[]} wanted - The tools of the endpoint the session routes to.
     * @returns {boolean} Whether the session's tool list changed.
     */
    function syncRegistryTools(session: McpSession, wanted: RegistryTool[]): boolean {
-      // The wanted tools that may be listed.
-      const listed: RegistryTool[] = wanted.filter((tool) => !fixedNames.has(tool.name)).slice(0, registryRoom);
+      // The wanted tools that may be listed, by name; the first tool of a name wins.
+      const listed: Map<string, RegistryTool> = new Map();
+      for (const tool of wanted) {
+         if (fixedNames.has(tool.name)) {
+            logSyncSkip(
+               `Wiretap sidecar | MCP session ${session.id} skipped registry tool ${tool.name}: the name belongs to `
+                  + 'a fixed tool',
+            );
+         } else if (listed.has(tool.name)) {
+            logSyncSkip(
+               `Wiretap sidecar | MCP session ${session.id} skipped registry tool ${tool.name}: the name repeats `
+                  + 'an earlier tool',
+            );
+         } else {
+            listed.set(tool.name, tool);
+         }
+      }
       // Whether anything was added, replaced or removed.
       let changed: boolean = false;
       for (const [name, current] of [...session.registered]) {
-         const next: RegistryTool | undefined = listed.find((tool) => tool.name === name);
+         const next: RegistryTool | undefined = listed.get(name);
          if (next === undefined || next.signature !== current.signature) {
             current.handle.remove();
             session.registered.delete(name);
             changed = true;
          }
       }
-      for (const tool of listed) {
+      for (const tool of listed.values()) {
          if (session.registered.has(tool.name)) {
             continue;
          }
@@ -747,7 +826,9 @@ export function startMcpServer(
                   store,
                   ownerKey: session.id,
                   ownerLive: () => manager.get(session.id) !== undefined,
+                  toolName: tool.name,
                   budgetBytes: tool.budgetBytes,
+                  log: logDroppedFields,
                }),
             ),
          });
@@ -819,6 +900,8 @@ export function startMcpServer(
          instructions,
          id,
          () => manager.get(id) !== undefined,
+         logDroppedFields,
+         logReadHandlePaths,
       );
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
          sessionIdGenerator: () => id,
@@ -858,8 +941,6 @@ export function startMcpServer(
     * @param {http.ServerResponse} res - The response.
     * @param {unknown} body - The parsed initialize body.
     * @param {EndpointKind | undefined} endpoint - The endpoint kind the session routes to.
-    * @param {() => void} release - Gives back the session slot reserved for this initialize; called as soon as the
-    *        manager holds the session (or refused it), so the slot is never counted twice.
     * @returns {Promise<void>} Resolves when the transport answered; rejects when the session could not be held, which
     *          makes the transport answer with an error status and no session id.
     */
@@ -868,17 +949,14 @@ export function startMcpServer(
       res: http.ServerResponse,
       body: unknown,
       endpoint: EndpointKind | undefined,
-      release: () => void,
    ): Promise<void> {
       // Whether the transport accepted the initialize and assigned the id.
       let initialized: boolean = false;
       const session: McpSession = createSession(randomUUID(), endpoint, () => {
          initialized = true;
-         const held: boolean = manager.add(session);
-         release();
-         if (!held) {
-            log(`Wiretap sidecar | MCP session ${session.id} refused: the session cap was reached`);
-            throw new Error('the session cap was reached');
+         // The manager holds every session except while the server closes, when it closes the session instead.
+         if (!manager.add(session)) {
+            throw new Error('the MCP server is closing');
          }
          // The registry may have changed between creating the session and holding it, when no change reached it. A
          // failure ends the session and fails the initialize, so the client never keeps an id the server dropped.
@@ -951,28 +1029,7 @@ export function startMcpServer(
          sendError(req, res, 400, -32000, 'Bad Request: Mcp-Session-Id header is required');
          return;
       }
-      if (manager.isFull(opening)) {
-         // No held session is ended to make room: a flood of initialize requests must not end other clients' sessions.
-         log(`Wiretap sidecar | MCP session cap of ${maxSessions} reached: initialize refused`);
-         sendError(req, res, 503, -32000, 'Service Unavailable: too many MCP sessions', {
-            'Retry-After': String(retryAfterSeconds),
-         });
-         return;
-      }
-      opening += 1;
-      // Whether this initialize still holds its reserved slot.
-      let reserved: boolean = true;
-      const release = (): void => {
-         if (reserved) {
-            reserved = false;
-            opening -= 1;
-         }
-      };
-      try {
-         await openSession(req, res, read.body, (choice ?? undefined) as EndpointKind | undefined, release);
-      } finally {
-         release();
-      }
+      await openSession(req, res, read.body, (choice ?? undefined) as EndpointKind | undefined);
    }
 
    /**
@@ -1037,8 +1094,23 @@ export function startMcpServer(
          }
       },
    );
-   // Connections beyond the cap are closed at once, so idle sockets cannot exhaust file descriptors.
-   httpServer.maxConnections = limits.maxConnections ?? MCP_CONNECTIONS_MAX;
+   // The most simultaneous connections; one beyond it is closed at once, so idle sockets cannot exhaust file handles.
+   const connectionsMax: number = limits.maxConnections ?? MCP_CONNECTIONS_MAX;
+   httpServer.maxConnections = connectionsMax;
+   // Writes a connection-drop line subject to the per-window limit, with one summary line per window.
+   const logConnectionDrop: (line: string) => void = createLogThrottle({
+      log,
+      now: () => Date.now(),
+      limit: CONNECTION_DROP_LOG_LIMIT,
+      windowMs: CONNECTION_DROP_LOG_WINDOW_MS,
+      noun: 'MCP connection drops',
+   });
+   // Node emits 'drop' for each connection it closes because `maxConnections` is reached.
+   httpServer.on('drop', () => {
+      logConnectionDrop(
+         `Wiretap sidecar | MCP connection limit of ${connectionsMax} reached; a new connection was closed`,
+      );
+   });
    // A connection that sends no request within the idle limit is closed; one with a request in flight is left alone.
    // Node destroys a timed-out socket unless the server has a `timeout` listener, so this listener decides.
    httpServer.on('connection', (socket) => {

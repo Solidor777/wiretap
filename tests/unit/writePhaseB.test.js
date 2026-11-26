@@ -136,7 +136,7 @@ describe.each([
       const outcome = validateScriptDefinition(definition, 'shipped');
       expect(outcome.ok, outcome.reason).toBe(true);
       expect(outcome.warnings).toEqual([]);
-      const compiled = compileSchema(definition.inputSchema);
+      const compiled = compileSchema(definition.inputSchema, { tool: definition.name });
       expect(compiled.ok).toBe(true);
       expect(definitionBytes(definition.name, definition.description, compiled.listed)).toBeLessThanOrEqual(
          getBudget('DEFINITION_MAX_BYTES').value,
@@ -589,28 +589,42 @@ describe('batch arguments', () => {
       expect(world.calls).toEqual([]);
    });
 
-   it('counts the data of the creates and the values of the updates against one total', async () => {
+   it('runs a batch whose creates and updates pass the best-practice data size together, warning once', async () => {
+      /** @type {string[]} The lines the script log received. */
+      const lines = [];
+      /** @type {ReturnType<typeof createScriptRegistry>} A registry whose log is recorded. */
+      const logged = createScriptRegistry({ log: (line) => lines.push(line) });
+      registerShippedScripts(logged);
       /** @type {string} A data text of about 90,000 bytes. */
       const big = `{"name":"${'a'.repeat(89_980)}","type":"npc"}`;
-      const error = await failure('batch', {
-         creates: [
-            {
-               documentName: 'Actor',
-               data: big,
-            },
-            {
-               documentName: 'Actor',
-               data: big,
-            },
-         ],
-         updates: [{
-            uuid: actor.uuid,
-            path: 'system.note',
-            value: JSON.stringify('b'.repeat(89_980)),
-         }],
+      /** @type {string} An update value of about 90,000 bytes. */
+      const value = JSON.stringify('b'.repeat(89_980));
+      const result = await createCallTool({ registry: logged })({
+         name: 'batch',
+         arguments: {
+            creates: [
+               {
+                  documentName: 'Actor',
+                  data: big,
+               },
+               {
+                  documentName: 'Actor',
+                  data: big,
+               },
+            ],
+            updates: [{
+               uuid: actor.uuid,
+               path: 'system.note',
+               value,
+            }],
+         },
       });
-      expect(error.code).toBe('ARGS_INVALID');
-      expect(error.message).toContain('in all');
-      expect(world.calls).toEqual([]);
+      expect(result.created).toHaveLength(2);
+      expect(result.updated).toHaveLength(1);
+      expect(world.calls).toEqual(['modifyBatch']);
+      expect(lines).toEqual([
+         `Wiretap | batch: ${2 * big.length + value.length} bytes of data in one call, over the ` +
+            `${getBudget('WRITE_DATA_MAX_BYTES').value} best-practice size`,
+      ]);
    });
 });

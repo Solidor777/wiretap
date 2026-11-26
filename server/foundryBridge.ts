@@ -7,7 +7,6 @@ import {
    BRIDGE_PING,
    BRIDGE_REGISTRY,
    BRIDGE_RESTORE_PIECE,
-   ENDPOINT_LIMIT,
    NOT_GM,
    OP_FAILED,
    PIECE_REFUSED,
@@ -286,7 +285,7 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       noun: 'backup piece refusals',
    });
    // The registry of identified GM endpoints.
-   const registry: EndpointRegistry = createEndpointRegistry();
+   const registry: EndpointRegistry = createEndpointRegistry(Date.now, log);
    // The sinks waiting for backup pieces, keyed by socket id and then by requestId.
    const sinks: Map<string, Map<string, SinkEntry>> = new Map();
 
@@ -370,7 +369,8 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
    /**
     * Apply a `bridge:registry` payload (`{ apiVersion, scripts }`) to a registered endpoint and ack the outcome. A
     * payload that is not a registry object of the current api version, or one whose processing throws, clears the
-    * endpoint's tools (fail closed) and acks OP_FAILED.
+    * endpoint's tools (fail closed), acks OP_FAILED and writes a throttled log line naming the endpoint socket and
+    * saying its tools were cleared.
     * @param {Socket} socket - The sending socket.
     * @param {unknown} payload - The untrusted payload.
     * @param {unknown} ack - The ack callback, if any.
@@ -392,7 +392,10 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
          const outcome: RegistryOutcome = sanitizeRegistry(payload, logRegistryLine);
          if (!outcome.ok) {
             registry.setTools(socket.id, []);
-            logRegistryLine(`Wiretap sidecar | registry payload from ${socket.id} refused: ${outcome.reason}`);
+            logRegistryLine(
+               `Wiretap sidecar | registry payload from ${socket.id} refused: ${outcome.reason}; `
+                  + 'its tools were cleared',
+            );
             reply(ack, {
                ok: false,
                error: {
@@ -410,7 +413,9 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
          });
       } catch (cause) {
          registry.setTools(socket.id, []);
-         logRegistryLine(`Wiretap sidecar | registry from ${socket.id} failed: ${describeCause(cause)}`);
+         logRegistryLine(
+            `Wiretap sidecar | registry from ${socket.id} failed: ${describeCause(cause)}; its tools were cleared`,
+         );
          reply(ack, {
             ok: false,
             error: {
@@ -616,18 +621,11 @@ export function createFoundryBridge(options: FoundryBridgeOptions = {}): {
       handleConnection(socket: Socket): void {
          sockets.set(socket.id, socket);
          socket.on(BRIDGE_IDENTIFY, (payload: unknown, ack?: unknown) => {
-            // The validation outcome, replaced by an ENDPOINT_LIMIT refusal when the registry is full.
-            let result: IdentifyResult = validateIdentify(payload);
-            if (result.ok && !registry.register(socket.id, result.identity)) {
-               result = {
-                  ok: false,
-                  error: {
-                     code: ENDPOINT_LIMIT,
-                     message: 'Too many Foundry endpoints are registered.',
-                  },
-               };
-            }
-            if (!result.ok) {
+            // The validation outcome; a valid identify always registers.
+            const result: IdentifyResult = validateIdentify(payload);
+            if (result.ok) {
+               registry.register(socket.id, result.identity);
+            } else {
                // A refused identify also drops any earlier registration of this socket, so a stale GM entry cannot
                // outlive an identify that no longer qualifies.
                dropEndpoint(socket.id);

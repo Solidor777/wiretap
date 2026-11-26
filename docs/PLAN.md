@@ -1,4 +1,4 @@
-# Wiretap plan: document skills for every type, plugin skills, seatless agents
+# Wiretap plan: document skills for every type, plugin tools, seatless agents
 
 Goals, the context-budget design, decisions, architecture, risk gates, specifications of the milestones still to do,
 new skills and agents, risks and deferrals. Nothing else belongs here: work history, results and as-built notes are in
@@ -25,9 +25,11 @@ Goals:
 - **G1 Core skills for every document type.** Read (whole, projected or path-scoped), create, update, replace and
   delete (D12) for all v14 primary and embedded types (READ `foundry/common/constants.mjs:332-424`), compendium
   content, open a sheet, rolls and table draws.
-- **G2 Plugin skills.** Modules that depend on Wiretap register their own MCP tools; handlers run in the Foundry
+- **G2 Plugin tools.** Modules that depend on Wiretap register their own MCP tools; handlers run in the Foundry
   client.
 - **G3 No human seat.** Skills work when no human has a GM tab open, on a headless server.
+- **G4 System agnostic.** Built and shipped code references no game system and works in any system. Game-system
+  support comes from add-on modules that depend on Wiretap (G2). Test machinery may run on an installed system.
 
 What "no seat" means (see §4.3): a Foundry *client* must still run for anything that needs system or module
 code, sheets, derived data or plugin handlers. The seat is taken by a headless agent browser, not by a human. A
@@ -75,7 +77,7 @@ Budgets are derived from measurements recorded in [`docs/experiments/2026-10-con
 | 4 | Measurements instead of screenshots | +172 vs +972 for one 800×600 image (MEASURED (coord.), single sample) | Medium (needs DOM endpoint) | Visual-only questions remain → `screenshot` as capped last resort | M15b |
 | 5 | Few-call recipes over the generic tools instead of composite scripts: copy by uuid (`create_documents` `fromUuids`) and the two-call actor build, documented in the user-facing skill (D35) | ≈170 per eliminated call + intermediate results (INFERRED from the floor) | Low | Recipe text drifts from the tools → the skill test checks every tool name it mentions | M15a |
 | 6 | Skills as the discovery layer (§2.7) | Tool descriptions stay one line; how-to text is paid only when a skill is invoked (INFERRED; not measured) | Low | Skill text drifts from tools → M13 test checks referenced tool names exist | M14 |
-| 7 | Pagination: default limit 20, max 100, continuation cursor | Bounded search results (INFERRED) | Low | Agent pages blindly → result carries `total` | M4 |
+| 7 | Pagination: default limit 20, a warning line past 100, continuation cursor | Bounded search results (INFERRED) | Low | Agent pages blindly → result carries `total` | M4 |
 | 8 | Short actionable errors (≤ 512 B; first 10 validation failures + count) | Bounded; `getAllFailures()` can list every invalid field (READ `common/data/validation-failure.mjs:374`) | Low | Lost detail → `paths` re-check or `dryRun` | M1, M5 |
 | 9 | Change-only reads: a content `version` on `get_document` and `ifChanged` (`{unchanged:true}`) (D35) | An unchanged re-read shrinks to an ack ≤ 256 B (INFERRED) | Low | The version hashes only what the read returns, so a change to a redacted value is not reported (by design: the agent cannot see it); a spurious "changed" costs one re-read | M15a |
 | 10 | Description and schema budgets | ≈150–195 tokens per loaded tool; names ≈13 always (MEASURED (coord.)) | Low | Terse descriptions mislead → skills carry the detail (row 6) | M13 |
@@ -112,7 +114,7 @@ Sources, in trust order:
 | Source | Code origin | Trust | Callable when |
 |---|---|---|---|
 | Shipped | `src/bridge/scripts/*.js`, static imports in the bundle | Vetted (repo review) | Always; gated categories call `requireGate` |
-| Plugin | `api.registerScript` (M7; `registerSkill` writes the same registry) | Installed module code | Module listed in `allowedPluginModules` |
+| Plugin | `api.registerTool` (M7), the same registry | Installed module code | Module listed in `allowedPluginModules` |
 | Agent-saved | Source text saved by the agent through `save_script` | Per D21 (DECIDED option (b), §2.5) | Per D21 |
 | Ad-hoc `run_js` | — | — | Not built (D22, DECIDED) |
 
@@ -166,7 +168,7 @@ verifies `sha256`, checks `allowAgentScripts` in its own `game.settings`, and ru
 - **S5** Shipped and plugin scripts that touch a gated category call `requireGate`.
 - **S6** No API deletes an entry; disable only.
 - **S7 Known limit (INFERRED).** A saved script runs with GM authority and can change gates or save more scripts;
-  enabling `allowAgentScripts` reduces the hard rule to "no core skill can change a gate" (same caveat as
+  enabling `allowAgentScripts` reduces the hard rule to "no tool of Wiretap's own can change a gate" (same caveat as
   `allowMacroExecution`). The gate hint says so.
 
 ### 2.6 Final budgets (D20)
@@ -178,21 +180,24 @@ which the enforcer applies at runtime (over cap → handle).
 
 | Budget | Value | Kind | Rationale |
 |---|---|---|---|
-| Core/shipped tool name | ≤ 32 chars | CI hard | Names are always in context (≈13 tokens each at ≈25 chars, MEASURED (coord.)) |
-| Plugin and agent-saved tool name | ≤ 64 chars | Registration refusal | `<moduleId>__<skill>`: module ids are outside Wiretap's control; 110-char names work (MEASURED (coord.)) |
-| Definition `{name, description, inputSchema}` | ≤ 800 B | CI hard; registration refusal for plugins | Largest drafted core tool 787 B ≈ 380 tokens when loaded |
-| Description | ≤ 160 chars target, ≤ 240 hard | CI warning above 160, hard above 240 | Paid on every load; ToolSearch keyword matching needs some text (INFERRED); skills carry detail (§2.7). Claude Code truncates at 2,048 (READ docs) |
-| Always-listed tools (core + shipped) | ≤ 30 | CI hard | ≈ 400 tokens of names; raising it is a user decision |
-| All definitions (core + shipped) | ≤ 16 KB | CI hard | ≈ 8k tokens for a non-deferring client |
+| Core/shipped tool name | ≤ 32 chars, no `__` | CI hard | Names are always in context (≈13 tokens each at ≈25 chars, MEASURED (coord.)) |
+| Plugin and agent-saved tool name | ≤ 50 chars | Registration refusal (needed to work) | `<moduleId>__<tool>` and `agent__<name>`: Claude Code lists each tool as `mcp__wiretap__<name>` (14 chars) and the Anthropic API refuses tool names over 64 chars (owner decision) |
+| Definition `{name, description, inputSchema}` | ≤ 800 B | CI hard; registration warning for plugins | Largest drafted core tool 787 B ≈ 380 tokens when loaded |
+| Description | ≤ 160 chars target, ≤ 240 hard | CI warning above 160, hard above 240; registration warning for plugins | Paid on every load; ToolSearch keyword matching needs some text (INFERRED); skills carry detail (§2.7). Claude Code truncates at 2,048 (READ docs) |
 | Ack (write) | ≤ 256 B per document | CI hard | +172 measured at 84 B |
 | Compact default view | ≤ 2 KB per document; embedded tuples capped at 40 plus a total count | CI hard (synthetic fixtures) and e2e hard | 1,484 B measured with 31 tuples (≈43 B each); the cap makes the bound data-independent. Measured on titan: max 1,574 B |
 | Projection / `paths` result | Hard cap only; ≤ 1 KB per 10 fields is the fixture target | CI warning on fixtures | Size is the agent's request; hero `system` = 5.8 KB is a legitimate request. Titan 10-field projections 199–1,224 B (E9; the 1,224 B one holds a long text leaf), consistent with warning-only |
-| Search page | ≤ 4 KB, default limit 20, max 100 | CI hard | Rows `[uuid, name, type]` |
+| Search page | ≤ 4 KB, default limit 20, a warning line past 100 | CI hard | Rows `[uuid, name, type]` |
 | Error | ≤ 512 B, first 10 failures + count | CI hard | — |
 | Text result hard cap | **8 KB default**, per-call `maxBytes` up to 16 KB; over cap → `{handle, bytes, summary}` | Runtime enforcer; CI hard on the behaviour | 18 KB was +8,954 tokens; 8 KB ≈ 4k tokens fits hero `system` (5.8 KB) and the median item (2.1 KB); 16 KB stays below the measured Claude Code inline lower bound (21.7 KB). Titan full actor exports are 5,738–12,492 B (E9): 3 of the 4 measured exceed 8 KB, so a full actor read returns a handle unless `maxBytes` is raised; titan items (634–1,697 B) fit |
 | `sheet_layout` | ≤ 4 KB | CI hard (fixture) and e2e hard | E9 prototype at depth 2: 401–441 B, but too shallow to be useful; the default depth is set in M15b by measurement |
 | Image | `screenshot` only; default ≤ 480,000 px (the 800×600 area), aspect kept (D28); max 1280 px longest side; one per result | CI hard (capture unit) | +972 measured at 800×600; larger sizes not measured. Titan sheets are 850×926 (actor) and 700×650 (item) (E9): the actor sheet does not fit an 800×600 box without distortion-free downscaling to 551×600, so the default is expressed as area |
 | Live recalibration | `tests/measure/measureContext.mjs`, manual, ≤ 6 `claude -p` runs | Report only | Tokenizers and Claude Code behaviour change between versions |
+
+The number of tools and their total definition size are not capped, for Wiretap's own tools or for plugins (owner
+decision): each listed name costs ≈13 tokens per session in Claude Code, and a client that does not defer tools pays
+every full definition on every request. The per-tool rows above (name, definition, description) are CI checks for
+Wiretap's own tools and registration warnings for plugin tools, except the name length, which every tool needs.
 
 **Counting rule.** Every byte budget counts the raw UTF-8 bytes of the text a tool returns, not the JSON-escaped bytes
 of the MCP wire message: quotes, backslashes and control characters in a result are escaped on the wire, so the wire
@@ -206,7 +211,7 @@ capture-time default, not enforced by the result enforcer.
 
 Wiretap skills reference the MCP tools to point agents to them.
 
-- **Developer skills** (`.claude/skills/wiretap-*`) and **user-facing skills shipped for MCP users** name the exact
+- **Developer skills** (`wiretap:wiretap-*`, plugin `wiretap@personal-skills`) and **user-facing skills shipped for MCP users** name the exact
   tools and the recipe ("read one field: `mcp__wiretap__get_document` with `paths`"). Tool descriptions then stay one
   line; examples and caveats live in skill bodies.
 - **Interaction with deferral.** Claude Code lists skill names and descriptions at session start and loads a skill's
@@ -219,6 +224,9 @@ Wiretap skills reference the MCP tools to point agents to them.
   ≈150–195 tokens always against one ToolSearch round trip when needed.
 - **Delivery of the user-facing skill:** the repo directory `skills/wiretap/` plus README install instructions. A test
   checks that every tool name a shipped skill mentions exists.
+- **Plugin tools (M7):** a plugin tool must work from its name and description alone; a plugin may also ship an
+  optional guide skill folder that names its tools as `mcp__wiretap__<moduleId>__<tool>`, installed by the user like
+  `skills/wiretap`. The README author guide covers both, descriptions first; Wiretap delivers no guide text itself.
 
 ### 2.8 Path-scoped reads and writes (D26)
 
@@ -235,12 +243,12 @@ saved per session versus a new tool, MEASURED rate); `get_document`'s definition
 **Grammar (one resolver, shared by reads, writes, handles and schema):**
 
 - Dot segments over the canonical export (§4.4, `keepId: true`): `system.attributes.hp`.
-- Embedded collections by id: `items.<_id>.system.uses` (resolved by `_id`, not array order). Plain arrays by
-  integer index: `system.traits.languages.value.0`.
+- Embedded collections by id: `items.<_id>.system.uses` (resolved by `_id`, not array order). Plain arrays by integer
+  index: `system.traits.languages.value.0`.
 - One wildcard segment per path, only over an embedded collection or array, returns `{<id or index>: value}`:
   `items.*.name`.
-- `paths: string[]`, up to 20 paths per call; the result is `{values: {<path>: value}, missing: [<path>]}`. A missing
-  path is listed in `missing`, not an error; all paths missing still returns `ok`.
+- `paths: string[]`, any number of paths per call (a warning line past 20); the result is `{values: {<path>: value},
+  missing: [<path>]}`. A missing path is listed in `missing`, not an error; all paths missing still returns `ok`.
 - Refused segments: `__proto__`, `constructor`, `prototype`; error ≤ 256 B naming the segment.
 
 **Source vs derived.** Default `source` (the export). `derived: true` resolves the same paths against the prepared
@@ -279,7 +287,7 @@ Budgets are the result cap in serialized bytes. "Replaces" counts the calls a ge
 | Script | Purpose | Requires | Result budget | Gate | Replaces |
 |---|---|---|---|---|---|
 | `get_document(uuid, paths? \| fields? \| mode?, derived?, ifChanged?)` | Compact view by default; path slices (§2.8); full export. The compact, `paths` and `fields` results carry a content `version` (a hash of the export the read returns, §4.4); `ifChanged` equal to it returns `{unchanged:true}` | api | 2 KB compact; 256 B unchanged ack; hard cap otherwise | — | full re-reads |
-| `create_documents(documentName, data[] \| fromUuids[], parentUuid?, pack?, keepId?, dryRun?, idempotencyKey?)` | Create from data, or copy world, embedded or compendium documents by uuid (`fromUuids`, 1 to 50) into the world, a parent or a pack; the source body never enters context, and a copy meets every check the same data would | api | 256 B ack per document, 4 KB per call | per category | read + create with the body in context |
+| `create_documents(documentName, data[] \| fromUuids[], parentUuid?, pack?, keepId?, dryRun?, idempotencyKey?)` | Create from data, or copy world, embedded or compendium documents by uuid (`fromUuids`, one or more) into the world, a parent or a pack; the source body never enters context, and a copy meets every check the same data would | api | 256 B ack per document, 4 KB per call | per category | read + create with the body in context |
 | `update_documents(updates[], dryRun?)` | Path-scoped writes incl. embedded paths and `op` (§2.8) | api | 256 B ack per document | per category | read + update + re-read |
 | `delete_documents(uuids[], dryRun?)` | Document deletion through Foundry document calls (D12) | api | 256 B ack; `dryRun` lists names | `allowDelete` (D12a) | — |
 | `open_sheet(uuid, userId?)` | Render a sheet on the client of the connected user named by `userId` via the `wiretap.openSheet` query, else on the client running the call; never broadcast | api | 128 B `{ok, appId}` | — | — |
@@ -309,7 +317,7 @@ entries of the same registry with the budgets of §2.6.
 | D7 | Acting user: optional advisory `actAs` pre-check (`testUserPermission` / `canUserModify`); the write runs as the endpoint user | DECIDED |
 | D8 | Every risky operation has a GM-only world setting (a gate), default OFF; gate settings can never be changed by any skill. Risky = irreversible, overwriting, arbitrary code, privilege or ownership escalation, file removal, external exposure or data at rest (rule in §4.6) | DECIDED |
 | D9 | Plugin handlers run client-side by default. Opt-in sidecar plugins (Node handlers) are allowed per plugin id behind the `allowSidecarPlugins` gate (D31) | DECIDED |
-| D10 | Plugin surface: `Hooks.callAll('wiretap.registerSkills', api)` + `api.registerSkill`, integer `apiVersion`, tool names `<moduleId>__<skill>`, no dots | DECIDED |
+| D10 | Plugin surface: `Hooks.callAll('wiretap.registerTools', api)` + `api.registerTool`, integer `apiVersion`, tool names `<moduleId>__<tool>`, no dots; one registration call, with no separate skill or script call | DECIDED |
 | D11 | MCP transport moves to stateful Streamable HTTP sessions with `notifications/tools/list_changed`; no sampling | DECIDED |
 | D12 | Deletion: the ban is on deleting **files**. Foundry documents may be created, updated and deleted through Foundry document calls | DECIDED |
 | D12a | Deletion is risky and gated: `delete_documents` needs `allowDelete` (default OFF); `User` deletion additionally needs `allowUserWrites`, `Setting` deletion `allowSettingWrites`; `dryRun` previews; Claude Code `ask` rules remain a second layer (README shows `"ask": ["mcp__wiretap__delete_documents"]`); compendium **pack** deletion is D30 | DECIDED |
@@ -348,7 +356,7 @@ entries of the same registry with the budgets of §2.6.
 | Handle store (`server/handles.ts`) | Sidecar, memory only | Per-session LRU of large results (D23); slices for `read_handle`, `handle:<id>` input for the `data` of `create_documents` and `replace_document` |
 | Budget constants (`shared/budgets.js`) | Both | The §2.6 numbers; one source for enforcer, registration checks and tests |
 | Path resolver (`shared/docPath.js`) | Both | §2.8 grammar: parse, refuse unsafe segments, resolve over an export, group embedded writes |
-| Endpoint registry + router (`server/endpoints.ts`, replaces `gmSockets`) | Sidecar | Tracks identified GM endpoints `{socketId, userId, userName, kind: agent\|human, dom: bool, registeredAt}` (plus `gateState`, and `skills[]` from M7); routes per D5, DOM scripts per D25 |
+| Endpoint registry + router (`server/endpoints.ts`, replaces `gmSockets`) | Sidecar | Tracks identified GM endpoints `{socketId, userId, userName, kind: agent\|human, dom: bool, registeredAt}` (plus `gateState`, and `tools`); routes per D5, DOM scripts per D25 |
 | Script registry (`src/bridge/scripts/registry.js`) | Foundry client | Shipped and plugin scripts (core tools included), and agent-saved scripts if D21; validates args; emits `bridge:registry` |
 | Shipped scripts (`src/bridge/scripts/*.js`) | Foundry client | §2.9 catalogue; static imports only |
 | Op dispatcher (`src/bridge/ops/*`) | Foundry client (human GM tab or agent tab) | Core ops on `documentClass` APIs; gate checks; `actAs` pre-check; `ctx.core.*` for scripts |
@@ -387,10 +395,9 @@ GM human tab: settings UI → credentials pushed once over bridge:credentials �
 
 ### 4.4 Canonical document representation (D14, view per D24, paths per D26)
 
-- **Full reads** (`mode:"full"`) produce `doc.toCompendium(null, {clearSource: false, keepId:
-  true, clearSort: false, clearOwnership: false})` plus `uuid`. The defaults would drop `_id`, `sort`, `ownership` and
-  `author` (READ `client-document.mjs:1113-1134`). Optionally prepared values are added under a separate `derived`
-  key.
+- **Full reads** (`mode:"full"`) produce `doc.toCompendium(null, {clearSource: false, keepId: true, clearSort: false,
+  clearOwnership: false})` plus `uuid`. The defaults would drop `_id`, `sort`, `ownership` and `author` (READ
+  `client-document.mjs:1113-1134`). Optionally prepared values are added under a separate `derived` key.
 - **Default reads** return the compact view: `uuid`, `name`, `type`, `version` (a content hash of the export the read
   returns, embedded documents included, keys sorted; compared by `ifChanged`), a per-type key-field list, and embedded
   documents as `[id, name, type]` tuples (first 40 plus a total count). `fields` returns a projection, `paths` path
@@ -404,18 +411,18 @@ GM human tab: settings UI → credentials pushed once over bridge:credentials �
   `/pass(word|phrase)?|secret|token|api[-_]?key|credential|private[-_]?key/i` is dropped from a `Setting` `value` (JSON
   text) and from every `flags` object of the export, to depth 24 and 50,000 nodes per walk (the setting value and the
   rest of the export have separate budgets; a list is cut at the first member beyond a bound, so kept indexes never
-  move; what lies beyond is dropped). A string inside that data which itself holds JSON (an object, a list or a string
-  of JSON) is parsed and redacted with the same bounds, up to 4 levels of nesting (each level doubles the escaping); text that is not JSON is left as it
-  is. A pack index path is never asked for when one of its segments matches the pattern (`PATH_EXCLUDED`), because index
-  entries are raw source data. The
+  move; what lies beyond is dropped and the export is marked `partial: true`). A string inside that data which itself
+  holds JSON (an object, a list or a string of JSON) is parsed and redacted with the same bounds, up to 4 levels of
+  nesting (each level doubles the escaping); text that is not JSON is left as it is. A pack index path is never asked
+  for when one of its segments matches the pattern (`PATH_EXCLUDED`), because index entries are raw source data. The
   `User` password fields are removed. Limitations: name-only matching (a secret under another name is exposed; `bypass`,
   `passive` or `tokenId` inside flags or a setting value are dropped); core schema fields and `system` data are not
-  scanned because core names such as `prototypeToken` match the pattern; the setting-key test is narrower (it omits a bare
-  `token`, which would refuse `core.tokenAutoRotate`); settings of other modules are readable. Owner decisions are in
-  `docs/TODO.md`.
-- **Create** takes the canonical shape. `exportToJSON` drops `_id`, `sort`, `ownership` and `author` by default; reads keep
-  them (`keepId`, D14), and `create_documents` with `fromUuids` builds each copy with `toCompendium` and drops `_id`
-  (unless `keepId`), `sort`, `folder`, every `ownership` and `flags.wiretap`, so a copy gets a new id and needs no
+  scanned because core names such as `prototypeToken` match the pattern; the setting-key test is narrower (it omits a
+  bare `token`, which would refuse `core.tokenAutoRotate`); settings of other modules are readable. Owner decisions are
+  in `docs/TODO.md`.
+- **Create** takes the canonical shape. `exportToJSON` drops `_id`, `sort`, `ownership` and `author` by default; reads
+  keep them (`keepId`, D14), and `create_documents` with `fromUuids` builds each copy with `toCompendium` and drops
+  `_id` (unless `keepId`), `sort`, `folder`, every `ownership` and `flags.wiretap`, so a copy gets a new id and needs no
   ownership gate.
 - **Replace** = `fromImport` → `collection.fromCompendium` → strip `preserveOnImport` → `update(data, {diff: false,
   recursive: false})` **with hooks** (D13). Input may be a handle.
@@ -429,7 +436,7 @@ A mismatched `protocolVersion` is refused, not translated (no-backwards-compatib
 - `bridge:identify` gains: `kind`, `dom` (can render and measure), `protocolVersion`, `token?` (external mode only),
   `gateState` (from M2).
 - `bridge:registry` carries `{apiVersion, scripts: [ScriptDefinition]}`.
-  Wire shape and routing: the `wiretap-mcp-bridge`, `wiretap-mcp-sessions` and `wiretap-scripts` skills.
+  Wire shape and routing: the `wiretap:wiretap-mcp-bridge`, `wiretap:wiretap-mcp-sessions` and `wiretap:wiretap-scripts` skills.
 - `bridge:credentials` (GM human tab → sidecar only) carries the agent list. It is never broadcast and never sent
   sidecar → client.
 - `bridge:invoke` gains `actAs?`, `dryRun?`, `requestId`, and `code` + `sha256` for agent-saved scripts (if D21).
@@ -451,7 +458,7 @@ World-scope settings, `restricted: true` (GM only), `config: true`, all default 
 | `allowOwnershipWrites` | Writes to `ownership` | Escalation-capable |
 | `allowCompendiumWrites` | Writes into compendium packs | Escalation-capable |
 | `allowModuleConfigWrites` | `core.moduleConfiguration` | Escalation-capable |
-| `allowedPluginModules` | Plugin skills and scripts per module id | Default: none enabled |
+| `allowedPluginModules` | Plugin tools per module id | Default: none enabled |
 | `allowSidecarPlugins` | Sidecar (Node) handlers of plugins the GM enables by id | Arbitrary Node code outside the browser; default OFF; see the known limit below |
 | `allowAgentScripts` |, `disable_script`, running agent-saved scripts | Only with D21 option (b); arbitrary-code caveat |
 
@@ -468,7 +475,7 @@ World-scope settings, `restricted: true` (GM only), `config: true`, all default 
 
 **Known limit (INFERRED, stated in the UI hint).** Any arbitrary-code capability (`allowMacroExecution`,
 `allowAgentScripts`, `allowSidecarPlugins`, any enabled plugin module) can call `game.settings.set` directly. When a GM enables one, the
-guarantee is reduced to "no core skill can change a gate".
+guarantee is reduced to "no tool of Wiretap's own can change a gate".
 
 ### 4.7 Trust boundaries
 
@@ -482,7 +489,7 @@ guarantee is reduced to "no core skill can change a gate".
   - `bridge:identify` requires the token.
   - CORS origin becomes configurable (today hard-coded `http://localhost:30000`, READ `server/server.ts:38`).
   - Guidance: run behind a TLS reverse proxy; never expose plain HTTP.
-  - This deliberately reopens the loopback-only rule (`wiretap-codebase-core`) for an explicit GM opt-in. The skill
+  - This deliberately reopens the loopback-only rule (`wiretap:wiretap-codebase-core`) for an explicit GM opt-in. The skill
     text changes accordingly.
 - **Credentials:**
   - Client-scope settings live in the GM browser's `localStorage` (READ `client/helpers/client-settings.mjs:43`).
@@ -535,8 +542,8 @@ Every milestone follows `.claude/claude.md`:
   document calls (D12); test documents are cleaned up with the §4.8 pattern.
 - e2e in-page waits ≤ 1000 ms.
 - No dynamic imports in shipping builds.
-- Implementation via `wiretap-coder` (sidecar, shared, tests) or `foundry-module-dev` (client `.js`/`.svelte`), then
-  `wiretap-spec-reviewer` → `wiretap-code-reviewer`. `buddy-checking` for M9, M10, M16 (security or
+- Implementation via `wiretap:wiretap-coder` (sidecar, shared, tests) or `wiretap:foundry-module-dev` (client `.js`/`.svelte`), then
+  `wiretap:wiretap-spec-reviewer` → `wiretap:wiretap-code-reviewer`. `buddy-checking` for M9, M10, M16 (security or
   protocol).
 - **Context-budget criterion (required, D17):** each milestone states one; from M13 on, every tool and result it adds
   is covered by the M13 budget test, and a budget breach fails the milestone. A budget is raised only by the user.
@@ -600,19 +607,20 @@ the tool description); irreversible deletes (D12a, `dryRun`).
   client (the handler checks that the sender is a GM); without it, on the client running the call.
 - `roll(formula, toChat=false)`.
 - `draw_table(uuid, toChat?)`, `toChat` default false.
-- `execute_macro(uuid, actorUuid?, tokenUuid?, timeoutMs?)` (gate `allowMacroExecution`): `actorUuid` and
-  `tokenUuid` name the Actor and the Token (on the scene the executing client views) the macro acts on. A macro that
-  finished is never reported as failed because of its value: a value too large for the wire comes back as a success
-  with `tooLarge: true`, and the user-facing skill says such a result does not by itself show the macro did what was
-  wanted. A macro that threw is `MACRO_FAILED` ("it may have partly run").
-- `timeoutMs` (integer, 1,000 to 300,000, default 8,000) is a shared optional argument: any script whose input schema
-  declares it runs under that call's limit on the executing client, and the sidecar waits `timeoutMs` + 2 s for that
-  call's reply. Scripts without it keep the 8 s limit and the 10 s wait. Only `execute_macro` declares it.
-- A write that sets a Macro's `command` (create, update, replace or batch) also needs `allowMacroExecution`: the
-  command is code that runs when a user executes the macro. So do an update that changes a Macro's `type` to script
-  (stored text becomes code; re-saving a script Macro's type is not refused), a write of an Adventure's stored
-  `macros` (importing it creates them), and a write that stores an `executeScript` RegionBehavior's code, directly or
-  in an Adventure's stored `scenes` (the code runs on region events).
+- `execute_macro(uuid, actorUuid?, tokenUuid?, timeoutMs?)` (gate `allowMacroExecution`): `actorUuid` and `tokenUuid`
+  name the Actor and the Token (on the scene the executing client views) the macro acts on. A macro that finished is
+  never reported as failed because of its value: a value too large for the wire comes back as a success with `tooLarge:
+  true`, and the user-facing skill says such a result does not by itself show the macro did what was wanted. A macro
+  that threw is `MACRO_FAILED` ("it may have partly run").
+- `timeoutMs` (integer, 1 to 2,147,481,647, default 8,000; a warning line past 300,000) is a shared optional argument:
+  any script whose input schema declares it runs under that call's limit on the executing client, and the sidecar waits
+  `timeoutMs` + 2 s for that call's reply. Scripts without it keep the 8 s limit and the 10 s wait. Only `execute_macro`
+  declares it.
+- A write that sets a Macro's `command` (create, update, replace or batch) also needs `allowMacroExecution`: the command
+  is code that runs when a user executes the macro. So do an update that changes a Macro's `type` to script (stored text
+  becomes code; re-saving a script Macro's type is not refused), a write of an Adventure's stored `macros` (importing it
+  creates them), and a write that stores an `executeScript` RegionBehavior's code, directly or in an Adventure's stored
+  `scenes` (the code runs on region events).
 
 All as M14 scripts. `screenshot` is in M15b (it needs the agent runner). **Depends on:** M2, M5, M14. **Tests:** unit
 (query handler checks); integration; e2e with a GM tab and a `wtx-player` context: the sheet opens on the player
@@ -666,7 +674,7 @@ body entering the agent's context, an exact change-only read, and documented rec
 Design: [`plans/2026-11-21-wiretap-m15a-design.md`](plans/2026-11-21-wiretap-m15a-design.md). **Depends on:** M5, M6,
 M13, M14. **In:**
 
-- `fromUuids` on `create_documents`: 1 to 50 uuids of world, embedded or compendium documents of the given class, in
+- `fromUuids` on `create_documents`: one or more uuids of world, embedded or compendium documents of the given class, in
   place of `data` (exactly one of the two); each copy is built in the GM client from the source's `toCompendium`
   export with `_id` (unless `keepId`), `sort`, `folder`, every `ownership` and `flags.wiretap` removed, then goes
   through the same checks as `data` (gates, `guardWrite`, validation, `actAs`, `dryRun`, `refuseTakenIds`). A `User`,
@@ -691,41 +699,69 @@ after an embedded update, create and delete, world items copied onto a recorded 
 throwaway world pack and back, torn down per §4.8. **Acceptance:** a `fromUuids` copy of a 100 KB synthetic source
 whose body appears in no MCP message the SDK client receives; the actor recipe in exactly two `tools/call` requests,
 counted by an integration test. **Context budget:** `create_documents` and `get_document` definitions ≤ 800 B listed,
-the compact view ≤ 2 KB, the unchanged ack ≤ 256 B, at most 30 listed tools, all by the existing CI budget tests.
+the compact view ≤ 2 KB, the unchanged ack ≤ 256 B, all by the existing CI budget tests.
 **Risks:** a false "unchanged" (the bug the version fixes) → the version hashes the whole export the read returns; a
 copy that skips a check → it enters the same create path as `data`.
 
-### M7 — Plugin skill API
+### M7 — Plugin tools
 
-**Goal:** D9/D10. **Depends on:** M3, M5, M14. **In:**
+**Goal:** D9/D10: any module author can give the agent tools through a public client API, and the GM decides which
+modules' tools the agent sees. Design:
+[`specs/2026-11-23-wiretap-m7-plugin-tools-design.md`](specs/2026-11-23-wiretap-m7-plugin-tools-design.md).
+**Depends on:** M3, M5, M14. **In:**
 
-- `api.apiVersion` (integer).
-- `api.registerSkill({name, description, inputSchema, handler, mutates})` and `api.registerScript(...)` (same
-  registry; scripts add `requires` and `result.budgetBytes`, default budget = §2.6 compact).
-- `Hooks.callAll('wiretap.registerSkills', api)` at Wiretap `ready`.
-- Name sanitising to `<moduleId>__<skill>` (module id dots → refuse; any `.` refused; ≤ 64 chars).
-- Collision rejection.
-- Registration refuses definitions over the §2.6 budgets, with a logged reason.
-- `allowedPluginModules` gate.
+- `api.apiVersion` (integer, `SCRIPT_API_VERSION`) and `api.registerTool({ moduleId, name, version, description,
+  inputSchema, handler, mutates, requires, result?, gate?, handleArgs?, strictNested?, requiresUserInteraction? })`,
+  which returns `{ ok: true, name }` or `{ ok: false, reason }` and never throws. `result` defaults to the §2.6
+  compact budget (2 KB); `requires` and `mutates` stay required, never defaulted.
+- `Hooks.callAll('wiretap.registerTools', api)` once from Wiretap `ready` on every client, after the shipped tools are
+  registered. `registerTool` also works later in the session. Only GM clients push a registry, so only their tools
+  reach the agent.
+- Names `<moduleId>__<tool>`: `moduleId` names a module active in this world, in Foundry's id alphabet (letters of
+  either case, digits, `_` and `-`; no dots), matched exactly; `<tool>` uses the same alphabet; at most 50 characters
+  in all (§2.6). A short name that already starts with `<moduleId>__` is refused, a shipped name may not hold `__`, and
+  a name already registered is refused.
+- Three check groups. Per-tool best practices (§2.6 definition size, description length, result budget, version form
+  and length, `handleArgs` count, the schema complexity guidelines) refuse a shipped tool and only warn for a plugin
+  tool. Rules a tool needs to work refuse both, with a reason that says what to change. Server protections (the
+  1,000,000-byte Socket.IO message, the registry push rate, schema depth 32 and 60,000 expanded schema nodes, the
+  handle store, the MCP body limit) are unchanged.
+- No cap on the number of tools or on their total definition size, for shipped and plugin tools.
+- The `allowedPluginModules` gate: a plugin tool is listed only while its module is allowed; the sidecar checks the
+  module gate and the tool's declared gate on the picked endpoint before sending, and the client checks both again. A
+  settings change updates the listing without a reload.
 - `ctx.core.*` = the same functions as the core ops (gates still apply).
-- `bridge:registry` on change → `list_changed`.
-- Sidecar converts JSON Schema → zod with zod 4.4.3 `fromJSONSchema` (READ
-  `node_modules/zod/v4/classic/from-json-schema.d.ts`). Unconvertible schemas are refused at registration with a
-  logged reason.
+- `bridge:registry` on change → `list_changed`. When the registry message would pass the Socket.IO bound, the client
+  leaves out plugin tools, largest listed definition first, with one console line per tool; shipped tools always go.
+- The sidecar's existing converter `jsonSchemaToZodShape` stays the one JSON Schema → zod converter (zod
+  `fromJSONSchema` is not used), so plugin and shipped tools share one schema rule set; the plugin difference is only
+  warn versus refuse.
+- No limits on the GM's choices (design section of that name): per-call and setup limits become best-practice sizes
+  with one warning line past them, protections stay, reply budgets stay, and every silent cut gets a notice.
 
-**Out:** Node-side plugin code (D9). **Tests:**
+**Out:** Node-side plugin handlers (D9, M20); an unregister call; a Wiretap tool or MCP resource that serves a plugin's
+guide text; proof of which module is calling. **Tests:**
 
-- Unit: registry, sanitiser, version check, gate, budget refusal.
-- Integration: fake client registers mid-session → tool callable; an oversized plugin result becomes a handle.
-- e2e: a fixture plugin module built only into `test/build/` registers `wtx_fixture__echo` and calls
-  `ctx.core.create_documents`.
+- Unit: the plugin route of the shared validator (each best practice warns for a plugin and refuses for a shipped tool;
+  each needed-to-work rule refuses both); the name builder; `apiVersion`; collision; the active-module check; the gate;
+  many tools accepted on both sides.
+- Integration: a fake client registers a plugin tool mid-session → `tools/list_changed` → the tool is callable; an
+  oversized plugin result becomes a handle; a tool of a module not in `allowedPluginModules` is not listed and a call
+  is `GATE_DENIED`; a settings change updates the listing.
+- e2e: the fixture module `wiretap-e2e-plugin` (source under `tests/e2e/`, written to
+  `<Foundry Data>/modules/wiretap-e2e-plugin` and enabled in the test world for the run, the world's module
+  configuration restored after) registers `wiretap-e2e-plugin__echo` through the real hook, and a call runs
+  `ctx.core.createDocuments` with §4.8 teardown; it asserts the hook fires after every module's code has run.
 
-**Deliverables:** README plugin-author guide (including the budgets and how to reference tools from a skill);
-example spell-text → Item plugin under `examples/` (not shipped). The LLM parses; the handler maps deterministically
-and uses `dryRun` first. **Acceptance:** fixture plugin works end to end; a disabled module's tools disappear after
-reload. **Context budget:** plugin definitions and results are under the same §2.6 budgets as shipped scripts (tests
-above). **Risks:** load-order assumptions. Mitigation: the hook fires at `ready`, after all esmodules have executed
-(INFERRED; e2e asserts it).
+**Deliverables:** the README plugin-author guide (the API, the hook timing, naming, the three check groups with each
+warning and refusal explained, descriptions that stand alone, an optional guide skill that names the tools, the context
+cost of many tools, the module-identity limit); the example spell-text → Item plugin under `examples/` (not shipped):
+the LLM parses, the handler maps deterministically and calls `dryRun` first, its descriptions work without a guide,
+and it ships a small guide skill. **Acceptance:** the fixture plugin works end to end; a disabled module's tools
+disappear after reload. **Context budget:** shipped tools keep every §2.6 per-tool CI check; plugin tools get the same
+checks as warnings. **Risks:** load-order assumptions → the hook fires at `ready`, after every module's code has run
+(e2e asserts it); many plugin tools cost context → the guide states the cost; any module can claim any id → the guide
+says the gate is not a wall between modules.
 
 ### M16 — Agent-saved scripts (only if D21 builds them)
 
@@ -751,7 +787,7 @@ plugin scripts. **Risks:** §2.5 residual risks of the chosen option.
 
 **Goal:** D3. **Depends on:** M1; uses M10's token when external. **In:**
 
-- Client-scope setting `agentUsers` with a settings menu (ApplicationV2 form, `foundry-module-dev`) on GM clients:
+- Client-scope setting `agentUsers` with a settings menu (ApplicationV2 form, `wiretap:foundry-module-dev`) on GM clients:
   a user picker limited to non-human-assigned users plus a password field. The form shows each user's role and warns
   when it is not ASSISTANT (D4: a GAMEMASTER agent competes with humans for `activeGM`; a PLAYER or TRUSTED agent
   cannot run GM ops) and when the user has no password (P1: anonymous `/join` lists every user name).
@@ -836,7 +872,7 @@ headless layout differs from a human's window size → results report the viewpo
 - Configurable CORS origin.
 - README TLS/reverse-proxy section.
 - Startup warning when external.
-- Update `wiretap-codebase-core` "loopback only" text to "loopback by default; external opt-in requires tokens".
+- Update `wiretap:wiretap-codebase-core` "loopback only" text to "loopback by default; external opt-in requires tokens".
 
 **Tests:** integration (no token → 401 / identify refused; constant-time compare; loopback mode unchanged);
 `serverModes` style bind assertions. **Acceptance:** external mode cannot start without a token (test). **Context
@@ -889,12 +925,10 @@ zero after the run. **Context budget:** the e2e matrix asserts the §2.6 budget 
 
 Evaluate at the end of the named milestone:
 
-- `wiretap-plugin-api` (`src/bridge/skills.js`, `examples/**`): at M7, since it is a public API with a separate
-  audience.
 - `wiretap-agents` (`server/agentRunner.ts`, `server/agentCredentials.ts`): at M9, a new subsystem.
 - Matching `-coder` / `-code-reviewer` agent variants only if those domains need specialised context.
 
-Each creation also updates the subsystem table in `wiretap-codebase-core` and the skill list in `.claude/claude.md`.
+Each creation also updates the subsystem table in `wiretap:wiretap-codebase-core` and the skill list in `.claude/claude.md`.
 
 ## 7. Risks and open questions
 
@@ -903,16 +937,15 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
   live clients never show and a fresh load lists in `invalidDocumentIds`. Any GM-authenticated socket can do this, not
   only Wiretap. Wiretap never writes over B (D1), and its client path validates through the system DataModels.
 - **Foundry server error noise** (MEASURED (coord.) M0): each rejected `modifyDocument` logs `TypeError: Cannot read
-  properties of undefined (reading 'length')` in the server log (140 lines during M0); the caller still gets its
-  reply. Log readers and e2e log assertions must not treat it as a Wiretap failure; it is a Foundry defect, not
-  Wiretap's.
+  properties of undefined (reading 'length')` in the server log (140 lines during M0); the caller still gets its reply.
+  Log readers and e2e log assertions must not treat it as a Wiretap failure; it is a Foundry defect, not Wiretap's.
 - **Anonymous user listing** (MEASURED (coord.) M0 P1): a session from `GET /join` without login receives every user's
   name and role. Relevant to M10 external guidance (agent users need passwords and neutral names).
 - **Active GM with only the agent online** (MEASURED (coord.) M0 E4): an ASSISTANT agent becomes `activeGM` when no
   GAMEMASTER is online and runs `activeGM`-gated automation headless with `core.noCanvas` on; whether titan or other
   modules' automation needs the canvas is not measured. A GAMEMASTER agent would compete with humans by id order.
-- **Runner recovery is login, not reconnect** (MEASURED (coord.) M0 E7): Foundry's restart drops sessions and sends
-  the page to `/join`; any runner that only waits for a socket reconnect stays offline.
+- **Runner recovery is login, not reconnect** (MEASURED (coord.) M0 E7): Foundry's restart drops sessions and sends the
+  page to `/join`; any runner that only waits for a socket reconnect stays offline.
 - `modifyBatch` is not atomic; users may assume transactions.
 - Document deletes are irreversible apart from backups; `dryRun` and Claude Code `ask` rules are the guard (D12a).
 - The arbitrary-code capabilities weaken the gate hard rule (§4.6), including agent-saved scripts (§2.5 S7).
@@ -923,9 +956,10 @@ Each creation also updates the subsystem table in `wiretap-codebase-core` and th
 - Context measurements are single runs on one model's tokenizer (`claude-haiku-5-5`); other models may count
   differently. Byte budgets plus the recalibration script contain this.
 - Claude Code's deferral, inline-result cap and `_meta` annotations are client behaviour that can change between
-  versions (MEASURED (coord.) on 2.1.296; docs READ). The budgets do not depend on deferral; the
-  per-script-tool exposure (D18) and D21 option (b) do.
-- Script catalogue sprawl raises the always-listed name cost (≈13 tokens per tool); the ≤ 30 cap forces review.
+  versions (MEASURED (coord.) on 2.1.296; docs READ). The budgets do not depend on deferral; the per-script-tool
+  exposure (D18) and D21 option (b) do.
+- Script catalogue sprawl raises the always-listed name cost (≈13 tokens per tool); there is no cap (owner decision), so
+  growth is a review question, not a CI failure.
 - Shared `test-titan` world with TITAN e2e (§4.8): leftover combats or orphan tokens fail TITAN's run.
 
 ## 8. Out of scope / deferred (each logged in `docs/TODO.md`)

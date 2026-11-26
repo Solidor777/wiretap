@@ -1,5 +1,6 @@
 import { getBudget } from '../shared/budgets.js';
 import { describeCause } from './logText.ts';
+import { createLogThrottle } from './logThrottle.ts';
 
 // Milliseconds an MCP session may go without a request before it expires (30 minutes).
 export const MCP_SESSION_IDLE_MS: number = 30 * 60 * 1000;
@@ -13,6 +14,13 @@ export const LIST_CHANGED_QUIET_MS: number = 200;
 // Longest wait in milliseconds from the first change of a burst to the notification, however long the changes
 // continue.
 export const LIST_CHANGED_MAX_WAIT_MS: number = 1000;
+
+// Length in milliseconds of one window of the session-count log throttle.
+const SESSION_COUNT_LOG_WINDOW_MS: number = 60_000;
+
+// Most session-count lines written per window; a local process can loop MCP `initialize`, so later lines in the window
+// are counted in one summary line.
+const SESSION_COUNT_LOG_LIMIT: number = 10;
 
 /** The timer functions the session manager and debouncer schedule with. */
 export interface SessionTimers {
@@ -32,8 +40,8 @@ export interface ManagedSession {
 
 /** Injectable settings of the session manager. */
 export interface SessionManagerOptions {
-   /** Most sessions held at once (default: the `MCP_SESSIONS_MAX` budget). */
-   maxSessions?: number;
+   /** Open sessions past which each new session logs one line (default: the `MCP_SESSIONS_MAX` budget). */
+   warnSessions?: number;
    /** Idle milliseconds before a session expires (default `MCP_SESSION_IDLE_MS`). */
    idleMs?: number;
    /** Milliseconds between expiry sweeps (default `MCP_SESSION_SWEEP_MS`). */
@@ -48,12 +56,12 @@ export interface SessionManagerOptions {
    log?: (line: string) => void;
 }
 
-/** The set of live sessions with idle expiry and a size cap. */
+/** The set of live sessions with idle expiry and no cap on their number. */
 export interface SessionManager {
    /**
-    * Hold a session. Returns false, holding nothing and closing nothing, when the cap is reached; a disposed manager
-    * closes the session at once and returns false. No held session is ever ended to make room: the idle sweep frees
-    * slots.
+    * Hold a session and return true, logging one line when the open count is then past the warning count (at most
+    * `SESSION_COUNT_LOG_LIMIT` per minute, then one summary line); a disposed manager closes the session at once and
+    * returns false.
     */
    add: (session: ManagedSession) => boolean;
    /** Look a session up without counting it as activity. */
@@ -64,8 +72,6 @@ export interface SessionManager {
    end: (id: string) => Promise<void>;
    /** The number of sessions held. */
    size: () => number;
-   /** Whether the held sessions plus `reserved` pending ones have reached the cap. */
-   isFull: (reserved?: number) => boolean;
    /** Every held session in least-recently-active-first order. */
    list: () => ManagedSession[];
    /** End every session, which stops the sweep; sessions added afterwards are closed at once. */
@@ -123,13 +129,14 @@ const DEFAULT_TIMERS: SessionTimers = {
  * for every request that carries the session id (POST, the GET that opens the event stream, DELETE, and so a client
  * `ping`). An open event stream refreshes nothing by itself and the server writes no keepalive of its own, so a client
  * that holds a stream open but sends nothing expires after the idle limit. One interval runs only while a session
- * exists; no per-session timer exists.
- * @param {SessionManagerOptions} [options] - Cap, idle limit, sweep period, clock, timers, end hook and logger.
+ * exists; no per-session timer exists. The number of sessions is the GM's choice: none is ever refused for the count.
+ * @param {SessionManagerOptions} [options] - Warning count, idle limit, sweep period, clock, timers, end hook and
+ *        logger.
  * @returns {SessionManager} An empty manager.
  */
 export function createSessionManager(options: SessionManagerOptions = {}): SessionManager {
-   // The session cap.
-   const maxSessions: number = options.maxSessions ?? getBudget('MCP_SESSIONS_MAX').value;
+   // The open-session count past which each new session logs one line.
+   const warnSessions: number = options.warnSessions ?? getBudget('MCP_SESSIONS_MAX').value;
    // The idle limit in milliseconds.
    const idleMs: number = options.idleMs ?? MCP_SESSION_IDLE_MS;
    // The sweep period in milliseconds.
@@ -140,6 +147,14 @@ export function createSessionManager(options: SessionManagerOptions = {}): Sessi
    const timers: SessionTimers = options.timers ?? DEFAULT_TIMERS;
    // The sidecar log sink.
    const log: (line: string) => void = options.log ?? ((line) => console.log(line));
+   // Writes a session-count line subject to the per-window limit, with one summary line per window.
+   const logSessionCount: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: SESSION_COUNT_LOG_LIMIT,
+      windowMs: SESSION_COUNT_LOG_WINDOW_MS,
+      noun: 'MCP session count warnings',
+   });
    // Held sessions, least recently active first.
    const sessions: Map<string, SessionEntry> = new Map();
    // The sweep interval handle while one runs.
@@ -224,13 +239,16 @@ export function createSessionManager(options: SessionManagerOptions = {}): Sessi
             void closeLogged(session);
             return false;
          }
-         if (sessions.size >= maxSessions) {
-            return false;
-         }
          sessions.set(session.id, {
             session,
             lastActivity: now(),
          });
+         if (sessions.size > warnSessions) {
+            logSessionCount(
+               `Wiretap sidecar | MCP session ${session.id} opened: ${sessions.size} sessions are open, ` +
+                  `more than the ${warnSessions} recommended`,
+            );
+         }
          if (!sweeping) {
             sweep = timers.setInterval(expireIdle, sweepMs);
             sweeping = true;
@@ -256,10 +274,6 @@ export function createSessionManager(options: SessionManagerOptions = {}): Sessi
 
       size(): number {
          return sessions.size;
-      },
-
-      isFull(reserved: number = 0): boolean {
-         return sessions.size + reserved >= maxSessions;
       },
 
       list(): ManagedSession[] {
@@ -314,7 +328,10 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
             pending = true;
             burstStart = current;
          }
-         timer = timers.setTimeout(fire, Math.min(options.quietMs, burstStart + options.maxWaitMs - current));
+         // Milliseconds until the run: the quiet period, cut to what is left of the maximum wait, and zero once a
+         // late trigger arrives after the maximum wait has already passed.
+         const delay: number = Math.max(0, Math.min(options.quietMs, burstStart + options.maxWaitMs - current));
+         timer = timers.setTimeout(fire, delay);
       },
 
       cancel(): void {

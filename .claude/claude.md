@@ -64,50 +64,65 @@
 
 ## Project Scope
 
+### Shared resources
+Only one task at a time may use each of these. Tasks run in parallel only when they share none of them.
+
+| Resource | Used by | How to tell it is free |
+|---|---|---|
+| Live Foundry server on port 30000, sidecar ports 31416-31419 | `npx playwright test` (starts its own Foundry and sidecar) | No listener on any of the five ports (`Get-NetTCPConnection -LocalPort 30000,31416,31417,31418,31419 -State Listen` returns nothing), and no other e2e run is active, this project's or titan's (the Foundry user data and the `test-titan` world are shared) |
+| `dist/` | `npm run build`, the e2e build | No build or e2e run in progress; after an e2e run, `npm run build`, recycle the e2e chunks, then `npm run check:release` passes |
+| Shared Foundry `Data/modules` folder and the `test-titan` world's module configuration | e2e tasks that install or enable a fixture module | No e2e run in progress, and the world's module configuration matches what the last run recorded and restored |
+
 ### Test Waits
 - Every wait on something inside an already-loaded page is at most 1000 ms: `expect.poll`, `waitForFunction`, `titanWait`, `toPass`, and explicit `timeout:` values on assertions and actions. The e2e suite runs on one machine, so replicated updates and renders land at once.
 - A wait that needs longer is a defect to find and fix, not a ceiling to raise.
 - Exempt (they wait on a process starting): world boot, login, page reload, the build, the `actionTimeout` safety net, and per-test limits. Also exempt: the one real-hover test, which waits out the product's own hover-delay timer.
 
 ## Planning
-- Ensure the `foundry-vtt:foundry-vtt` and `wiretap-codebase-core` skills are loaded, plus the `wiretap-*` subsystem skill for every area the spec touches. If the spec touches Svelte files, also load `web-ui:svelte-5` and `foundry-vtt:foundry-svelte`.
+- Ensure the `foundry-vtt:foundry-vtt` and `wiretap:wiretap-codebase-core` skills are loaded, plus the `wiretap:wiretap-*` subsystem skill for every area the spec touches. If the spec touches Svelte files, also load `web-ui:svelte-5` and `foundry-vtt:foundry-svelte`.
 
 ## Codebase Skills & Agents
 
-### Skills (`.claude/skills/`)
-| Skill | Activation | Scope |
-|---|---|---|
-| `wiretap-codebase-core` | description | Architecture, boundaries, cross-cutting rules, skill-maintenance procedure |
-| `wiretap-client` | `paths:` `src/**`, `lang/**` | Sidebar tab, Svelte terminal UI, TerminalConnection, settings |
-| `wiretap-sidecar` | `paths:` `server/**`, `shared/**` | Socket.IO server, PTY relay, composition |
-| `wiretap-mcp-bridge` | `paths:` MCP/bridge files | MCP tools, result enforcer, endpoint router, bridge handshake, ops |
-| `wiretap-mcp-sessions` | `paths:` `server/mcpSessions.ts`, `server/toolRegistry.ts`, session tests | Stateful MCP sessions, expiry and cap, `list_changed`, HTTP limits, the endpoint tool registry |
-| `wiretap-scripts` | `paths:` `src/bridge/scripts/**`, `shared/scripts.js`, `shared/schemaValidate.js`, their tests | Client script registry, `callTool` dispatch, `ctx`, shipped scripts, user-facing skill |
-| `wiretap-writes` | `paths:` `src/bridge/scripts/writes.js`, `{create,update,delete}Documents.js`, `write{Args,Ack,Copy,Replace,Batch,BatchSettle,ActAs,Idempotency}.js`, `replaceDocument.js`, `batch.js`, `server/handleInput.ts`, their tests | `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`, advisory `actAs`, `idempotencyKey`, handle inputs |
-| `wiretap-write-guard` | `paths:` `src/bridge/scripts/write{Guard,Fields}.js`, `shared/writeKeys.js`, `shared/docPath.js`, `shared/gates.js`, their tests, the operator grid | `guardWrite` and its gates, the one reader of Foundry update operators, the cleaned-changes backstop, the `_id` and `flags.wiretap` rules, the macro and region script code gate |
-| `wiretap-gameplay` | `paths:` `src/bridge/sheetQuery.js`, `src/bridge/scripts/{sheets,sheetDefinitions,openSheet,closeSheet,diceDefinitions,roll,drawTable,macroDefinitions,executeMacro}.js`, their tests | `open_sheet`, `close_sheet` and the sheet user queries, `roll`, `draw_table`, `execute_macro` |
-| `wiretap-backups` | `paths:` `server/backups.ts`, `server/backupTools.ts`, `shared/backup.js`, `shared/bridgeSettings.js`, `src/bridge/backup/**`, `src/bridge/pieces.js`, `src/bridge/bridgeSettings.js`, `src/settings/bridgeSettings.js`, their tests | The backup file store (the only `trash` importer), `backup_documents`, `list_backups`, `restore_backup`, `delete_backup`, the piece transport, the client export and restore, the Backup folder setting |
-| `wiretap-packs` | `paths:` `src/bridge/scripts/{packDefinitions,packCommon,createPack,deletePack}.js`, their unit tests, `tests/integration/packTools.test.js`, `tests/e2e/packTools.spec.js` | `create_pack`, `delete_pack`: the order of their checks, the gate checked on a real run only, the codes, the ack bound, the Foundry calls |
-| `wiretap-build-test` | `paths:` `tests/**`, build/lint configs | Build, vitest, Playwright e2e |
+### Skills (plugin `wiretap@personal-skills`)
+The skills and agents ship in the user-scope plugin at `~/.claude/plugins/local/personal-skills/wiretap/`, enabled for
+this workspace in `.claude/settings.json` and shared with Wiretap's add-on module workspaces. They activate by
+description only (no `paths:`, because an add-on workspace's own files would match the same globs); the Owns column
+says which files each covers.
 
-- **Mandatory invoke:** invoke the matching skill(s) before reading or editing a subsystem's files.
-- **Mandatory update:** when a plan finishes (and after any significant inline change), update every `wiretap-*` skill whose paths the change touched, in the same work unit, to the current state, not a historical changelog. A plan is not complete until this is done.
-- **Growth:** when a change adds a top-level directory or subsystem, or a skill outgrows roughly 250 lines, create a new domain or sub-domain skill with `paths:` globs and update this table and the core skill's subsystem map. Add `wiretap-<domain>-coder` / `-code-reviewer` agent variants if the domain needs specialized context.
+| Skill | Owns | Scope |
+|---|---|---|
+| `wiretap:wiretap-codebase-core` | everything (entry point) | Architecture, boundaries, cross-cutting rules, skill-maintenance procedure |
+| `wiretap:wiretap-client` | `src/**`, `lang/**` | Sidebar tab, Svelte terminal UI, TerminalConnection, settings |
+| `wiretap:wiretap-sidecar` | `server/**`, `shared/**` | Socket.IO server, PTY relay, composition |
+| `wiretap:wiretap-mcp-bridge` | MCP/bridge files | MCP tools, result enforcer, endpoint router, bridge handshake, ops |
+| `wiretap:wiretap-mcp-sessions` | `server/mcpSessions.ts`, `server/toolRegistry.ts`, session tests | Stateful MCP sessions, idle expiry and the session warning count (no cap), `list_changed`, HTTP limits, the endpoint tool registry |
+| `wiretap:wiretap-scripts` | `src/bridge/scripts/**`, `shared/scripts.js`, `shared/schemaValidate.js`, their tests | Client script registry, `callTool` dispatch, `ctx`, shipped scripts, user-facing skill |
+| `wiretap:wiretap-writes` | `src/bridge/scripts/writes.js`, `{create,update,delete}Documents.js`, `write{Args,Ack,Copy,Replace,Batch,BatchSettle,ActAs,Idempotency}.js`, `replaceDocument.js`, `batch.js`, `server/handleInput.ts`, their tests | `create_documents`, `update_documents`, `delete_documents`, `replace_document`, `batch`, advisory `actAs`, `idempotencyKey`, handle inputs |
+| `wiretap:wiretap-write-guard` | `src/bridge/scripts/write{Guard,Fields}.js`, `shared/writeKeys.js`, `shared/docPath.js`, `shared/gates.js`, their tests, the operator grid | `guardWrite` and its gates, the one reader of Foundry update operators, the cleaned-changes backstop, the `_id` and `flags.wiretap` rules, the macro and region script code gate |
+| `wiretap:wiretap-gameplay` | `src/bridge/sheetQuery.js`, `src/bridge/scripts/{sheets,sheetDefinitions,openSheet,closeSheet,diceDefinitions,roll,drawTable,macroDefinitions,executeMacro}.js`, their tests | `open_sheet`, `close_sheet` and the sheet user queries, `roll`, `draw_table`, `execute_macro` |
+| `wiretap:wiretap-backups` | `server/backups.ts`, `server/backupTools.ts`, `shared/backup.js`, `shared/bridgeSettings.js`, `src/bridge/backup/**`, `src/bridge/pieces.js`, `src/bridge/bridgeSettings.js`, `src/settings/bridgeSettings.js`, their tests | The backup file store (the only `trash` importer), `backup_documents`, `list_backups`, `restore_backup`, `delete_backup`, the piece transport, the client export and restore, the Backup folder setting |
+| `wiretap:wiretap-packs` | `src/bridge/scripts/{packDefinitions,packCommon,createPack,deletePack}.js`, their unit tests, `tests/integration/packTools.test.js`, `tests/e2e/packTools.spec.js` | `create_pack`, `delete_pack`: the order of their checks, the gate checked on a real run only, the codes, the ack bound, the Foundry calls |
+| `wiretap:wiretap-plugin-api` | `src/bridge/pluginApi.js`, `src/bridge/scripts/registryPayload.js`, `examples/**`, the plugin unit, integration and e2e tests and the e2e fixture module (`tests/e2e/plugin-fixture/**`, `tests/e2e/pluginFixture*.js`) | The `wiretap.registerTools` hook and `registerTool`, the plugin route through both registries, its checks and texts, the `allowedPluginModules` gate, the registry push bound, the example plugin |
+| `wiretap:wiretap-build-test` | `tests/**`, build/lint configs | Build, vitest, Playwright e2e |
+
+- **Mandatory invoke:** invoke the matching skill(s) before reading or editing a subsystem's files. Nothing loads them by path, so this is the only trigger.
+- **Mandatory update:** when a plan finishes (and after any significant inline change), update every `wiretap:wiretap-*` skill whose files the change touched, in the same work unit, to the current state, not a historical changelog. A plan is not complete until this is done. The skill files live in the plugin folder, outside this repository, so their edits are not in Wiretap commits.
+- **Growth:** when a change adds a top-level directory or subsystem, or a skill outgrows roughly 250 lines, create a new domain or sub-domain skill in the plugin (no `paths:`; its description names the files it owns) and update this table and the core skill's subsystem map. Add `wiretap-<domain>-coder` / `-code-reviewer` agent variants if the domain needs specialized context. Run `/reload-plugins` or start a new session to load them.
 - `graphify` complements the skills for cross-file questions; it does not replace them.
 
-### Agents (`.claude/agents/`)
+### Agents (plugin `wiretap@personal-skills`)
 | Agent | Tools | Use |
 |---|---|---|
-| `foundry-module-dev` | all | Client `.js` / `.svelte` implementation |
-| `wiretap-coder` | all | Everything else: `server/`, `shared/`, tests, build config; TDD; returns a structured report |
-| `wiretap-spec-reviewer` | Read, Grep, Glob, Bash (tests only), Skill, Write (review file only) | Spec/plan completeness: nothing skipped, downgraded, or extra |
-| `wiretap-code-reviewer` | Read, Grep, Glob, Skill, Write (review file only) | Bugs, security, conventions, simplification |
+| `wiretap:foundry-module-dev` | all | Client `.js` / `.svelte` implementation |
+| `wiretap:wiretap-coder` | all | Everything else: `server/`, `shared/`, tests, build config; TDD; returns a structured report |
+| `wiretap:wiretap-spec-reviewer` | Read, Grep, Glob, Bash (tests only), Skill, Write (review file only) | Spec/plan completeness: nothing skipped, downgraded, or extra |
+| `wiretap:wiretap-code-reviewer` | Read, Grep, Glob, Skill, Write (review file only) | Bugs, security, conventions, simplification |
 
-- **Implementation:** from `superpowers:subagent-driven-development` / `executing-plans` (on a Fable-class model, `mainline-plan-execution`), dispatch the coder matching the work: `foundry-module-dev` for client UI code, `wiretap-coder` otherwise. Invoke `dispatching-sdd-agents` before the first dispatch; these agents are the implementers and reviewers for every task, and its tiers choose only the model and effort they run at.
-- **Per-task review:** after each task run `wiretap-spec-reviewer`, then `wiretap-code-reviewer`. Fix findings through the coder and re-review, three fix rounds at most per task; if round 3's re-review still leaves findings open, stop and report to the user with a diagnosis.
+- **Implementation:** from `superpowers:subagent-driven-development` / `executing-plans` (on a Fable-class model, `mainline-plan-execution`), dispatch the coder matching the work: `wiretap:foundry-module-dev` for client UI code, `wiretap:wiretap-coder` otherwise. Invoke `dispatching-sdd-agents` before the first dispatch; these agents are the implementers and reviewers for every task, and its tiers choose only the model and effort they run at.
+- **Per-task review:** after each task run `wiretap:wiretap-spec-reviewer`, then `wiretap:wiretap-code-reviewer`. Fix findings through the coder and re-review, three fix rounds at most per task; if round 3's re-review still leaves findings open, stop and report to the user with a diagnosis.
 - **Escalation:** a coder that reports BLOCKED, or DONE_WITH_CONCERNS citing complexity, is re-dispatched one rung up the `dispatching-sdd-agents` ladder (Sonnet high, then Opus high). If Opus high blocks too, report to the user.
 - **Final review:** one whole-branch review by `sdd-final-reviewer` after the last task. It starts without any `CLAUDE.md`, so its dispatch carries the project rules that apply.
-- **High-risk work** (security boundary, process spawn, protocol/API changes): use `buddy-checking` with the two wiretap reviewers as its reviewers. The ordinary single-review path is `superpowers:requesting-code-review` with `wiretap-code-reviewer`.
+- **High-risk work** (security boundary, process spawn, protocol/API changes): use `buddy-checking` with the two wiretap reviewers as its reviewers. The ordinary single-review path is `superpowers:requesting-code-review` with `wiretap:wiretap-code-reviewer`.
 - Reviewers never edit. Findings go back to the coder. A reviewer can write one review file and nothing else: name the file in the dispatch when a durable copy is wanted. Its final message is still the whole report.
 
 ## Code Style

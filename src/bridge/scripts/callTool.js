@@ -43,9 +43,10 @@ export const SCRIPT_BUSY = 'SCRIPT_BUSY';
  */
 
 /**
- * Create the `callTool` op handler. A call finds the named script, enforces the script's declared gate from THIS
- * client's settings, validates the arguments against the script's own declared schema, builds the context and runs
- * the handler under a time limit. The order is fixed: a denied call learns nothing about its arguments. At most
+ * Create the `callTool` op handler. A call finds the named script, enforces from THIS client's settings the module
+ * gate of a plugin script (`allowedPluginModules` must list its `moduleId`) and then the script's declared gate,
+ * validates the arguments against the script's own declared schema, builds the context and runs the handler under a
+ * time limit. The order is fixed: a denied call learns nothing about its arguments. At most
  * `SCRIPT_CONCURRENCY_MAX` handlers run at once; a call beyond it is refused with `SCRIPT_BUSY`. A script whose input
  * schema declares the shared `timeoutMs` argument runs under the call's `timeoutMs` (its schema holds the bounds);
  * every other script runs under the default limit.
@@ -134,6 +135,13 @@ export function createCallTool({ registry, timeoutMs = SCRIPT_TIMEOUT_MS }) {
       const definition = registered.definition;
       /** @type {import('$shared/schemaValidate.js').ArgumentValidator} The script's argument validator. */
       const validate = registered.validate;
+      if (definition.moduleId !== undefined) {
+         /** @type {ReturnType<typeof requireGate>} The module gate's denial, or null when this module is allowed. */
+         const denial = requireGate('allowedPluginModules', definition.moduleId);
+         if (denial !== null) {
+            throw new ScriptError(GATE_DENIED, denial.message);
+         }
+      }
       if (definition.gate !== undefined) {
          /** @type {ReturnType<typeof requireGate>} The denial, or null when open; an unreadable gate is closed. */
          const denial = requireGate(definition.gate);

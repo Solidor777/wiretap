@@ -16,7 +16,7 @@ const EXPECTED = [
    ],
    [
       'PLUGIN_TOOL_NAME_MAX_CHARS',
-      64,
+      50,
       'chars',
       'hard',
    ],
@@ -54,23 +54,11 @@ const EXPECTED = [
       'MCP_SESSIONS_MAX',
       32,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'MCP_BODY_MAX_BYTES',
       1_048_576,
-      'bytes',
-      'hard',
-   ],
-   [
-      'ALWAYS_LISTED_TOOLS_MAX',
-      30,
-      'count',
-      'hard',
-   ],
-   [
-      'ALL_DEFINITIONS_MAX_BYTES',
-      16000,
       'bytes',
       'hard',
    ],
@@ -126,7 +114,7 @@ const EXPECTED = [
       'SEARCH_MAX_LIMIT',
       100,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'SEARCH_SCAN_MAX',
@@ -150,7 +138,7 @@ const EXPECTED = [
       'SEARCH_FIELD_PATH_MAX_BYTES',
       64,
       'bytes',
-      'hard',
+      'warn',
    ],
    [
       'SEARCH_INDEX_FIELDS_MAX',
@@ -240,7 +228,7 @@ const EXPECTED = [
       'PATHS_PER_CALL_MAX',
       20,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'PATH_ERROR_MAX_BYTES',
@@ -288,13 +276,13 @@ const EXPECTED = [
       'WRITE_DOCUMENTS_MAX',
       50,
       'count',
-      'hard',
+      'warn',
    ],
    [
       'WRITE_DATA_MAX_BYTES',
       200000,
       'bytes',
-      'hard',
+      'warn',
    ],
    [
       'SHEET_RESULT_MAX_BYTES',
@@ -352,6 +340,12 @@ describe('getBudget', () => {
 
    it('covers exactly the expected budgets', () => {
       expect(Object.keys(BUDGETS).sort()).toEqual(EXPECTED.map(([name]) => name).sort());
+   });
+
+   it('has no tool count or total definition budget', () => {
+      expect(Object.hasOwn(BUDGETS, 'ALWAYS_LISTED_TOOLS_MAX')).toBe(false);
+      expect(Object.hasOwn(BUDGETS, 'ALL_DEFINITIONS_MAX_BYTES')).toBe(false);
+      expect(() => getBudget('ALWAYS_LISTED_TOOLS_MAX')).toThrow('Unknown budget: ALWAYS_LISTED_TOOLS_MAX');
    });
 
    it('throws for an unknown budget name', () => {

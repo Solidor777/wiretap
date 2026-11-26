@@ -7,12 +7,14 @@
  * `ifChanged` equal to the current version answers `{ unchanged: true }` in every mode; a `derived` read hashes the
  * prepared export, so its version matches only another derived read. The result enforcer of the sidecar turns
  * anything over the call's cap into a handle. The definition is in `definitions.js`. The exclusions (credential
- * settings, secret-named keys, User password fields) apply in `ctx.core.readDocument`.
+ * settings, secret-named keys, User password fields) apply in `ctx.core.readDocument`; when its export left part of
+ * the document out at a redaction bound, every mode but the unchanged ack carries `partial: true`.
  */
 
 import { contentVersion } from '~/bridge/scripts/contentHash.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { keyPathsFor } from '~/bridge/scripts/keyFields.js';
+import { BEST_PRACTICE, SizeNotes } from '~/bridge/scripts/sizeNotes.js';
 import { shapeRefusal } from '~/bridge/scripts/writeArgs.js';
 
 /**
@@ -45,8 +47,17 @@ function checkCombination(args) {
  */
 export async function getDocumentHandler(args, ctx) {
    checkCombination(args);
-   /** @type {{ data: Record<string, unknown>, documentName: string }} The plain export and its class. */
-   const { data, documentName } = await ctx.core.readDocument(
+   /** @type {SizeNotes} The best-practice sizes this call passes, written as one line before the read. */
+   const notes = new SizeNotes('get_document');
+   notes.note(args.fields?.length ?? 0, 'fields in one call', BEST_PRACTICE.paths);
+   notes.note(args.paths?.length ?? 0, 'paths in one call', BEST_PRACTICE.paths);
+   notes.note(args.ifChanged?.length ?? 0, 'characters in ifChanged', BEST_PRACTICE.ifChangedChars);
+   notes.write(ctx.log);
+   /**
+    * The plain export, its class, and whether the export left part of the document out.
+    * @type {{ data: Record<string, unknown>, documentName: string, partial: boolean }}
+    */
+   const { data, documentName, partial } = await ctx.core.readDocument(
       {
          uuid: args.uuid,
          documentName: args.documentName,
@@ -75,6 +86,7 @@ export async function getDocumentHandler(args, ctx) {
          values: sliced.values,
          missing: sliced.missing,
          version,
+         ...(partial ? { partial: true } : {}),
       };
    }
    if (args.fields !== undefined) {
@@ -87,20 +99,30 @@ export async function getDocumentHandler(args, ctx) {
          fields: projected.value,
          missing: projected.missing,
          version,
+         ...(partial ? { partial: true } : {}),
       };
    }
    if (args.mode === 'full') {
-      return data;
+      return partial
+         ? {
+            ...data,
+            partial: true,
+         }
+         : data;
    }
    /** @type {readonly string[] | undefined} The key leaves of this subtype, when the system has a list for it. */
    const keyPaths = keyPathsFor(game.system?.id, documentName, data.type);
    return ctx.shape.compact(
       data,
       keyPaths === undefined
-         ? { version }
+         ? {
+            version,
+            partial,
+         }
          : {
             keyPaths: [...keyPaths],
             version,
+            partial,
          },
    );
 }

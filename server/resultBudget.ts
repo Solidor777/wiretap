@@ -2,7 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { getBudget } from '../shared/budgets.js';
 import { BridgeError, formatBridgeError } from './endpoints.ts';
 import type { HandleStore, PutResult } from './handles.ts';
-import { describeCause } from './logText.ts';
+import { cleanForLog, describeCause } from './logText.ts';
 import { truncateUtf8 } from './utf8.ts';
 
 // Most top-level keys a summary lists, and how many of them get a count.
@@ -32,6 +32,29 @@ const TOOL_FAILED_MESSAGE: string = 'Tool failed.';
 // Longest cause text written to the server log, in UTF-8 bytes.
 const LOG_CAUSE_BYTES: number = 512;
 
+// Longest list of dropped field names written to the server log, in UTF-8 bytes.
+const LOG_DROPPED_BYTES: number = 200;
+
+// The top-level result fields that leave the enforcer; `isError` is false on every result that is not an error.
+const KEPT_RESULT_FIELDS: ReadonlySet<string> = new Set([
+   'content',
+   'structuredContent',
+   'isError',
+]);
+
+// The fields of a text item that leave the enforcer.
+const KEPT_TEXT_FIELDS: ReadonlySet<string> = new Set([
+   'type',
+   'text',
+]);
+
+// The fields of an image item that leave the enforcer.
+const KEPT_IMAGE_FIELDS: ReadonlySet<string> = new Set([
+   'type',
+   'data',
+   'mimeType',
+]);
+
 /** A tool callback: the validated arguments in, an MCP tool result out. */
 export type ToolHandler<Args> = (args: Args, extra?: unknown) => Promise<CallToolResult>;
 
@@ -48,6 +71,18 @@ export interface ResultBudgetOptions {
    ownerLive?: () => boolean;
    /** The tool's own result budget in bytes; the effective limit is the smaller of this and the hard cap. */
    budgetBytes?: number;
+   /** The tool's name, written in the log line that names the result fields the enforcer drops. */
+   toolName: string;
+   /** The sidecar log sink; receives the line that names the result fields the enforcer drops. */
+   log: (line: string) => void;
+}
+
+/** The byte limit of one call and whether it is lower than the per-call `maxBytes` asked for. */
+interface CallLimit {
+   /** The limit in bytes. */
+   limit: number;
+   /** Whether a valid per-call `maxBytes` was above the limit and lowered to it. */
+   lowered: boolean;
 }
 
 /** A deterministic description of a stored result. */
@@ -239,22 +274,74 @@ function textParts(result: CallToolResult): string[] {
 }
 
 /**
+ * Name the fields of a shape-checked result that the enforcer does not pass on: top-level fields other than
+ * `content`, `structuredContent` and `isError` as they are, and the extra fields of text and image items as
+ * `content.<field>`. Items of other types pass whole, so none of their fields is named.
+ * @param {CallToolResult} result - The shape-checked result.
+ * @returns {string[]} The dropped field names, each once, top-level ones first.
+ */
+function droppedFields(result: CallToolResult): string[] {
+   // The dropped names in the order found.
+   const names: Set<string> = new Set(Object.keys(result).filter((key) => !KEPT_RESULT_FIELDS.has(key)));
+   for (const item of result.content) {
+      // The fields this item keeps, or null for a type that passes whole.
+      const kept: ReadonlySet<string> | null =
+         item.type === 'text' ? KEPT_TEXT_FIELDS : item.type === 'image' ? KEPT_IMAGE_FIELDS : null;
+      if (kept === null) {
+         continue;
+      }
+      for (const key of Object.keys(item)) {
+         if (!kept.has(key)) {
+            names.add(`content.${key}`);
+         }
+      }
+   }
+   return [...names];
+}
+
+/**
+ * Write one server log line naming the tool and the result fields the enforcer dropped, when it dropped any. The
+ * names come from handler output, so `cleanForLog` replaces control characters and bounds the list.
+ * @param {string} toolName - The tool's name.
+ * @param {CallToolResult} result - The shape-checked result.
+ * @param {(line: string) => void} log - The sidecar log sink.
+ * @returns {void}
+ */
+function logDroppedFields(toolName: string, result: CallToolResult, log: (line: string) => void): void {
+   // The dropped field names.
+   const names: string[] = droppedFields(result);
+   if (names.length > 0) {
+      // The bounded, cleaned list of names.
+      const list: string = cleanForLog(names.join(', '), LOG_DROPPED_BYTES);
+      log(`Wiretap sidecar | ${toolName} result fields dropped: ${list}`);
+   }
+}
+
+/**
  * Work out the byte limit for one call: the hard cap (a valid per-call `maxBytes` lowers it, never above the maximum
  * cap), then the tool's own budget when that is smaller. Only arguments the tool's input schema declares reach here.
  * @param {unknown} args - The tool arguments.
  * @param {number | undefined} budgetBytes - The tool's own budget.
- * @returns {number} The limit in bytes.
+ * @returns {CallLimit} The limit in bytes and whether a valid per-call `maxBytes` was lowered to it.
  */
-function resolveLimit(args: unknown, budgetBytes: number | undefined): number {
+function resolveLimit(args: unknown, budgetBytes: number | undefined): CallLimit {
    // The default hard cap.
    let limit: number = getBudget('RESULT_HARD_CAP_DEFAULT_BYTES').value;
    // The per-call request, when the arguments carry one.
    const requested: unknown =
       typeof args === 'object' && args !== null ? (args as { maxBytes?: unknown }).maxBytes : undefined;
-   if (typeof requested === 'number' && Number.isInteger(requested) && requested >= 1) {
-      limit = Math.min(requested, getBudget('RESULT_HARD_CAP_MAX_BYTES').value);
+   // Whether the request is a valid per-call limit.
+   const valid: boolean = typeof requested === 'number' && Number.isInteger(requested) && requested >= 1;
+   if (valid) {
+      limit = Math.min(requested as number, getBudget('RESULT_HARD_CAP_MAX_BYTES').value);
    }
-   return budgetBytes === undefined ? limit : Math.min(limit, budgetBytes);
+   if (budgetBytes !== undefined) {
+      limit = Math.min(limit, budgetBytes);
+   }
+   return {
+      limit,
+      lowered: valid && (requested as number) > limit,
+   };
 }
 
 /**
@@ -333,16 +420,23 @@ export function summarizeResult(text: string): ResultSummary {
 }
 
 /**
- * Serialize `{handle, bytes, summary}` and shrink the summary until the text fits the acknowledgement budget:
- * count entries go first, then listed keys from the end, then `name`, then `type`. Only `kind`, `n` and `omitted`
- * always remain.
+ * Serialize `{handle, bytes, summary}` (plus `maxBytesLowered`, the limit applied, when the call's `maxBytes` was
+ * lowered) and shrink the summary until the text fits the acknowledgement budget: count entries go first, then listed
+ * keys from the end, then `name`, then `type`. Only `kind`, `n` and `omitted` always remain.
  * @param {string} handle - The handle id.
  * @param {number} bytes - The UTF-8 size of the stored text.
  * @param {ResultSummary} summary - The full summary.
  * @param {number} maxBytes - The acknowledgement budget in UTF-8 bytes.
+ * @param {number | undefined} maxBytesLowered - The limit a larger per-call `maxBytes` was lowered to, if it was.
  * @returns {string} The response text, at most `maxBytes` in UTF-8 bytes.
  */
-function formatHandleResponse(handle: string, bytes: number, summary: ResultSummary, maxBytes: number): string {
+function formatHandleResponse(
+   handle: string,
+   bytes: number,
+   summary: ResultSummary,
+   maxBytes: number,
+   maxBytesLowered: number | undefined,
+): string {
    // The summary, shrunk in place.
    const shrunk: ResultSummary = {
       ...summary,
@@ -355,6 +449,7 @@ function formatHandleResponse(handle: string, bytes: number, summary: ResultSumm
          handle,
          bytes,
          summary: shrunk,
+         ...(maxBytesLowered === undefined ? {} : { maxBytesLowered }),
       });
       if (Buffer.byteLength(text, 'utf8') <= maxBytes) {
          return text;
@@ -377,7 +472,8 @@ function formatHandleResponse(handle: string, bytes: number, summary: ResultSumm
 
 /**
  * Enforce the result budget on one handler result: error text is capped, images are checked, and text over the limit
- * is stored and replaced by `{handle, bytes, summary}`.
+ * is stored and replaced by `{handle, bytes, summary}`. A result that is not an error loses every field that was not
+ * measured, and the loss is logged with the tool's name.
  * @param {unknown} raw - What the handler returned.
  * @param {unknown} args - The tool arguments, read for `maxBytes`.
  * @param {ResultBudgetOptions} options - The store, owner key and the tool's own budget.
@@ -406,7 +502,10 @@ function enforce(raw: unknown, args: unknown, options: ResultBudgetOptions): Cal
    const content: CallToolResult['content'] = result.content.map(rebuildItem);
    // The rebuilt image items.
    const images: CallToolResult['content'] = content.filter((item) => item.type === 'image');
-   if (bytes <= resolveLimit(args, options.budgetBytes)) {
+   logDroppedFields(options.toolName, result, options.log);
+   // The limit of this call.
+   const callLimit: CallLimit = resolveLimit(args, options.budgetBytes);
+   if (bytes <= callLimit.limit) {
       // Only the fields that were measured leave the enforcer; top-level `_meta` and unknown fields are dropped.
       return result.structuredContent === undefined
          ? { content }
@@ -439,7 +538,13 @@ function enforce(raw: unknown, args: unknown, options: ResultBudgetOptions): Cal
       content: [
          {
             type: 'text',
-            text: formatHandleResponse(put.handle, put.bytes, summary, ackMaxBytes),
+            text: formatHandleResponse(
+               put.handle,
+               put.bytes,
+               summary,
+               ackMaxBytes,
+               callLimit.lowered ? callLimit.limit : undefined,
+            ),
          },
          ...images,
       ],

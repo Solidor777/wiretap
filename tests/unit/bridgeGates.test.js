@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { GATES, closedGateState, GATE_MODULES_MAX } from '$shared/gates.js';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { GATES, closedGateState } from '$shared/gates.js';
 import { GATE_DENIED } from '$shared/protocol.js';
 import { readGateState, requireGate, gateNameFromSettingKey } from '~/bridge/gates.js';
 
@@ -61,19 +61,38 @@ describe('readGateState', () => {
       }
    });
 
-   it('drops invalid, oversized, padded and duplicate module ids from the stored string', () => {
-      stored.allowedPluginModules = ` good-mod ,Bad Mod,../x,,good-mod,UPPER,ok_2,${'a'.repeat(65)}`;
+   it('drops invalid, padded and duplicate module ids from the stored string', () => {
+      stored.allowedPluginModules = ' good-mod ,Bad Mod,../x,,good-mod,dot.ted,ok_2';
       expect(readGateState().allowedPluginModules).toEqual([
          'good-mod',
          'ok_2',
       ]);
    });
 
-   it('treats a non-string module list and a list over the entry limit as empty', () => {
+   it('keeps every id Foundry accepts: capitals, a leading _ or -, and over 64 characters', () => {
+      stored.allowedPluginModules = `MyMod,_lead,-lead,${'a'.repeat(65)},mymod`;
+      expect(readGateState().allowedPluginModules).toEqual([
+         'MyMod',
+         '_lead',
+         '-lead',
+         'a'.repeat(65),
+         'mymod',
+      ]);
+      expect(requireGate('allowedPluginModules', 'MyMod')).toBeNull();
+      expect(requireGate('allowedPluginModules', 'MYMOD')).not.toBeNull();
+   });
+
+   it('treats a non-string module list as empty', () => {
       stored.allowedPluginModules = { toString: () => 'evil' };
       expect(readGateState().allowedPluginModules).toEqual([]);
-      stored.allowedPluginModules = Array.from({ length: GATE_MODULES_MAX + 1 }, (_, i) => `m${i}`).join(',');
-      expect(readGateState().allowedPluginModules).toEqual([]);
+   });
+
+   it('keeps a stored list of 1,000 module ids whole and allows a tool of the 1,000th module', () => {
+      /** @type {string[]} One thousand distinct module ids. */
+      const thousand = Array.from({ length: 1000 }, (_, i) => `m${i}`);
+      stored.allowedPluginModules = thousand.join(',');
+      expect(readGateState().allowedPluginModules).toEqual(thousand);
+      expect(requireGate('allowedPluginModules', 'm999')).toBeNull();
    });
 
    it('closes a gate whose read throws and keeps reading the others', () => {
@@ -137,6 +156,45 @@ describe('gateNameFromSettingKey', () => {
       ];
       for (const key of keys) {
          expect(gateNameFromSettingKey(key), String(key)).toBeNull();
+      }
+   });
+});
+
+describe('readGateState notices', () => {
+   it('logs each stored plugin module entry that is not a module id, once per stored value', () => {
+      /** @type {import('vitest').MockInstance} The console warning spy. */
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+         stored.allowedPluginModules = 'good-mod,MOCK Bad Mod,dot.ted';
+         expect(readGateState().allowedPluginModules).toEqual(['good-mod']);
+         readGateState();
+         expect(warn.mock.calls.map(([line]) => line)).toEqual([
+            'Wiretap | allowedPluginModules ignores "MOCK Bad Mod": a module id holds only letters, digits, _ and -.',
+            'Wiretap | allowedPluginModules ignores "dot.ted": a module id holds only letters, digits, _ and -.',
+         ]);
+         warn.mockClear();
+         stored.allowedPluginModules = 'good-mod, other_mod';
+         readGateState();
+         expect(warn).not.toHaveBeenCalled();
+      } finally {
+         warn.mockRestore();
+      }
+   });
+
+   it('cleans and bounds the entry it names', () => {
+      /** @type {import('vitest').MockInstance} The console warning spy. */
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+         stored.allowedPluginModules = `MOCK${String.fromCharCode(7)}bell,${'x'.repeat(200)}!`;
+         readGateState();
+         /** @type {string[]} The lines logged. */
+         const lines = warn.mock.calls.map(([line]) => line);
+         expect(lines).toHaveLength(2);
+         expect(lines[0]).toContain('"MOCK bell"');
+         expect(lines[1]).toContain('…"');
+         expect(lines[1].length).toBeLessThan(160);
+      } finally {
+         warn.mockRestore();
       }
    });
 });

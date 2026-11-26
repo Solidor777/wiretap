@@ -18,7 +18,6 @@
  * cannot refer to a document an earlier operation creates.
  */
 
-import { getBudget } from '$shared/budgets.js';
 import { cleanForLog } from '$shared/logText.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 import { resolveActAs } from '~/bridge/scripts/writeActAs.js';
@@ -64,20 +63,6 @@ function updatedDocuments(plan) {
       ...(plan.paths.length > 0 ? [plan.document] : []),
       ...plan.embedded.flatMap((group) => group.entries.map((item) => item.document)),
    ];
-}
-
-/**
- * Refuse a batch that touches more documents than one call may.
- * @param {number} touched - How many documents the batch creates, updates and deletes.
- * @returns {void}
- * @throws {ScriptError} `ARGS_INVALID`.
- */
-function checkTouched(touched) {
-   /** @type {number} The most documents one batch may touch. */
-   const max = getBudget('WRITE_DOCUMENTS_MAX').value;
-   if (touched > max) {
-      throw new ScriptError('ARGS_INVALID', `A batch may touch at most ${max} documents.`);
-   }
 }
 
 /**
@@ -263,10 +248,6 @@ export async function batchDocuments({ creates = [], updates = [], deletes = [],
    if (creates.length + updates.length + deletes.length === 0) {
       throw new ScriptError('ARGS_INVALID', 'Give at least one create, update or delete.');
    }
-   /** @type {number} The documents the creates and deletes name. */
-   const named =
-      creates.reduce((sum, entry) => sum + (Array.isArray(entry?.data) ? entry.data.length : 0), 0) + deletes.length;
-   checkTouched(named + updates.length);
    /** @type {{ id: string, name?: string } | null} The advisory user, if any. */
    const actAsUser = resolveActAs(actAs);
    /** @type {import('~/bridge/scripts/writes.js').CreatePlan[]} The checked plan of each create entry. */
@@ -292,7 +273,6 @@ export async function batchDocuments({ creates = [], updates = [], deletes = [],
    /** @type {object[]} The documents to delete. */
    const deleted = deletes.length === 0 ? [] : await prepareDeletes(deletes, actAsUser, dryRun);
    checkConflicts(updatePlans, deleted);
-   checkTouched(named + updatePlans.reduce((sum, plan) => sum + updatedDocuments(plan).length, 0));
    /** @type {BatchOperation[]} The operations to send. */
    const operations = buildOperations(createPlans, updatePlans, deleted);
    if (dryRun) {

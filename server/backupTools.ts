@@ -10,18 +10,17 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
    BACKUP_BUSY,
+   BACKUP_BYTES_GUIDELINE,
+   BACKUP_DOCUMENTS_GUIDELINE,
    BACKUP_INCOMPLETE,
-   BACKUP_MAX_BYTES,
-   BACKUP_MAX_DOCUMENTS,
+   BACKUP_NOTE_GUIDELINE_BYTES,
+   BACKUP_NOTE_MAX_JSON_BYTES,
    BACKUP_TIMEOUT_DEFAULT_MS,
-   BACKUP_TIMEOUT_MAX_MS,
-   BACKUP_TIMEOUT_MIN_MS,
-   BACKUP_TOO_LARGE,
-   BACKUP_UUIDS_MAX,
+   BACKUP_TIMEOUT_GUIDELINE_MS,
+   BACKUP_UUIDS_GUIDELINE,
    BACKUP_WRITE_FAILED,
-   HEADER_LINE_BYTES,
    LIST_LIMIT_DEFAULT,
-   LIST_LIMIT_MAX,
+   LIST_LIMIT_GUIDELINE,
    LIST_NOTE_MAX_BYTES,
    BACKUP_PIECE_MAX_BYTES,
    RESTORE_ROWS_MAX,
@@ -51,6 +50,7 @@ import {
 } from './endpoints.ts';
 import type { IncomingPiece, OutgoingPiece, PieceSink } from './foundryBridge.ts';
 import { describeCause } from './logText.ts';
+import { createLogThrottle } from './logThrottle.ts';
 import type { ToolRegistration } from './mcp.ts';
 import { truncateUtf8 } from './utf8.ts';
 
@@ -119,15 +119,16 @@ interface DeleteArgs {
 // time-limit failure arrives before the sidecar gives up.
 const REPLY_GRACE_MS: number = 2000;
 
+// The longest delay a timer holds: Node and browsers store it as a signed 32-bit integer of milliseconds, and a longer
+// one fires at once (Node `setTimeout` docs; MDN, "setTimeout(): Maximum delay value").
+const TIMER_DELAY_MAX_MS: number = 2 ** 31 - 1;
+
+// The largest `timeoutMs` of a backup or restore call: the sidecar's reply timer runs `timeoutMs` + `REPLY_GRACE_MS`,
+// which must still fit a timer. The smallest is 1 ms: a time limit of 0 or less has passed before the call starts.
+const TIMEOUT_MAX_MS: number = TIMER_DELAY_MAX_MS - REPLY_GRACE_MS;
+
 // Longest string a restore result may carry in a field or after the uuid of a row, in UTF-8 bytes.
 const RESTORE_STRING_MAX_BYTES: number = 256;
-
-// Most UTF-16 code units in one entry of a `uuids` argument.
-const UUID_ARG_MAX_CHARS: number = 256;
-
-// Longest uuid a restore row may carry, in UTF-8 bytes: a skipped row echoes an asked uuid, and one UTF-16 code unit
-// takes at most 3 UTF-8 bytes (a surrogate pair takes 4 for 2 units).
-const RESTORE_UUID_MAX_BYTES: number = UUID_ARG_MAX_CHARS * 3;
 
 // The count fields of a restore result; the client restore always sends each.
 const RESTORE_COUNT_KEYS: readonly string[] = [
@@ -144,6 +145,12 @@ const RESTORE_DIFFERENCES_MAX: number = 3;
 
 // The newline byte that ends every document line of a backup.
 const NEWLINE: number = 0x0a;
+
+// Length in milliseconds of one window of the guideline-warning log throttle.
+const GUIDELINE_LOG_WINDOW_MS: number = 60_000;
+
+// Most guideline-warning lines written per window; later lines in the window are counted in one summary line.
+const GUIDELINE_LOG_LIMIT: number = 10;
 
 // The refusal of a backup call that names no selector or more than one.
 const SELECTOR_MESSAGE: string = 'Give exactly one of uuids, folderUuid, documentName or pack.';
@@ -253,7 +260,7 @@ function fitRows(result: object, maxBytes: number): object {
 
 /**
  * Fit a `list_backups` result to a byte budget by dropping rows from the end.
- * @param {object} result - The listing `{ folder, rows, total, invalid? }`.
+ * @param {object} result - The listing `{ folder, rows, total, invalid?, unread? }`.
  * @param {number} maxBytes - The JSON size limit in UTF-8 bytes.
  * @returns {object} The result, with fewer rows and `cut: true` when any was dropped.
  */
@@ -272,10 +279,9 @@ export function fitRestoreResult(result: object, maxBytes: number): object {
 }
 
 /**
- * Create the sink of one backup stream. Data pieces must arrive with `seq` 0, 1, 2, …; the received bytes plus the
- * header line must stay within `BACKUP_MAX_BYTES`; the end marker must name the data piece count and byte total and
- * follow a newline, so the file holds only complete document lines. The first failure is kept, refuses every later
- * piece, and is what `failure()` returns.
+ * Create the sink of one backup stream. Data pieces must arrive with `seq` 0, 1, 2, …; the end marker must name the
+ * data piece count and byte total and follow a newline, so the file holds only complete document lines. The first
+ * failure is kept, refuses every later piece, and is what `failure()` returns.
  * @param {() => Promise<BackupFileWriter>} openWriter - Creates the backup file; runs on the first data piece.
  * @returns {BackupSink} The sink.
  */
@@ -329,9 +335,6 @@ export function createBackupSink(openWriter: () => Promise<BackupFileWriter>): B
          }
          // The data piece; the bridge gives every data piece its bytes.
          const data: Buffer = piece.data as Buffer;
-         if (HEADER_LINE_BYTES + bytes + data.length > BACKUP_MAX_BYTES) {
-            fail(new BridgeError(BACKUP_TOO_LARGE, `The backup would exceed ${BACKUP_MAX_BYTES} bytes.`));
-         }
          try {
             writer ??= await openWriter();
             writer.append(data);
@@ -407,15 +410,16 @@ function isShortStringArray(value: unknown, min: number, max: number): value is 
 }
 
 /**
- * Check that a value is a restore row `[uuid, state, reason?]`: a uuid of at most `RESTORE_UUID_MAX_BYTES` bytes, then
- * one or two strings of at most `RESTORE_STRING_MAX_BYTES` bytes.
+ * Check that a value is a restore row `[uuid, state, reason?]`: a uuid string, then one or two strings of at most
+ * `RESTORE_STRING_MAX_BYTES` bytes. The uuid has no length bound: no tool caps the length of a uuid (a skipped row
+ * echoes an asked uuid, the others carry the uuid of a backed-up document, whose pack id may be of any length), and the
+ * Socket.IO message bound (`maxHttpBufferSize`, 1,000,000 bytes) bounds the whole result the client sends.
  * @param {unknown} value - The untrusted value.
  * @returns {boolean} Whether it is such a row.
  */
 function isRestoreRow(value: unknown): boolean {
    return Array.isArray(value)
       && typeof value[0] === 'string'
-      && utf8Bytes(value[0]) <= RESTORE_UUID_MAX_BYTES
       && isShortStringArray(value.slice(1), 1, 2);
 }
 
@@ -474,6 +478,41 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
    const now: () => number = deps.now ?? Date.now;
    // Whether a backup or restore is running.
    let busy: boolean = false;
+   // Writes a guideline warning subject to the per-window limit, with one summary line per window; a caller can repeat
+   // an over-guideline call without bound.
+   const logGuideline: (line: string) => void = createLogThrottle({
+      log,
+      now,
+      limit: GUIDELINE_LOG_LIMIT,
+      windowMs: GUIDELINE_LOG_WINDOW_MS,
+      noun: 'backup guideline warnings',
+   });
+
+   /**
+    * Log one warning line when a measure of a call is over its guideline (at most `GUIDELINE_LOG_LIMIT` per minute,
+    * then one summary line); nothing is refused.
+    * @param {string} tool - The tool's name.
+    * @param {string} measure - What was measured.
+    * @param {number} value - The measured value.
+    * @param {number} guideline - The guideline value.
+    * @returns {void}
+    */
+   function warnPast(tool: string, measure: string, value: number, guideline: number): void {
+      if (value > guideline) {
+         logGuideline(`Wiretap sidecar | ${tool} warning: ${measure} ${value} is over the ${guideline} guideline`);
+      }
+   }
+
+   /**
+    * Log the warnings for the arguments a backup or restore call shares: its uuid count and its time limit.
+    * @param {string} tool - The tool's name.
+    * @param {{ uuids?: string[], timeoutMs?: number }} args - The validated arguments.
+    * @returns {void}
+    */
+   function warnSharedArgs(tool: string, args: { uuids?: string[]; timeoutMs?: number }): void {
+      warnPast(tool, 'uuids', args.uuids?.length ?? 0, BACKUP_UUIDS_GUIDELINE);
+      warnPast(tool, 'timeoutMs', args.timeoutMs ?? BACKUP_TIMEOUT_DEFAULT_MS, BACKUP_TIMEOUT_GUIDELINE_MS);
+   }
 
    /**
     * Refuse a call while a backup or restore runs.
@@ -541,9 +580,15 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
          throw new BridgeError('ARGS_INVALID', SELECTOR_MESSAGE);
       }
       if (args.note !== undefined && !isBackupNote(args.note)) {
-         throw new BridgeError('ARGS_INVALID', 'note must be at most 200 bytes with no control characters.');
+         throw new BridgeError(
+            'ARGS_INVALID',
+            `note must have no control characters and take at most ${BACKUP_NOTE_MAX_JSON_BYTES} bytes in the backup `
+               + 'header.',
+         );
       }
       refuseWhileBusy();
+      warnSharedArgs('backup_documents', args);
+      warnPast('backup_documents', 'note bytes', utf8Bytes(args.note ?? ''), BACKUP_NOTE_GUIDELINE_BYTES);
       busy = true;
       try {
          return await runBackup(args, routing);
@@ -622,6 +667,17 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
    }
 
    /**
+    * Log the warnings for a backup's size: its document count and its file bytes.
+    * @param {number} documents - The documents in the backup.
+    * @param {number} bytes - The file bytes, header included.
+    * @returns {void}
+    */
+   function warnSize(documents: number, bytes: number): void {
+      warnPast('backup_documents', 'documents', documents, BACKUP_DOCUMENTS_GUIDELINE);
+      warnPast('backup_documents', 'bytes', bytes, BACKUP_BYTES_GUIDELINE);
+   }
+
+   /**
     * Build a dry run's result from the client's measurement.
     * @param {unknown} value - The untrusted client result.
     * @param {ResolvedFolder['kind']} kind - The folder kind.
@@ -636,6 +692,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
       if (!isCount(documents) || !isCount(bytes) || !isCount(unreadable) || !isCount(parents)) {
          throw mismatch();
       }
+      warnSize(documents, bytes);
       return {
          dryRun: true,
          folder: kind,
@@ -653,8 +710,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
     * @param {string} note - The caller's note.
     * @param {ResolvedFolder['kind']} kind - The folder kind.
     * @returns {object} `{ file, folder, documents, bytes }` plus `unreadable` and `parents` when above 0.
-    * @throws {BridgeError} `BACKUP_INCOMPLETE` on a mismatch; `BACKUP_TOO_LARGE` over `BACKUP_MAX_DOCUMENTS`;
-    *         `BACKUP_WRITE_FAILED` when the header cannot be written.
+    * @throws {BridgeError} `BACKUP_INCOMPLETE` on a mismatch; `BACKUP_WRITE_FAILED` when the header cannot be written.
     */
    function finishBackup(value: unknown, sink: BackupSink, note: string, kind: ResolvedFolder['kind']): object {
       // What the sink accepted.
@@ -685,10 +741,6 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
       ) {
          throw mismatch();
       }
-      // `parseHeaderLine` refuses a header over the limit, so such a file could not be opened, restored or recycled.
-      if (documents > BACKUP_MAX_DOCUMENTS) {
-         throw new BridgeError(BACKUP_TOO_LARGE, `The backup would exceed ${BACKUP_MAX_DOCUMENTS} documents.`);
-      }
       // The checked world description.
       const checked: WorldDescription = world as unknown as WorldDescription;
       // The header as written.
@@ -700,6 +752,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
          note,
          documents,
       });
+      warnSize(documents, header.bytes);
       return {
          file: writer.file,
          folder: kind,
@@ -761,6 +814,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
     */
    async function restoreBackup(args: RestoreArgs, routing: InvokeOptions): Promise<CallToolResult> {
       refuseWhileBusy();
+      warnSharedArgs('restore_backup', args);
       busy = true;
       // The client's time limit.
       const timeoutMs: number = args.timeoutMs ?? BACKUP_TIMEOUT_DEFAULT_MS;
@@ -783,6 +837,8 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
                const folder: ResolvedFolder = chooseFolder(store, args.folder, endpoint.gateState, endpoint.settings);
                store.checkFolder(folder, false);
                reader = store.openFile(folder, args.file);
+               warnPast('restore_backup', 'documents', reader.header.documents, BACKUP_DOCUMENTS_GUIDELINE);
+               warnPast('restore_backup', 'bytes', reader.header.bytes, BACKUP_BYTES_GUIDELINE);
                target = {
                   socketId: endpoint.socketId,
                   requestId,
@@ -848,8 +904,11 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
    async function listBackups(args: ListArgs, routing: InvokeOptions): Promise<CallToolResult> {
       // The folder; `store.list` checks it.
       const folder: ResolvedFolder = sidecarFolder(routing, args.folder);
+      // The rows asked for.
+      const limit: number = args.limit ?? LIST_LIMIT_DEFAULT;
+      warnPast('list_backups', 'limit', limit, LIST_LIMIT_GUIDELINE);
       // The folder's backups, newest first, with full notes.
-      const { rows, total, invalid }: BackupListing = store.list(folder, args.limit ?? LIST_LIMIT_DEFAULT);
+      const { rows, total, invalid, unread }: BackupListing = store.list(folder, limit);
       return jsonResult(fitListResult({
          folder: folder.kind,
          rows: rows.map(([file, created, documents, note]) => [
@@ -860,6 +919,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
          ]),
          total,
          ...(invalid > 0 ? { invalid } : {}),
+         ...(unread > 0 ? { unread } : {}),
       }, getBudget('BACKUP_LIST_MAX_BYTES').value));
    }
 
@@ -896,14 +956,13 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
       const timeoutArg: z.ZodOptional<z.ZodNumber> = z
          .number()
          .int()
-         .min(BACKUP_TIMEOUT_MIN_MS)
-         .max(BACKUP_TIMEOUT_MAX_MS)
+         .min(1)
+         .max(TIMEOUT_MAX_MS)
          .optional();
       // The shared `uuids` argument.
       const uuidsArg: z.ZodOptional<z.ZodArray<z.ZodString>> = z
-         .array(z.string().max(UUID_ARG_MAX_CHARS))
+         .array(z.string())
          .min(1)
-         .max(BACKUP_UUIDS_MAX)
          .optional();
       return [
          {
@@ -912,11 +971,11 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
                + 'file. Use or offer before bulk or risky changes.',
             inputSchema: {
                uuids: uuidsArg,
-               folderUuid: z.string().max(256).optional(),
+               folderUuid: z.string().optional(),
                documentName: z.string().max(32).optional(),
-               pack: z.string().max(128).optional(),
+               pack: z.string().optional(),
                folder: folderArg,
-               note: z.string().optional().describe('Short note, at most 200 bytes.'),
+               note: z.string().optional().describe('Short note.'),
                dryRun: z.boolean().optional().describe('Measure only.'),
                timeoutMs: timeoutArg,
             },
@@ -928,7 +987,7 @@ export function createBackupTools(deps: BackupToolsDeps): (endpoint: EndpointKin
             description: 'List the backup files of a folder, newest first, as [file, created, documents, note] rows.',
             inputSchema: {
                folder: folderArg,
-               limit: z.number().int().min(1).max(LIST_LIMIT_MAX).optional(),
+               limit: z.number().int().min(1).optional(),
             },
             handler: (args: ListArgs) => listBackups(args, routing),
             budgetBytes: getBudget('BACKUP_LIST_MAX_BYTES').value,

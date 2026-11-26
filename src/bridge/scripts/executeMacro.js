@@ -9,6 +9,7 @@ import { cleanForLog, describeCause } from '$shared/logText.js';
 import { utf8Bytes } from '$shared/utf8.js';
 import { RESULT_WIRE_MAX_BYTES } from '~/bridge/scripts/callTool.js';
 import { resolveDocument } from '~/bridge/scripts/canonical.js';
+import { MACRO_TIMEOUT_GUIDELINE_MS } from '~/bridge/scripts/macroDefinitions.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 
 /**
@@ -155,14 +156,20 @@ function shapeValue(type, value) {
 /**
  * Run the macro and return its value.
  * @param {{ uuid: string, actorUuid?: string, tokenUuid?: string, timeoutMs?: number }} args - The validated
- * arguments; `timeoutMs` is the `callTool` dispatcher's time limit, not read here.
- * @param {import('~/bridge/scripts/ctx.js').ScriptContext} ctx - The call context (unused: the macro runs with
- * Foundry's own context).
+ * arguments; `timeoutMs` is the `callTool` dispatcher's time limit, read here only for the guideline warning.
+ * @param {import('~/bridge/scripts/ctx.js').ScriptContext} ctx - The call context; its `log` takes the warning (the
+ * macro runs with Foundry's own context).
  * @returns {Promise<MacroResult>} The macro's type and value.
  * @throws {ScriptError} `DOC_NOT_FOUND` or `ARGS_INVALID` before the macro runs; `MACRO_FAILED` when it does not
  * compile or throws.
  */
 export async function executeMacroHandler(args, ctx) {
+   if (args.timeoutMs !== undefined && args.timeoutMs > MACRO_TIMEOUT_GUIDELINE_MS) {
+      ctx.log(
+         `Wiretap | execute_macro warning: timeoutMs ${args.timeoutMs} is over the ${MACRO_TIMEOUT_GUIDELINE_MS} ` +
+            'guideline',
+      );
+   }
    /** @type {{ type: string, execute: Function }} The Macro document to run. */
    const macro = await resolveAs('uuid', args.uuid, 'Macro', 'a');
    /** @type {boolean} Whether the caller names the actor or the token the macro acts on. */

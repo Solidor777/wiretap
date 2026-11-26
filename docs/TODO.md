@@ -11,7 +11,6 @@
 
 ## AI bridge roadmap (terminal-relay design)
 
-- [ ] #3 terminal UX polish (theme dropdown ✓, popout-takeover + 4:3 default ✓, sidecar launcher + offline panel ✓, toolbar [clear/copy/font/restart] + persisted font size ✓; remaining: scrollback tuning)
 - [ ] (optional/future) structured chat UI — only viable via headless/programmatic mode
       (Agent SDK / `claude -p`), which draws on the $200/mo Agent SDK credit + Commercial Terms
 - [x] dedicated Foundry MCP server for the user's `claude` to call — vertical slice: one create tool (now `create_documents`)
@@ -54,7 +53,7 @@
 
 - [ ] Result-handle eviction is global across owners: handles are owned per MCP session, but the LRU count and byte
       limits are shared, so one session's puts can evict another session's handles (the evicted owner then gets
-      `HANDLE_NOT_FOUND`). Decide on per-owner quotas or a fairness rule
+      `HANDLE_NOT_FOUND`, whose text names the bounds, and the sidecar logs each eviction). Decide on per-owner quotas or a fairness rule
 - [ ] A `read_handle` `paths` read parses the whole stored text again on every call (nothing cached). Measured: ~185 ms
       worst case for 7.7 MB of small objects, of which parsing is 26 to 55 ms and path resolution 153 to 170 ms, so a
       parsed-document cache would not bring it under 150 ms; make `resolvePaths` cheaper for wildcard reads over large
@@ -71,9 +70,8 @@
       `create_documents`, keeps the MCP default `destructiveHint: true`. That is right for `delete_documents`,
       `replace_document` and `batch`; adding a definition field (shared contract, both validators, registry signature)
       would let `create_documents` say false
-- [ ] Plugin and agent-saved script routes: `validateScriptDefinition` already applies the 64-character
-      `<moduleId>__<skill>` and `agent__<name>` rules but refuses both sources as not supported until their routes exist
-      (docs/PLAN.md M7, M16)
+- [ ] Agent-saved script route: `validateScriptDefinition` already applies the 50-character `agent__<name>` rule but
+      refuses the `agent` source as not supported until its route exists (docs/PLAN.md M16)
 - [ ] Point `WIRETAP_INSTRUCTIONS` (`server/mcp.ts`, a sidecar file) at the user-facing skill `skills/wiretap/SKILL.md`
       when that is judged right: one sentence within `INSTRUCTIONS_MAX_CHARS` (600; the current text leaves room to
       check against the constant), and the cost is paid by every session at start (the 531-character text measured about
@@ -86,11 +84,12 @@
 - [ ] The executing client's own gate check is covered by unit tests only: through the sidecar a closed gate is denied
       by the sidecar's snapshot before anything is sent (e2e `scripts.spec.js` shows that path). An e2e that reaches the
       client check needs a way to hold the sidecar's snapshot stale, for example a test-only observer command
-- [ ] Compact view: the per-subtype key-field lists (`src/bridge/scripts/keyFields.json`) exist for the `titan` system
-      only; a document of any other system is shown with the default key-name pattern of `ctx.shape`. Generate and review
-      lists for other systems with `tests/e2e/keyFields.measure.spec.js` (it reads the live world; run it per system), or
-      derive them at run time by the same rules. With 16-character ids and 18-character names 40 tuples do not fit the
-      2 KB budget (35 fit in the fixture, asserted by `tests/unit/scriptShape.test.js`), so the byte budget trims them
+- [ ] Right after M7: built and shipped code references no game system (owner). The titan per-subtype key-field lists
+      in `src/bridge/scripts/keyFields.json` leave Wiretap; the compact view uses only the generic key-name rule of
+      `ctx.shape`. The lists move to the add-on module `wiretap-titan-vttrpg` (folder `Data/modules/wiretap-titan-vttrpg`,
+      repo `https://github.com/Solidor777/wiretap-titan-vttrpg.git`), which depends on Wiretap; how an add-on supplies
+      key fields is decided when that module is built, after Wiretap is done. Test machinery may keep using the titan
+      install (the `test-titan` e2e world, titan-like unit fixtures). Walk through the code changes with the owner first.
 - [ ] owner: decide whether non-core Settings are readable at all. Today every Setting outside the `wiretap.` namespace
       and the credential denylist is returned with secret-named keys dropped from its value (docs/PLAN.md section 4.4),
       so another module's setting that stores a secret under a name the pattern does not match is exposed. Options: a
@@ -143,6 +142,25 @@
       beforeAll/afterAll); `global-setup` only builds the bundle. Also rewrote 2 stale `terminal.spec` pop-out
       tests that asserted the pre-popout-takeover fan-out behavior (now assert takeover + return-on-close, via
       a new `closePopout` probe). FULL `npm run test:e2e` now GREEN — 3/3 runs (11/11) under Node 22.
+
+## After M7: ideas from the foundry-vtt-mcp survey
+
+Accepted by the owner; each needs a design walkthrough when picked up. Survey:
+`C:\Users\emper\.claude\work\fvttmcp-survey\comparison-wiretap.md`. Every item stays system agnostic; game-system
+support goes in separate add-on modules that depend on Wiretap, after Wiretap is done.
+
+- [ ] Audit log of agent writes: one line per mutating call (time, tool, endpoint kind, uuids, changed paths, result
+      code), no document contents, readable by the GM. File growth is handled by moving a full file to the recycle bin
+      (no permanent delete).
+- [ ] One central guard on every `CONFIG.queries` handler Wiretap or a plugin registers, refusing a sender who is not a
+      GM, plus a test that lists every registered `wiretap.*` handler and asserts each refuses a non-GM (with a count
+      floor). foundry-vtt-mcp `packages/foundry-module/src/query-guard.ts` (MIT) may be adapted; keep its MIT notice.
+- [ ] Range comparisons and a sort path in `search_documents` filters, over any document path (system agnostic), within
+      the 800 B definition limit.
+- [ ] A condition toggle script through Foundry core `Actor#toggleStatusEffect` (`client/documents/actor.mjs:547`).
+      Item use is not in Foundry core, so it belongs in a system add-on, not Wiretap.
+- [ ] Low priority: a player roll-request chat card, chat spoken as a token with whispers that fail on an ambiguous
+      name, installers, and a Foundry hosted over HTTPS (M10).
 
 ## Deferred (later)
 

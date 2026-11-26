@@ -91,7 +91,7 @@ describe('pack tool definitions', () => {
          {
             label: 'Wiretap',
             type: 'Item',
-            name: 'a'.repeat(65),
+            name: '',
          },
          {
             label: 'Wiretap',
@@ -105,7 +105,7 @@ describe('pack tool definitions', () => {
       expect(create({
          label: 'a'.repeat(128),
          type: 'Item',
-         name: 'b'.repeat(64),
+         name: 'b'.repeat(1000),
          dryRun: true,
       }).ok).toBe(true);
 
@@ -113,7 +113,6 @@ describe('pack tool definitions', () => {
       const remove = validatorOf(deletePackDefinition);
       for (const refused of [
          { id: '' },
-         { id: 'a'.repeat(129) },
          {},
          {
             id: 'world.wiretap',
@@ -123,7 +122,7 @@ describe('pack tool definitions', () => {
          expect(remove(refused).ok).toBe(false);
       }
       expect(remove({
-         id: 'a'.repeat(128),
+         id: `world.${'a'.repeat(300)}`,
          dryRun: false,
       }).ok).toBe(true);
    });

@@ -299,3 +299,27 @@
 - **Verified:** three default-worker `npm test` runs passed (133 files, 2958 passed, 2 skipped each; the test took
   1,732, 1,990 and 1,544 ms; `debug/dumps/flaky-supervise-fixed-{1,2,3}.txt`). Measurements are in
   `.superpowers/sdd/2026-11-21-wiretap-m15a-plan/flaky-supervise-report.md`.
+
+## The `tools/list_changed` debounce scheduled a negative timer delay
+
+- **Was:** `createDebouncer().trigger` in `server/mcpSessions.ts` computed its delay as
+  `Math.min(quietMs, burstStart + maxWaitMs - current)`, which is negative for a trigger made after the maximum wait
+  had passed. Node clamps a negative delay to 1 ms and prints `TimeoutNegativeWarning`. Seen about 3 times in about 6
+  runs of the four session test files during M7; traced to that line.
+- **Fix:** the delay is `Math.max(0, Math.min(quietMs, burstStart + maxWaitMs - current))` (`d60adf1`), so a late
+  trigger is scheduled with a delay of 0 and the debouncer still holds at most one timer.
+- **Verified:** the new test "schedules a trigger made after the maximum wait has passed with a delay of zero"
+  (`tests/unit/mcpSessions.test.js`) failed before the fix (expected 0, received -100) and passes;
+  `tests/unit/mcpSessions.test.js` and `tests/integration/mcpSessions.test.js`: 61 passed. The controller then saw 0
+  `TimeoutNegativeWarning` lines in 4 runs of the four-file set (271 tests).
+
+## Two comments contradicted the code (registry push order, gate wording)
+
+- **Was:** the `sendRegistry` JSDoc in `src/bridge/foundryBridge.js` said plugin definitions are left out of an over-size
+  registry push "newest first", while `buildRegistryPayload` (`src/bridge/scripts/registryPayload.js`) leaves out the
+  largest listed definition first, the later registration first only among equal sizes. The `denyWiretapSettingWrite`
+  JSDoc in `shared/gates.js` said "no skill can change a gate"; the rule covers every Wiretap tool. Found in M7.
+- **Fix:** both comments state the code's behaviour.
+- **Verified:** both comments read against the code (`2657996`): the `sendRegistry` JSDoc says plugin definitions are
+  left out largest listed definition first, the later registration first among equal sizes, as
+  `buildRegistryPayload` does; the `denyWiretapSettingWrite` JSDoc says no Wiretap tool can change a gate.

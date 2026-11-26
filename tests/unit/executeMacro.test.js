@@ -163,8 +163,8 @@ describe('execute_macro definition', () => {
             tokenUuid: { type: 'string' },
             timeoutMs: {
                type: 'integer',
-               minimum: 1000,
-               maximum: 300_000,
+               minimum: 1,
+               maximum: 2 ** 31 - 1 - 2000,
             },
          },
          required: ['uuid'],
@@ -174,12 +174,12 @@ describe('execute_macro definition', () => {
 
    it.each([
       [
-         999,
-         'timeoutMs: must be at least 1000',
+         0,
+         'timeoutMs: must be at least 1',
       ],
       [
-         300_001,
-         'timeoutMs: must be at most 300000',
+         2 ** 31 - 1 - 1999,
+         'timeoutMs: must be at most 2147481647',
       ],
       [
          1500.5,
@@ -200,6 +200,32 @@ describe('execute_macro definition', () => {
       expect(error?.code).toBe('ARGS_INVALID');
       expect(error.message).toBe(message);
       expect(macro.execute).not.toHaveBeenCalled();
+   });
+
+   it('runs a macro with a timeoutMs past 300000, warning once, and does not warn at 300000', async () => {
+      /** @type {string[]} The registry's log lines. */
+      const logs = [];
+      const registry = createScriptRegistry({ log: (line) => logs.push(line) });
+      registry.register(executeMacroDefinition, executeMacroHandler);
+      const callTool = createCallTool({ registry });
+      gates.allowMacroExecution = true;
+      await callTool({
+         name: 'execute_macro',
+         arguments: {
+            uuid,
+            timeoutMs: 300_000,
+         },
+      });
+      expect(logs).toEqual([]);
+      await callTool({
+         name: 'execute_macro',
+         arguments: {
+            uuid,
+            timeoutMs: 300_001,
+         },
+      });
+      expect(macro.execute).toHaveBeenCalledTimes(2);
+      expect(logs).toEqual(['Wiretap | execute_macro warning: timeoutMs 300001 is over the 300000 guideline']);
    });
 });
 

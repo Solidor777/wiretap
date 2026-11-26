@@ -9,20 +9,26 @@
  * Fields:
  *
  * `name`: the MCP tool name. Shipped scripts: 1 to 32 characters (`CORE_TOOL_NAME_MAX_CHARS`) of `a-z`, `0-9`, `_`
- * and `-`, starting with a letter. Plugin scripts: `<moduleId>__<skill>`, at most 64 characters
- * (`PLUGIN_TOOL_NAME_MAX_CHARS`). Agent-saved scripts: `agent__<name>`, at most 64 characters. The names in
- * `RESERVED_SCRIPT_NAMES` and the names of `Object.prototype` members are refused.
+ * and `-`, starting with a letter, and never holding `__`, which marks plugin and agent names. Plugin scripts:
+ * `<moduleId>__<tool>`, where `<tool>` uses `A-Z`, `a-z`, `0-9`, `_` and `-` (the alphabet of a module id), at most
+ * 50 characters in all (`PLUGIN_TOOL_NAME_MAX_CHARS`), which also bounds the module id: Claude Code lists each tool as
+ * `mcp__wiretap__<name>` and the Anthropic API refuses tool names over 64 characters. Agent-saved scripts:
+ * `agent__<name>`, at most 50 characters for the same reason. The names in `RESERVED_SCRIPT_NAMES` and the names of
+ * `Object.prototype` members are refused.
  *
- * `version`: a semver-like string (`MAJOR.MINOR.PATCH`, optional `-prerelease` and `+build`), at most 32 characters
- * (`SCRIPT_VERSION_MAX_CHARS`).
+ * `version`: a non-empty string. Semver-like (`MAJOR.MINOR.PATCH`, optional `-prerelease` and `+build`) and at most 32
+ * characters (`SCRIPT_VERSION_MAX_CHARS`) are best practices: a shipped script is refused past either, a plugin script
+ * is accepted with one warning per best practice it passes.
  *
- * `description`: one line, 1 to 240 characters (`DESCRIPTION_MAX_CHARS`); over 160 (`DESCRIPTION_TARGET_CHARS`) is
- * accepted with a warning.
+ * `description`: one non-empty line. Over 160 characters (`DESCRIPTION_TARGET_CHARS`) is accepted with a warning;
+ * over 240 (`DESCRIPTION_MAX_CHARS`) is refused for shipped and agent scripts and accepted with a warning for plugin
+ * scripts.
  *
  * `inputSchema`: a JSON Schema object. The sidecar further restricts it to a documented subset when it converts it
  * (see `server/toolRegistry.ts`).
  *
- * `result.budgetBytes`: the script's own result budget, an integer from 1 to `RESULT_HARD_CAP_MAX_BYTES`.
+ * `result.budgetBytes`: the script's own result budget, a positive integer. Shipped and agent scripts are refused over
+ * `RESULT_HARD_CAP_MAX_BYTES`; a plugin script's larger budget is clamped to it with a warning.
  *
  * `requires`: where the script can run. `'api'`: any client endpoint. `'dom'`: only an endpoint that renders and
  * measures (`dom: true`), the agent endpoint by default. `'none'`: the sidecar itself; a client cannot register it.
@@ -34,19 +40,27 @@
  * `gate`: optional risk gate (a name in `GATES`) that must be open on the executing endpoint.
  * `allowedPluginModules` is not a script gate.
  *
- * `handleArgs`: optional list of 1 to 4 argument names (`HANDLE_ARGS_MAX`) whose text, or whose list of texts, may be
- * given as a reference to a stored result (`handle:<id>`) instead of inline. The sidecar replaces the reference with
+ * `handleArgs`: optional list of at least one argument name whose text, or whose list of texts, may be given as a
+ * reference to a stored result (`handle:<id>`) instead of inline. More than 4 names (`HANDLE_ARGS_MAX`) is refused for
+ * shipped scripts and accepted with a warning for plugin scripts. The sidecar replaces the reference with
  * the text the session's handle holds before it sends the call to the client (`server/handleInput.ts`). Each name must
  * be a declared argument of type `string`, or an array of `string`. It is not part of the listed definition.
  *
- * `moduleId`: the owning module id of a plugin script (required for that source, refused for the others).
+ * `moduleId`: the owning module id of a plugin script (required for that source, refused for the others): one or more
+ * letters of either case, digits, `_` and `-`, as Foundry accepts (`isModuleId` of `shared/gates.js`), matched exactly.
  *
  * `requiresUserInteraction`: optional, only `true`. The sidecar lists the tool with
  * `_meta[USER_INTERACTION_META_KEY]: true`, which asks the MCP client to prompt the human before every call. The
  * sidecar also sets it for every name in `USER_INTERACTION_TOOLS`, whatever the definition says. It is not part of the
  * definition size.
  *
- * The total of `{name, description, inputSchema}` serialized is held to `DEFINITION_MAX_BYTES`.
+ * The total of `{name, description, inputSchema}` serialized is held to `DEFINITION_MAX_BYTES` for shipped and agent
+ * scripts. A plugin script's size is a guideline: the listed form is measured where it is listed, with a warning.
+ *
+ * Best-practice limits (definition size, description length, result budget, version form and length, `handleArgs`
+ * count and the schema guidelines of `shared/schemaValidate.js`) refuse a shipped script, so Wiretap's own tools are
+ * held to them, and only warn for a plugin script. Every other rule is needed for the tool to work and refuses every
+ * source, with a reason that says what to change.
  *
  * The `source` of a script ('shipped', 'plugin' or 'agent') is not a field of the definition: it is implied by the
  * route the definition registered through, and the caller passes it to the validator.
@@ -68,8 +82,8 @@ import { CONTROL_PATTERN } from './logText.js';
 /**
  * @typedef {object} ScriptDefinition
  * @property {string} name - The MCP tool name.
- * @property {string} version - A semver-like version string, at most 32 characters.
- * @property {string} description - One line, at most 240 characters.
+ * @property {string} version - A semver-like version string; over 32 characters only for a plugin script.
+ * @property {string} description - One non-empty line; at most 240 characters except for a plugin script.
  * @property {object} inputSchema - A JSON Schema object describing the arguments.
  * @property {{ budgetBytes: number }} result - The result limits; `budgetBytes` is the script's own result budget.
  * @property {ScriptRequires} requires - Where the script runs.
@@ -96,7 +110,7 @@ import { CONTROL_PATTERN } from './logText.js';
  */
 
 /**
- * The most argument names a definition may list in `handleArgs`.
+ * The most argument names a shipped definition may list in `handleArgs`; a plugin definition past it is warned.
  * @type {number}
  */
 export const HANDLE_ARGS_MAX = 4;
@@ -153,22 +167,32 @@ export const USER_INTERACTION_META_KEY = 'anthropic/requiresUserInteraction';
 export const USER_INTERACTION_TOOLS = Object.freeze(['delete_pack']);
 
 /**
- * A shipped or agent tool name: lowercase letters, digits, `_` and `-`, starting with a letter.
+ * A shipped or agent tool name: lowercase letters, digits, `_` and `-`, starting with a letter. A shipped name is
+ * further refused when it holds `NAME_SEPARATOR`.
  * @type {RegExp}
  */
 const CORE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
 
 /**
- * A plugin tool name: as a core name, but it may start with a digit because a module id can.
+ * A plugin tool name: letters of either case, digits, `_` and `-` in any position, the alphabet of a Foundry module id,
+ * so every plugin name is also a valid Claude tool name (`^[a-zA-Z0-9_-]{1,64}$`) once Claude Code prefixes it.
  * @type {RegExp}
  */
-const PLUGIN_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+export const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /**
- * The separator between the owner and the skill in plugin and agent tool names.
+ * The separator between the owner and the tool in plugin and agent tool names; a shipped name may not hold it, so a
+ * registry entry without a `moduleId` cannot take a plugin tool's name and escape the plugin gate.
  * @type {string}
  */
 const NAME_SEPARATOR = '__';
+
+/**
+ * The prefix Claude Code puts before each Wiretap tool name when it lists the tool to the model; it counts toward the
+ * API's tool-name limit.
+ * @type {string}
+ */
+const CLIENT_TOOL_PREFIX = 'mcp__wiretap__';
 
 /**
  * The name prefix of an agent-saved script.
@@ -229,20 +253,30 @@ function refuse(reason) {
 function nameProblem(name, source, moduleId) {
    /** @type {number} The longest name this source may have. */
    const max = getBudget(source === 'shipped' ? 'CORE_TOOL_NAME_MAX_CHARS' : 'PLUGIN_TOOL_NAME_MAX_CHARS').value;
-   /** @type {RegExp} The charset this source's names follow. */
-   const pattern = source === 'plugin' ? PLUGIN_NAME_PATTERN : CORE_NAME_PATTERN;
-   if (typeof name !== 'string' || name.length > max || !pattern.test(name)) {
-      return `name must be 1 to ${max} characters of a-z, 0-9, _ or -, starting with a ${
-         source === 'plugin' ? 'letter or digit' : 'letter'
-      }`;
+   if (source === 'plugin') {
+      /** @type {string} The prefix a plugin name starts with. */
+      const pluginPrefix = `${moduleId}${NAME_SEPARATOR}`;
+      if (
+         typeof name !== 'string' ||
+         !PLUGIN_NAME_PATTERN.test(name) ||
+         !name.startsWith(pluginPrefix) ||
+         name.length === pluginPrefix.length
+      ) {
+         return `name must be <moduleId>${NAME_SEPARATOR}<tool>, where <tool> uses only A-Z, a-z, 0-9, _ and -`;
+      }
+   } else if (typeof name !== 'string' || name.length > max || !CORE_NAME_PATTERN.test(name)) {
+      return `name must be 1 to ${max} characters of a-z, 0-9, _ or -, starting with a letter`;
+   } else if (source === 'shipped' && name.includes(NAME_SEPARATOR)) {
+      return `a shipped tool name may not contain "${NAME_SEPARATOR}"; that form is <moduleId>${NAME_SEPARATOR}<tool> `
+         + 'for plugin tools';
    }
    if (RESERVED_SCRIPT_NAMES.includes(name) || name in Object.prototype) {
       return 'name is reserved';
    }
-   /** @type {string} The prefix a plugin name starts with. */
-   const pluginPrefix = `${moduleId}${NAME_SEPARATOR}`;
-   if (source === 'plugin' && !(name.startsWith(pluginPrefix) && name.length > pluginPrefix.length)) {
-      return `name must be <moduleId>${NAME_SEPARATOR}<skill>`;
+   if (source === 'plugin' && name.length > max) {
+      return `name is ${name.length} characters; Claude Code lists it as ${CLIENT_TOOL_PREFIX}<name> and the API `
+         + `accepts at most ${max + CLIENT_TOOL_PREFIX.length}, so <moduleId>${NAME_SEPARATOR}<tool> may be at most `
+         + `${max} characters`;
    }
    if (source === 'agent' && !(name.startsWith(AGENT_PREFIX) && name.length > AGENT_PREFIX.length)) {
       return `name must be ${AGENT_PREFIX}<name>`;
@@ -251,14 +285,24 @@ function nameProblem(name, source, moduleId) {
 }
 
 /**
- * Check the `handleArgs` of a definition against its argument schema.
+ * Check the `handleArgs` of a definition against its argument schema. The sidecar resolves each listed name on its
+ * own (`server/handleInput.ts`), so any number of names works; more than `HANDLE_ARGS_MAX` is a best practice that
+ * refuses a shipped script and is left to the caller's warning for a plugin script. An empty list, a repeated name or
+ * a name that is not a declared text argument cannot carry a handle and refuses every source.
  * @param {unknown} handleArgs - The untrusted list.
  * @param {Record<string, unknown>} inputSchema - The argument schema.
+ * @param {ScriptSource} source - The source the script registers as.
  * @returns {string | null} The reason the list is refused, or null when it is acceptable.
  */
-function handleArgsProblem(handleArgs, inputSchema) {
-   if (!Array.isArray(handleArgs) || handleArgs.length < 1 || handleArgs.length > HANDLE_ARGS_MAX) {
-      return `handleArgs must list 1 to ${HANDLE_ARGS_MAX} argument names`;
+function handleArgsProblem(handleArgs, inputSchema, source) {
+   if (
+      !Array.isArray(handleArgs) ||
+      handleArgs.length < 1 ||
+      (source !== 'plugin' && handleArgs.length > HANDLE_ARGS_MAX)
+   ) {
+      return source === 'plugin'
+         ? 'handleArgs must list at least one argument name'
+         : `handleArgs must list 1 to ${HANDLE_ARGS_MAX} argument names`;
    }
    /** @type {unknown} The declared properties. */
    const properties = ownValue(inputSchema, 'properties');
@@ -306,8 +350,10 @@ export function definitionBytes(name, description, inputSchema) {
 /**
  * Validate one script definition. Reads own properties only and copies the known fields, so nothing of the received
  * object is kept and a getter that throws or a field that cannot be serialized is a refusal, never an exception. Every
- * field is checked for every source; a valid plugin or agent definition is then refused because no route accepts those
- * sources yet.
+ * field is checked for every source. A plugin definition passes the best-practice limits with a warning: a version
+ * over 32 characters or not semver-like, a description over 240 characters, a result budget over the hard cap
+ * (clamped to the cap), more than 4 `handleArgs` names and a listed size over `DEFINITION_MAX_BYTES` (not measured
+ * here). A valid agent definition is refused because no route accepts it.
  * @param {unknown} input - The untrusted definition.
  * @param {ScriptSource} source - The source implied by the route the definition registered through.
  * @returns {ScriptOutcome} A fresh definition (and warnings) or the reason for the refusal.
@@ -345,7 +391,10 @@ export function validateScriptDefinition(input, source) {
       /** @type {unknown} The untrusted user-interaction flag. */
       const requiresUserInteraction = ownValue(input, 'requiresUserInteraction');
       if (source === 'plugin' && !isModuleId(moduleId)) {
-         return refuse('moduleId must be a module id for a plugin script');
+         return refuse(
+            'moduleId must be your module\'s id from module.json: one or more of A-Z, a-z, 0-9, _ and - '
+               + '(no dots or spaces)',
+         );
       }
       if (source !== 'plugin' && moduleId !== undefined) {
          return refuse('moduleId is only allowed on a plugin script');
@@ -355,15 +404,20 @@ export function validateScriptDefinition(input, source) {
       if (badName !== null) {
          return refuse(badName);
       }
+      /** @type {number} The longest version of a shipped script, and the length a plugin version is warned past. */
+      const versionMax = getBudget('SCRIPT_VERSION_MAX_CHARS').value;
+      // Only a non-empty string is needed to work: the sidecar compares the version as text in the tool's change
+      // signature and nothing parses it as semver. The semver-like form and the length are best practices that refuse a
+      // shipped script and only warn for a plugin script.
       if (
          typeof version !== 'string' ||
-         version.length > getBudget('SCRIPT_VERSION_MAX_CHARS').value ||
-         !VERSION_PATTERN.test(version)
+         version.length === 0 ||
+         (source !== 'plugin' && (version.length > versionMax || !VERSION_PATTERN.test(version)))
       ) {
          return refuse(
-            `version must be a semver-like string (for example 1.0.0) of at most ${
-               getBudget('SCRIPT_VERSION_MAX_CHARS').value
-            } characters`,
+            source === 'plugin'
+               ? 'version must be a non-empty string'
+               : `version must be a semver-like string (for example 1.0.0) of at most ${versionMax} characters`,
          );
       }
       /** @type {number} The longest accepted description. */
@@ -371,10 +425,14 @@ export function validateScriptDefinition(input, source) {
       if (
          typeof description !== 'string' ||
          description.length === 0 ||
-         description.length > descriptionMax ||
+         (source !== 'plugin' && description.length > descriptionMax) ||
          CONTROL_PATTERN.test(description)
       ) {
-         return refuse(`description must be 1 to ${descriptionMax} characters on one line`);
+         return refuse(
+            source === 'plugin'
+               ? 'description must be one line of text, not empty'
+               : `description must be 1 to ${descriptionMax} characters on one line`,
+         );
       }
       if (!isRecord(inputSchema)) {
          return refuse('inputSchema must be an object');
@@ -390,9 +448,13 @@ export function validateScriptDefinition(input, source) {
          typeof budgetBytes !== 'number' ||
          !Number.isInteger(budgetBytes) ||
          budgetBytes < 1 ||
-         budgetBytes > budgetMax
+         (source !== 'plugin' && budgetBytes > budgetMax)
       ) {
-         return refuse(`result.budgetBytes must be an integer from 1 to ${budgetMax}`);
+         return refuse(
+            source === 'plugin'
+               ? 'result.budgetBytes must be a positive integer'
+               : `result.budgetBytes must be an integer from 1 to ${budgetMax}`,
+         );
       }
       if (typeof requires !== 'string' || !SCRIPT_REQUIRES.includes(requires)) {
          return refuse(`requires must be one of ${SCRIPT_REQUIRES.join(', ')}`);
@@ -401,7 +463,7 @@ export function validateScriptDefinition(input, source) {
          return refuse('mutates must be declared as true or false');
       }
       /** @type {string | null} The reason `handleArgs` is refused, if it is. */
-      const badHandleArgs = handleArgs === undefined ? null : handleArgsProblem(handleArgs, inputSchema);
+      const badHandleArgs = handleArgs === undefined ? null : handleArgsProblem(handleArgs, inputSchema, source);
       if (badHandleArgs !== null) {
          return refuse(badHandleArgs);
       }
@@ -426,18 +488,34 @@ export function validateScriptDefinition(input, source) {
       }
       /** @type {number} The most bytes a definition may list. */
       const maxDefinition = getBudget('DEFINITION_MAX_BYTES').value;
-      if (bytes > maxDefinition) {
+      if (source !== 'plugin' && bytes > maxDefinition) {
          return refuse(`definition is ${bytes} bytes, at most ${maxDefinition} bytes`);
       }
-      if (source !== 'shipped') {
-         return refuse(`${source} scripts are not supported by this version of Wiretap`);
+      if (source === 'agent') {
+         return refuse('agent scripts are not supported by this version of Wiretap');
       }
-      /** @type {string[]} Non-fatal findings. */
+      /** @type {string[]} Non-fatal findings; the best-practice ones are reachable only by a plugin script. */
       const warnings = [];
+      if (version.length > versionMax) {
+         warnings.push(`version is ${version.length} characters, over the ${versionMax}-character best practice`);
+      }
+      if (!VERSION_PATTERN.test(version)) {
+         warnings.push('version is not semver-like (MAJOR.MINOR.PATCH, for example 1.0.0)');
+      }
       /** @type {number} The description length that draws a warning. */
       const target = getBudget('DESCRIPTION_TARGET_CHARS').value;
-      if (description.length > target) {
+      if (description.length > descriptionMax) {
+         warnings.push(
+            `description is ${description.length} characters, over the ${descriptionMax}-character guideline`,
+         );
+      } else if (description.length > target) {
          warnings.push(`description is ${description.length} characters, over the ${target}-character target`);
+      }
+      if (budgetBytes > budgetMax) {
+         warnings.push(`result.budgetBytes is ${budgetBytes}, over the ${budgetMax}-byte result cap; the cap applies`);
+      }
+      if (handleArgs !== undefined && handleArgs.length > HANDLE_ARGS_MAX) {
+         warnings.push(`handleArgs lists ${handleArgs.length} names, over the ${HANDLE_ARGS_MAX}-name best practice`);
       }
       /** @type {ScriptDefinition} The normalized copy. */
       const definition = {
@@ -445,9 +523,10 @@ export function validateScriptDefinition(input, source) {
          version,
          description,
          inputSchema,
-         result: { budgetBytes },
+         result: { budgetBytes: Math.min(budgetBytes, budgetMax) },
          requires,
          mutates,
+         ...(source === 'plugin' ? { moduleId } : {}),
          ...(gate === undefined ? {} : { gate }),
          ...(handleArgs === undefined ? {} : { handleArgs: [...handleArgs] }),
          ...(strictNested === undefined ? {} : { strictNested: true }),

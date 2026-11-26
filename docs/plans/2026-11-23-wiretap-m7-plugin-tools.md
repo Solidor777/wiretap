@@ -238,7 +238,39 @@ Inputs the design implies but does not spell out, most likely to bite first; eac
 | T10 author guide and tracking docs | `README.md`, `docs/PLAN.md`, `docs/PROGRESS.md`, `docs/TODO.md`, `docs/OPEN_BUGS.md` | none | T1-T9 | G7 docs | phase end | no |
 | T11 skills | `.claude/skills/**`, `.claude/CLAUDE.md` | none | T1-T9 | G7 docs | phase end | no |
 
-Waves: W1 T1, T2. W2 T3, T4, T8. W3 T5, T6, T7. W4 T9. W5 T10, T11. Run the full `npm test`, `npm run typecheck` and
+| T12 `__` refusal, module count removed, Foundry module ids, linear listing | `shared/scripts.js`, `shared/gates.js`, `server/endpoints.ts` (`tools()`), comments in `server/toolRegistry.ts` and `src/bridge/gates.js`, their tests | none | T3 | buddy check alone | on landing | yes |
+| T6 fix: the API's short-name errors | `src/bridge/pluginApi.js`, `src/hooks/OnceReady.js` (comment), `tests/unit/pluginApi.test.js` | none | T12 | buddy check T6 | on landing | yes |
+| T13 per-call limits: writes and reads | `shared/budgets.js`, `shared/docPath.js`, `src/bridge/scripts/{definitions,writes,writeArgs,writeBatch,writeCopy,writeIdempotency,search,shape}.js`, `server/handleInput.ts`, their tests | none | none | G8 limits | on landing | no |
+| T14 per-call limits: backups, macros, packs | `shared/backup.js`, `server/backupTools.ts`, `src/bridge/backup/**`, `src/bridge/scripts/{macroDefinitions,createPack}.js`, their tests | none | none | G8 limits | on landing | no |
+| T15 plugin-only refusals to warnings | `shared/scripts.js`, `server/resultBudget.ts` (images), their tests | none | T12, T13 | G8 limits | on landing | no |
+| T16 setup counts and the scrollback setting | `server/mcpSessions.ts`, `server/endpoints.ts`, `server/terminal.ts`, `src/bridge/TerminalConnection.svelte.js`, `src/settings/**`, `lang/en.json`, their tests | none | T12, T13 | G9 setup | on landing | ask |
+| T17 silent cuts: sidecar | `server/{handles,resultBudget,mcp,backups,foundryBridge,terminal}.ts`, their tests | none | T15, T16 | G10 notices | on landing | no |
+| T18 silent cuts: client | `shared/schemaValidate.js`, `shared/gates.js`, `shared/bridgeSettings.js`, `src/bridge/scripts/{shape,schemaWalk,schemaDescribe,canonical}.js`, their tests | none | T12, T13 | G10 notices | on landing | no |
+
+T12 to T18 follow the owner's decisions of 2026-11-24 (design, "No limits on the GM's choices"). Each task's results:
+
+- **T13:** remove, for Wiretap's write and read tools, the 50-documents-per-call count (create, update, delete,
+  copies, batch), the 200 update entries, the 200,000-byte data total per call, the 100,000-character bound on one
+  document's text and on a handle input, the 20 paths and 20 fields per call, the 100-result search page limit, the 5
+  search filters, the 64-byte search field path, the idempotency lookup's 20,000-document collection size, and the
+  other per-call argument lengths of these tools that bound use rather than protect (query, filter, cursor, ifChanged,
+  fromUuids entries, idempotencyKey). Protections stay (path bytes and segments, value depth and nodes, the 1 MB
+  message, the scan bounds that resume with a cursor). One warning line past each old value.
+- **T14:** remove the backup limits of 10,000 documents, 64,000,000 bytes and 200 uuids per call, the 1-300 s backup
+  and macro time ranges (the minimum stays only where a value below it cannot work), the backup list's 50 rows and the
+  note's 200 bytes, and the pack name's 64 characters beyond Foundry's own package-id rules. One warning line past each
+  old value. The piece transport's chunk size and the one-at-a-time backup lock stay.
+- **T15:** for plugin tools, the version's 32 characters, the four `handleArgs` names, one image per result and
+  1280 px per side become warnings; Wiretap's own tools keep them as hard checks. The image data size stays.
+- **T16:** no cap on MCP sessions or registered endpoints, with a log line past 32 and 64; terminal scrollback is a GM
+  setting, default 64 KB, used by the sidecar replay and the client buffer.
+- **T17, T18:** each silent cut the survey found says what was cut (handle eviction and expiry, the `maxBytes` clamp,
+  dropped result fields, the backup listing past 1,000 files, an emptied registry, a tool skipped at sync, a second
+  terminal launch, the validation error cut, a dropped allowed-modules entry, compact-view leaves, describe lists, an
+  unusable Backup folder setting, redaction bounds outside backups). No behaviour change beyond the notice.
+
+Waves: W1 T1, T2. W2 T3, T4, T8. W3 T5, T6, T7, T12. W3b T12 fix, T13, T14, then T6 fix, T15, T16, T18, then T17.
+W4 T9. W5 T10, T11. Run the full `npm test`, `npm run typecheck` and
 `npm run eslint` once at each wave end, not inside tasks.
 
 | Stop | Where | Kind |

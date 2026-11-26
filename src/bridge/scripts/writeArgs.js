@@ -1,11 +1,9 @@
 /**
  * Argument helpers shared by the write scripts: parsing the JSON text the argument-schema subset carries (it has no
- * free-form object or any-typed value), bounding the total data, checking read-back paths before anything is
- * written, and choosing the id a created document is sent with.
+ * free-form object or any-typed value), checking read-back paths before anything is written, and choosing the id a
+ * created document is sent with.
  */
 
-import { getBudget } from '$shared/budgets.js';
-import { utf8Bytes } from '$shared/utf8.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
 
 /**
@@ -31,25 +29,6 @@ export function shapeRefusal(text) {
  */
 export function createId(item, keepId) {
    return keepId && typeof item._id === 'string' && item._id !== '' ? item._id : foundry.utils.randomID();
-}
-
-/**
- * Refuse a call whose JSON text is larger in all than the data bound.
- * @param {string[]} texts - Every JSON text the call carries.
- * @returns {void}
- * @throws {ScriptError} `ARGS_INVALID`.
- */
-export function checkDataBytes(texts) {
-   /** @type {number} The most bytes one call may carry. */
-   const max = getBudget('WRITE_DATA_MAX_BYTES').value;
-   /** @type {number} The bytes counted so far. */
-   let total = 0;
-   for (const text of texts) {
-      total += utf8Bytes(text);
-      if (total > max) {
-         throw new ScriptError('ARGS_INVALID', `The data is over ${max} bytes in all; split the call.`);
-      }
-   }
 }
 
 /**
@@ -90,7 +69,6 @@ export function parseDataObject(text, label) {
  * @throws {ScriptError} `ARGS_INVALID` naming the entry that is not a JSON object.
  */
 export function parseDataObjects(texts) {
-   checkDataBytes(texts);
    return texts.map((text, index) => parseDataObject(text, `data[${index}]`));
 }
 

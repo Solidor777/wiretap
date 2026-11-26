@@ -106,6 +106,47 @@ allowed is not listed to the agent. Whether the client filters it out of the pus
 by the snapshot is left to the builder; the result must be that the listing follows a settings change without a
 reload.
 
+## Schema protection limits (owner's decisions, 2026-11-23, after the first schema review)
+
+- **Depth:** a schema nested deeper than 32 levels is refused for every source. It is server protection against
+  stack exhaustion, not a "needed to work" rule; the 4-level guideline still only warns for plugins.
+- **Expanded nodes:** a schema passed in code may reuse one object in several places. Reuse is allowed and each reused
+  piece is counted every time it appears. A schema that expands past about 60,000 nodes (what one 900,000-byte
+  registry message can carry) is refused for every source, on both sides, as protection; the walk stops as soon as it
+  passes the limit. The 64-node guideline still only warns for plugins.
+- Linear work: schema checks cost time linear in the schema's size on both sides (no per-property list scans).
+
+## No limits on the GM's choices (owner's decisions, 2026-11-24)
+
+The owner: "No limits. Its up to the GM how much of anything they want to use. Check for artificial limits likme this
+and remove them. At most we should warn people but its up to them how they want to set up their space". A survey of
+every bound in `shared/`, `server/` and `src/` followed; the owner decided per class:
+
+- **Protections stay.** Bounds that keep the sidecar or the browser from crashing or from attack (the 1 MB Socket.IO
+  message, the 8 s script time limit, value-node and depth bounds, connection and body limits, origin checks) are
+  unchanged.
+- **Module ids are Foundry's.** A module id is any non-empty string of letters of either case, digits, `_` and `-`, as
+  Foundry validates package ids; Wiretap has no separate id length cut. The `<tool>` part of a plugin tool name uses
+  the same alphabet. The 50-character plugin name limit still applies. Matching is exact.
+- **The 64-entry allowed-modules count is gone**, and listing work stays linear in tools plus list length.
+- **A shipped tool name may not contain `__`**; that form is `<moduleId>__<tool>` for plugin tools.
+- **The plugin API's name errors describe the short name**, and a short name that already starts with `<moduleId>__`
+  is refused, so a doubled prefix cannot register.
+- **Per-call limits are removed**: documents per write, data bytes per write, characters per document, paths and
+  fields per call, search filters, results per page, field path length, the idempotency lookup's collection size,
+  backup document, byte and uuid counts, the backup list size and note length, the macro and backup time ranges, the
+  pack name length beyond Foundry's own rules, and the plugin-only refusals of version length, `handleArgs` count,
+  image count and image side. Where a call can still break a protection, it fails with a clear message, as today.
+  Past each removed limit's old value, Wiretap writes one warning line.
+- **Setup counts are removed**: MCP sessions and connected Foundry tabs have no cap; a log line warns past the old
+  numbers (32 and 64). Terminal scrollback becomes a GM setting, defaulting to 64 KB, used by both the sidecar's replay
+  and the client's buffer. One terminal stays: a second terminal is a new feature.
+- **Reply-size budgets stay** (the per-result hard cap, compact views, search pages, ack sizes, error text): they shape
+  what the agent reads, the cut is flagged, and a large result is kept behind a handle.
+- **No silent cuts.** Every place that drops, cuts or empties data with no message says what was cut: a `cut` flag or
+  count in the reply, a clear message, or a log line. No behaviour changes beyond the notice. Wiretap's own tool
+  definitions still meet the per-tool guidelines (refused for shipped tools, a CI check).
+
 ## Settled points (from the builder check)
 
 - **Name length is needed to work (owner's decision, 2026-11-23).** Claude Code lists each tool as
@@ -121,10 +162,12 @@ reload.
 - **Trusting `moduleId` to pick the source** is accepted: the pushing client is an identified GM browser, a shipped
   definition can never carry `moduleId` (`shared/scripts.js:350`), and choosing the plugin route only makes the checks
   less strict for that one tool, never another.
-- **Push size (Claude's call).** The registry message is bounded by Socket.IO `maxHttpBufferSize` (1,000,000 B); an
-  over-size message is dropped whole, which would take Wiretap's own tools down with it. The client therefore measures
-  the payload before pushing. If it would exceed the bound, it leaves out plugin tools, most recently registered
-  first, until it fits, and logs one warning per tool left out that names the message bound. Shipped tools are always
+- **Push size (Claude's call; order and notice confirmed by the owner, 2026-11-23).** The registry message is bounded
+  by Socket.IO `maxHttpBufferSize` (1,000,000 B); an over-size message is dropped whole, which would take Wiretap's own
+  tools down with it. The client therefore measures the payload before pushing. If it would exceed the bound, it leaves
+  out plugin tools, largest listed definition first (the most recently registered first among equal sizes), until it
+  fits, so one oversized tool cannot push out many small ones. It logs one console warning per tool left out that
+  names the message bound; there is no other notice. Shipped tools are always
   included. This is server protection (group 3), not a guideline. At about 800 B per definition it starts near 1,200
   plugin tools.
 - **Non-GM clients (Claude's call).** The hook fires and `api.registerTool` works on every client, so a plugin needs no

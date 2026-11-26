@@ -361,24 +361,28 @@ describe('create_documents with fromUuids', () => {
       expect(world.calls).toEqual([]);
    });
 
-   it.each([
-      [
-         [],
-         'fromUuids: needs at least 1 items',
-      ],
-      [
-         Array.from({ length: 51 }, (_, index) => `Actor.MOCK${index}`),
-         'fromUuids:',
-      ],
-   ])('writes nothing for the fromUuids list %#', async (fromUuids, text) => {
+   it('writes nothing for an empty fromUuids list', async () => {
       /** @type {Error} The refusal. */
       const error = await failure({
          documentName: 'Actor',
-         fromUuids,
+         fromUuids: [],
       });
       expect(error.code).toBe('ARGS_INVALID');
-      expect(error.message).toContain(text);
+      expect(error.message).toContain('fromUuids: needs at least 1 items');
       expect(world.calls).toEqual([]);
+   });
+
+   it('copies more sources in one call than the best-practice size', async () => {
+      /** @type {number} The sources copied. */
+      const count = getBudget('WRITE_DOCUMENTS_MAX').value + 1;
+      /** @type {object[]} The source documents. */
+      const sources = Array.from({ length: count }, (_, index) => addActor(`MOCK_actor_${index}`));
+      await create({
+         documentName: 'Actor',
+         fromUuids: sources.map((source) => source.uuid),
+      });
+      expect(sentActors()).toHaveLength(1);
+      expect(sentActors()[0]).toHaveLength(count);
    });
 
    it('replays the first result for the same idempotencyKey and fromUuids after the source was edited', async () => {
@@ -583,13 +587,8 @@ describe('create_documents with fromUuids', () => {
       expect(createDocumentsDefinition.inputSchema.properties.fromUuids).toEqual({
          type: 'array',
          minItems: 1,
-         maxItems: getBudget('WRITE_DOCUMENTS_MAX').value,
-         items: {
-            type: 'string',
-            maxLength: 256,
-         },
+         items: { type: 'string' },
       });
-      expect(getBudget('WRITE_DOCUMENTS_MAX').value).toBe(50);
       expect(createDocumentsDefinition.inputSchema.required).toEqual(['documentName']);
       expect(createDocumentsDefinition.handleArgs).toEqual(['data']);
       /** @type {string} The tool description. */
@@ -598,7 +597,7 @@ describe('create_documents with fromUuids', () => {
       expect(description).toContain('fromUuids');
       expect(description).toContain('idempotencyKey');
       /** @type {ReturnType<typeof compileSchema>} The compiled schema. */
-      const compiled = compileSchema(createDocumentsDefinition.inputSchema);
+      const compiled = compileSchema(createDocumentsDefinition.inputSchema, { tool: createDocumentsDefinition.name });
       expect(compiled.ok).toBe(true);
       expect(definitionBytes(createDocumentsDefinition.name, description, compiled.listed)).toBeLessThanOrEqual(800);
    });

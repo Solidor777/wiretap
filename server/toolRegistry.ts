@@ -2,7 +2,6 @@ import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-sc
 import { z, type ZodRawShape, type ZodType } from 'zod';
 import { getBudget } from '../shared/budgets.js';
 import {
-   RESERVED_SCRIPT_NAMES,
    USER_INTERACTION_TOOLS,
    definitionBytes,
    parseRegistryPayload,
@@ -11,15 +10,20 @@ import {
 import {
    KEYWORD_LABEL_MAX_CHARS,
    PROPERTY_NAME_PATTERN,
+   SCHEMA_BOUND_MAX,
    SCHEMA_DEPTH_MAX,
    SCHEMA_ENUM_MAX,
    SCHEMA_ENUM_VALUE_MAX_CHARS,
+   SCHEMA_EXPANDED_NODES_MAX,
+   SCHEMA_GUIDELINES,
    SCHEMA_NODES_MAX,
+   SCHEMA_PLUGIN_DEPTH_MAX,
    SCHEMA_PROPERTIES_MAX,
+   UNCAPPED_LIST_TOOLS,
    COMMON_KEYWORDS,
    TYPE_KEYWORDS,
-   isBound,
-   isValidDescription,
+   guidelineWarning,
+   isWellFormedDescription,
 } from '../shared/schemaValidate.js';
 import type { RequiredGate } from './endpoints.ts';
 import { cleanForLog } from './logText.ts';
@@ -32,7 +36,11 @@ export type RegistryRequires = 'api' | 'dom';
  * the sessions routed to that client and forwards its calls back to it.
  */
 export interface RegistryTool {
-   /** The MCP tool name: lowercase letters, digits, `_` and `-`, starting with a letter; within the name budget. */
+   /**
+    * The MCP tool name: a shipped name of at most 32 characters of lowercase letters, digits, `_` and `-` starting with
+    * a letter and holding no `__`, or a plugin name `<moduleId>__<tool>` of at most 50 characters of letters of either
+    * case, digits, `_` and `-`.
+    */
    name: string;
    /** The script's version string. */
    version: string;
@@ -48,8 +56,11 @@ export interface RegistryTool {
    requires: RegistryRequires;
    /** Whether the script changes the world; listed to the client as the inverse of `readOnlyHint`. */
    mutates: boolean;
-   /** The risk gate the tool declared; the sidecar pre-checks it against the routed endpoint's snapshot. */
-   gate?: RequiredGate;
+   /**
+    * The gates a call must pass, judged in order against the routed endpoint's snapshot. A shipped tool has none or the
+    * one it declared; a plugin tool has its module's `allowedPluginModules` entry first, then the gate it declared.
+    */
+   gates: RequiredGate[];
    /** The text arguments that may be given as a handle reference; empty when the tool takes none. */
    handleArgs: string[];
    /**
@@ -66,32 +77,43 @@ export interface RegistryTool {
 /** The outcome of sanitizing a registry payload. */
 export type RegistryOutcome =
    | {
-        /** The payload was an array; `tools` holds the accepted entries. */
+        /** The payload was a registry object; `tools` holds the accepted entries. */
         ok: true;
         tools: RegistryTool[];
-        /** Entries that were refused or never examined. */
+        /** Entries that were refused. */
         refused: number;
      }
    | {
-        /** The payload was not an array; no tool is accepted. */
+        /** The payload was not a registry object of the current api version; no tool is accepted. */
         ok: false;
         reason: string;
      };
 
-/** The outcome of converting a JSON Schema. */
-export type ShapeOutcome = { ok: true; shape: ZodRawShape; strict: boolean } | { ok: false; reason: string };
+/**
+ * Who wrote a schema: Wiretap itself, or a plugin module; a plugin schema over a guideline warns instead of refusing.
+ */
+export type SchemaSource = 'shipped' | 'plugin';
 
-/** The outcome of sanitizing one entry. */
-type ToolOutcome =
-   | { ok: true; tool: RegistryTool; warnings: string[]; listedBytes: number }
+/** The outcome of converting a JSON Schema; `warnings` is always empty for a shipped schema. */
+export type ShapeOutcome =
+   | { ok: true; shape: ZodRawShape; strict: boolean; warnings: string[] }
    | { ok: false; reason: string };
 
-/** The node counter shared by one schema conversion. */
+/** The outcome of sanitizing one entry. */
+type ToolOutcome = { ok: true; tool: RegistryTool; warnings: string[] } | { ok: false; reason: string };
+
+/** The state shared by one schema conversion. */
 interface ConvertState {
    /** Schema nodes converted so far, the root included. */
    nodes: number;
    /** Whether every object below the root refuses an undeclared key, without saying so in the listed schema. */
    strictNested: boolean;
+   /** Who wrote the schema; decides whether a guideline refuses or warns. */
+   source: SchemaSource;
+   /** Whether the schema's tool is in `UNCAPPED_LIST_TOOLS`, so the item guideline does not apply to its arrays. */
+   uncappedLists: boolean;
+   /** The largest measured value of each guideline a plugin schema passed. */
+   measured: Map<string, number>;
 }
 
 // Longest tool label written to a log line, in UTF-8 bytes.
@@ -123,17 +145,75 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Hold a schema to one complexity guideline: a shipped schema over it is refused, and a plugin schema over it records
+ * the measured value, keeping the largest, for one warning after the walk. Mirrors `holdGuideline` of
+ * `shared/schemaValidate.js`.
+ * @param {ConvertState} state - The conversion state.
+ * @param {string} guideline - A name from `SCHEMA_GUIDELINES`.
+ * @param {number} measured - The measured value.
+ * @param {number} limit - The guideline's largest allowed value.
+ * @param {string} refusal - The reason a shipped schema is refused with.
+ * @returns {void}
+ */
+function holdGuideline(
+   state: ConvertState,
+   guideline: string,
+   measured: number,
+   limit: number,
+   refusal: string,
+): void {
+   if (measured <= limit) {
+      return;
+   }
+   if (state.source !== 'plugin') {
+      throw new SchemaRefusal(refusal);
+   }
+   state.measured.set(guideline, Math.max(measured, state.measured.get(guideline) ?? measured));
+}
+
+/**
+ * Read a length or item bound: absent, or a non-negative integer held to the bound guideline.
+ * @param {Record<string, unknown>} node - The schema node.
+ * @param {string} keyword - `minLength`, `maxLength`, `minItems` or `maxItems`.
+ * @param {ConvertState} state - The conversion state.
+ * @param {string} [overGuideline] - The reason a shipped bound over the guideline is refused with; by default it names
+ * the guideline's limit.
+ * @returns {number | undefined} The bound, or undefined when the node does not declare it.
+ */
+function readBound(
+   node: Record<string, unknown>,
+   keyword: string,
+   state: ConvertState,
+   overGuideline: string = `${keyword} must be at most ${SCHEMA_BOUND_MAX}`,
+): number | undefined {
+   // The declared bound.
+   const value: unknown = ownValue(node, keyword);
+   if (value === undefined) {
+      return undefined;
+   }
+   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+      throw new SchemaRefusal(`${keyword} must be a non-negative integer`);
+   }
+   holdGuideline(state, 'bound', value, SCHEMA_BOUND_MAX, overGuideline);
+   return value;
+}
+
+/**
  * Convert one schema node to a zod type; throws a SchemaRefusal for anything outside the supported subset.
  * @param {unknown} node - The JSON Schema node.
  * @param {number} depth - The nesting level of this node (the root object is 1).
- * @param {ConvertState} state - The node counter.
+ * @param {ConvertState} state - The conversion state.
  * @returns {ZodType} The zod type.
  */
 function convertNode(node: unknown, depth: number, state: ConvertState): ZodType {
    state.nodes += 1;
-   if (state.nodes > SCHEMA_NODES_MAX) {
-      throw new SchemaRefusal(`schema has more than ${SCHEMA_NODES_MAX} nodes`);
+   if (state.nodes > SCHEMA_EXPANDED_NODES_MAX) {
+      // Checked before anything else of the node, so a reused object costs at most this many node visits.
+      throw new SchemaRefusal(
+         `schema expands to more than ${SCHEMA_EXPANDED_NODES_MAX} nodes, more than one registry message can carry`,
+      );
    }
+   holdGuideline(state, 'nodes', state.nodes, SCHEMA_NODES_MAX, `schema has more than ${SCHEMA_NODES_MAX} nodes`);
    if (!isRecord(node)) {
       throw new SchemaRefusal('a schema node is not an object');
    }
@@ -142,8 +222,18 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
    if (typeof type !== 'string' || !Object.hasOwn(TYPE_KEYWORDS, type)) {
       throw new SchemaRefusal('type must be one of string, number, integer, boolean, array or object');
    }
-   if ((type === 'object' || type === 'array') && depth > SCHEMA_DEPTH_MAX) {
-      throw new SchemaRefusal(`schema nests objects and arrays deeper than ${SCHEMA_DEPTH_MAX} levels`);
+   if (type === 'object' || type === 'array') {
+      // Checked before descending, so the recursion never nests more than one level past the ceiling.
+      if (depth > SCHEMA_PLUGIN_DEPTH_MAX) {
+         throw new SchemaRefusal(`schema nests objects and arrays deeper than ${SCHEMA_PLUGIN_DEPTH_MAX} levels`);
+      }
+      holdGuideline(
+         state,
+         'depth',
+         depth,
+         SCHEMA_DEPTH_MAX,
+         `schema nests objects and arrays deeper than ${SCHEMA_DEPTH_MAX} levels`,
+      );
    }
    // The keywords this type allows.
    const allowed: readonly string[] = [
@@ -161,18 +251,12 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
       case 'string': {
          // The string schema, extended by the declared bounds.
          let text: z.ZodString = z.string();
-         const minLength: unknown = ownValue(node, 'minLength');
-         const maxLength: unknown = ownValue(node, 'maxLength');
+         const minLength: number | undefined = readBound(node, 'minLength', state);
+         const maxLength: number | undefined = readBound(node, 'maxLength', state);
          if (minLength !== undefined) {
-            if (!isBound(minLength)) {
-               throw new SchemaRefusal('minLength must be a non-negative integer');
-            }
             text = text.min(minLength);
          }
          if (maxLength !== undefined) {
-            if (!isBound(maxLength)) {
-               throw new SchemaRefusal('maxLength must be a non-negative integer');
-            }
             text = text.max(maxLength);
          }
          const values: unknown = ownValue(node, 'enum');
@@ -180,14 +264,19 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
             result = text;
             break;
          }
-         if (
-            !Array.isArray(values) ||
-            values.length === 0 ||
-            values.length > SCHEMA_ENUM_MAX ||
-            !values.every((value) => typeof value === 'string' && value.length <= SCHEMA_ENUM_VALUE_MAX_CHARS)
-         ) {
-            throw new SchemaRefusal(`enum must hold 1 to ${SCHEMA_ENUM_MAX} short strings`);
+         if (!Array.isArray(values) || values.length === 0 || !values.every((value) => typeof value === 'string')) {
+            throw new SchemaRefusal('enum must be a non-empty list of strings');
          }
+         // The reason a shipped enum over a guideline is refused with.
+         const enumReason: string = `enum must hold 1 to ${SCHEMA_ENUM_MAX} short strings`;
+         holdGuideline(state, 'enumValues', values.length, SCHEMA_ENUM_MAX, enumReason);
+         holdGuideline(
+            state,
+            'enumValueChars',
+            (values as string[]).reduce((longest, value) => Math.max(longest, value.length), 0),
+            SCHEMA_ENUM_VALUE_MAX_CHARS,
+            enumReason,
+         );
          result = z.enum(values as [string, ...string[]]);
          break;
       }
@@ -221,20 +310,30 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
          }
          // The array schema, extended by the declared bounds.
          let list: z.ZodArray = z.array(convertNode(ownValue(node, 'items'), depth + 1, state));
-         const minItems: unknown = ownValue(node, 'minItems');
-         const maxItems: unknown = ownValue(node, 'maxItems');
+         const minItems: number | undefined = readBound(node, 'minItems', state);
          if (minItems !== undefined) {
-            if (!isBound(minItems)) {
-               throw new SchemaRefusal('minItems must be a non-negative integer');
-            }
             list = list.min(minItems);
          }
-         // Every array declares its own item cap, at most the shared budget, so an argument array is bounded.
+         // The item cap guideline, which binds every shipped array outside `UNCAPPED_LIST_TOOLS`.
          const itemsCap: number = getBudget('SCHEMA_ARRAY_ITEMS_MAX').value;
-         if (!isBound(maxItems) || maxItems > itemsCap) {
-            throw new SchemaRefusal(`an array schema needs a maxItems of 0 to ${itemsCap}`);
+         // The reason a shipped array over the item guideline is refused with.
+         const capReason: string = `an array schema needs a maxItems of 0 to ${itemsCap}`;
+         // The declared item cap; a plugin array, or an array of a tool in `UNCAPPED_LIST_TOOLS`, may leave it out and
+         // is then listed and parsed without one. A shipped maxItems over the bound guideline is also over the tighter
+         // item cap, so it is refused with the cap text.
+         const maxItems: number | undefined = readBound(node, 'maxItems', state, capReason);
+         // The arrays of a tool in `UNCAPPED_LIST_TOOLS` are not held to the item guideline.
+         if (!state.uncappedLists) {
+            if (maxItems === undefined) {
+               // A missing cap counts as one array over the guideline; its warning carries no measured value.
+               holdGuideline(state, 'maxItemsMissing', 1, 0, capReason);
+            } else {
+               holdGuideline(state, 'maxItems', maxItems, itemsCap, capReason);
+            }
          }
-         list = list.max(maxItems);
+         if (maxItems !== undefined) {
+            list = list.max(maxItems);
+         }
          result = list;
          break;
       }
@@ -257,8 +356,17 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
    // `convertObjectShape`, which owns the optional wrapper); a description on the root or on array items is validated
    // and not listed.
    const description: unknown = ownValue(node, 'description');
-   if (description !== undefined && !isValidDescription(description)) {
-      throw new SchemaRefusal('description must be a short single-line string');
+   if (description !== undefined) {
+      if (!isWellFormedDescription(description)) {
+         throw new SchemaRefusal('description must be a non-empty single-line string');
+      }
+      holdGuideline(
+         state,
+         'descriptionChars',
+         description.length,
+         getBudget('DESCRIPTION_MAX_CHARS').value,
+         'description must be a short single-line string',
+      );
    }
    return result;
 }
@@ -267,7 +375,7 @@ function convertNode(node: unknown, depth: number, state: ConvertState): ZodType
  * Convert an object schema's properties to a zod shape: each property is required only when `required` lists it.
  * @param {Record<string, unknown>} node - The object schema node.
  * @param {number} depth - The nesting level of the object.
- * @param {ConvertState} state - The node counter.
+ * @param {ConvertState} state - The conversion state.
  * @returns {ZodRawShape} The shape.
  */
 function convertObjectShape(node: Record<string, unknown>, depth: number, state: ConvertState): ZodRawShape {
@@ -282,15 +390,23 @@ function convertObjectShape(node: Record<string, unknown>, depth: number, state:
    }
    // The property names, own and enumerable.
    const names: string[] = Object.keys(properties);
-   if (names.length > SCHEMA_PROPERTIES_MAX) {
-      throw new SchemaRefusal(`an object schema has more than ${SCHEMA_PROPERTIES_MAX} properties`);
-   }
+   // The property names, for constant-time lookups that keep the conversion linear in the schema.
+   const declared: Set<string> = new Set(names);
+   holdGuideline(
+      state,
+      'properties',
+      names.length,
+      SCHEMA_PROPERTIES_MAX,
+      `an object schema has more than ${SCHEMA_PROPERTIES_MAX} properties`,
+   );
    const requiredList: unknown = ownValue(node, 'required') ?? [];
    if (!Array.isArray(requiredList) || !requiredList.every((name) => typeof name === 'string')) {
       throw new SchemaRefusal('required must be an array of property names');
    }
-   for (const name of requiredList as string[]) {
-      if (!names.includes(name)) {
+   // The names a value must set, for constant-time lookups.
+   const requiredNames: Set<string> = new Set(requiredList as string[]);
+   for (const name of requiredNames) {
+      if (!declared.has(name)) {
          throw new SchemaRefusal('required names a property that is not declared');
       }
    }
@@ -302,7 +418,7 @@ function convertObjectShape(node: Record<string, unknown>, depth: number, state:
       }
       // The property's zod type, optional unless required.
       let type: ZodType = convertNode(properties[name], depth + 1, state);
-      if (!(requiredList as string[]).includes(name)) {
+      if (!requiredNames.has(name)) {
          type = type.optional();
       }
       // The description sits on the outermost type so the SDK lists it.
@@ -328,13 +444,28 @@ export function argumentSchema(converted: { shape: ZodRawShape; strict: boolean 
  * `object` whose properties are `string` (with `enum`, `minLength`, `maxLength`), `number`, `integer` (with `minimum`,
  * `maximum`), `boolean`, `array` (with `items`, `minItems`, `maxItems`) or nested `object`, each with an optional
  * `description`; `required`; and `additionalProperties: false`. Every other keyword (references, combinators,
- * patterns, formats, defaults, constants) refuses the schema: a pattern is attacker-supplied regular-expression work
- * and a combinator or reference cannot be bounded by the definition budget.
+ * patterns, formats, defaults, constants) refuses the schema for every source: a pattern is attacker-supplied
+ * regular-expression work and a combinator or reference cannot be bounded. Server protection, for every source: nesting
+ * deeper than `SCHEMA_PLUGIN_DEPTH_MAX` levels is refused, so the recursive conversion cannot overflow the stack, and a
+ * schema whose walk expands past `SCHEMA_EXPANDED_NODES_MAX` nodes (a reused object counted every time it appears) is
+ * refused, so a schema that reuses one object at several levels costs bounded work. Name lookups use sets, so the
+ * conversion is linear in the schema.
+ * Plugin switch: the complexity guidelines of `shared/schemaValidate.js` (`SCHEMA_GUIDELINES`) refuse a `shipped`
+ * schema and only warn for a `plugin` one, with the same rules and texts as `compileSchema` there; a plugin array
+ * without `maxItems` has no `.max()`. The item guideline does not apply to the tools in `UNCAPPED_LIST_TOOLS`.
  * @param {unknown} schema - The untrusted JSON Schema.
  * @param {boolean} [strictNested] - Whether every object below the root refuses an undeclared key.
- * @returns {ShapeOutcome} The shape, or the short reason the schema is refused.
+ * @param {SchemaSource} [source] - Who wrote the schema; `shipped` by default.
+ * @param {string} [tool] - The name of the tool the schema belongs to; a name in `UNCAPPED_LIST_TOOLS` lifts the item
+ * guideline.
+ * @returns {ShapeOutcome} The shape and the guideline warnings, or the short reason the schema is refused.
  */
-export function jsonSchemaToZodShape(schema: unknown, strictNested: boolean = false): ShapeOutcome {
+export function jsonSchemaToZodShape(
+   schema: unknown,
+   strictNested: boolean = false,
+   source: SchemaSource = 'shipped',
+   tool?: string,
+): ShapeOutcome {
    try {
       if (!isRecord(schema) || ownValue(schema, 'type') !== 'object') {
          throw new SchemaRefusal('the schema root must be an object schema');
@@ -343,12 +474,18 @@ export function jsonSchemaToZodShape(schema: unknown, strictNested: boolean = fa
       const state: ConvertState = {
          nodes: 0,
          strictNested,
+         source,
+         uncappedLists: tool !== undefined && UNCAPPED_LIST_TOOLS.includes(tool),
+         measured: new Map(),
       };
       const root: ZodType = convertNode(schema, 1, state);
       return {
          ok: true,
          shape: (root as z.ZodObject).shape,
          strict: ownValue(schema, 'additionalProperties') === false,
+         warnings: SCHEMA_GUIDELINES.filter((guideline) => state.measured.has(guideline)).map((guideline) => {
+            return guidelineWarning(guideline, state.measured.get(guideline) as number);
+         }),
       };
    } catch (cause) {
       if (cause instanceof SchemaRefusal) {
@@ -362,15 +499,22 @@ export function jsonSchemaToZodShape(schema: unknown, strictNested: boolean = fa
 }
 
 /**
- * Validate one registry entry with the shared script validator (shipped route), then convert its argument schema. Reads
- * own properties only; nothing of the received object is kept.
+ * Validate one registry entry with the shared script validator, then convert its argument schema. An entry with an own
+ * `moduleId` that is not undefined takes the plugin route: the per-tool guidelines (description, result budget, schema
+ * complexity, listed size) warn instead of refusing, and the tool is gated by its module before its declared gate.
+ * Every other entry takes the shipped route, where each guideline refuses. Reads own properties only; nothing of the
+ * received object is kept.
  * @param {unknown} entry - The untrusted entry.
  * @param {Set<string>} seen - The names accepted so far in this payload.
- * @returns {ToolOutcome} The tool and any warnings, or the reason the entry is refused.
+ * @returns {ToolOutcome} The tool and its warnings (the validator's, then the schema's, then the listed size's), or the
+ *          reason the entry is refused.
  */
-function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): ToolOutcome {
-   // The shared validator's verdict on the definition; every script a client registers is a shipped script.
-   const validated: ReturnType<typeof validateScriptDefinition> = validateScriptDefinition(entry, 'shipped');
+function sanitizeTool(entry: unknown, seen: Set<string>): ToolOutcome {
+   // The route the entry registers through, chosen by the module id it carries.
+   const source: SchemaSource =
+      isRecord(entry) && ownValue(entry, 'moduleId') !== undefined ? 'plugin' : 'shipped';
+   // The shared validator's verdict on the definition.
+   const validated: ReturnType<typeof validateScriptDefinition> = validateScriptDefinition(entry, source);
    if (!validated.ok) {
       return validated;
    }
@@ -383,6 +527,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
       result,
       requires,
       mutates,
+      moduleId,
       gate,
       handleArgs,
       strictNested,
@@ -400,7 +545,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
          reason: 'duplicate name in this registry',
       };
    }
-   const converted: ShapeOutcome = jsonSchemaToZodShape(inputSchema, strictNested === true);
+   const converted: ShapeOutcome = jsonSchemaToZodShape(inputSchema, strictNested === true, source, name);
    if (!converted.ok) {
       return converted;
    }
@@ -411,27 +556,38 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
    });
    const listed: number = definitionBytes(name, description, listedSchema);
    const maxDefinition: number = getBudget('DEFINITION_MAX_BYTES').value;
+   // The findings of an accepted entry, in the order they are logged.
+   const warnings: string[] = [
+      ...validated.warnings,
+      ...converted.warnings,
+   ];
    if (listed > maxDefinition) {
-      return {
-         ok: false,
-         reason: `listed definition is ${listed} bytes, at most ${maxDefinition} bytes`,
-      };
+      if (source !== 'plugin') {
+         return {
+            ok: false,
+            reason: `listed definition is ${listed} bytes, at most ${maxDefinition} bytes`,
+         };
+      }
+      warnings.push(`listed definition is ${listed} bytes, over the ${maxDefinition}-byte guideline`);
    }
-   if (listed > bytesLeft) {
-      return {
-         ok: false,
-         reason: `all definitions together may take at most ${getBudget('ALL_DEFINITIONS_MAX_BYTES').value} bytes`,
-      };
-   }
-   // The risk gate the script declared, when it declared one.
-   const requiredGate: RequiredGate | undefined = gate === undefined ? undefined : { gate };
+   // The gates a call must pass: a plugin tool's module first, then the gate the script declared.
+   const gates: RequiredGate[] = [
+      ...(source === 'plugin'
+         ? [
+              {
+                 gate: 'allowedPluginModules',
+                 moduleId: moduleId as string,
+              },
+           ]
+         : []),
+      ...(gate === undefined ? [] : [{ gate }]),
+   ];
    // Whether the human is prompted before every call; forced by name so no client can list such a tool without it.
    const prompted: boolean = requiresUserInteraction === true || USER_INTERACTION_TOOLS.includes(name);
    seen.add(name);
    return {
       ok: true,
-      warnings: validated.warnings,
-      listedBytes: listed,
+      warnings,
       tool: {
          name,
          version,
@@ -441,7 +597,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
          budgetBytes: result.budgetBytes,
          requires,
          mutates,
-         ...(requiredGate === undefined ? {} : { gate: requiredGate }),
+         gates,
          handleArgs: handleArgs ?? [],
          requiresUserInteraction: prompted,
          signature: JSON.stringify([
@@ -452,7 +608,7 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
             result.budgetBytes,
             requires,
             mutates,
-            requiredGate ?? null,
+            gates,
             handleArgs ?? [],
             strictNested === true,
             prompted,
@@ -467,12 +623,11 @@ function sanitizeTool(entry: unknown, seen: Set<string>, bytesLeft: number): Too
 }
 
 /**
- * Reduce an untrusted `bridge:registry` payload to the scripts that pass every budget. The payload must be
- * `{ apiVersion, scripts }`; entries are judged one by one: a refused entry is logged with its reason and dropped, the
- * others are kept. At most `ALWAYS_LISTED_TOOLS_MAX` less the sidecar's own tool count entries are accepted, and at
- * most twice `ALWAYS_LISTED_TOOLS_MAX` are examined; the rest are refused with one summary line, so a hostile payload
- * costs bounded work and bounded log output. The accepted tools' listed definitions, with the room kept for the
- * sidecar's own definitions, fit `ALL_DEFINITIONS_MAX_BYTES`; a tool that would overflow it is refused.
+ * Reduce an untrusted `bridge:registry` payload to the scripts that pass their checks. The payload must be
+ * `{ apiVersion, scripts }`; every entry is judged, one by one: a refused entry is logged with its reason and dropped,
+ * an accepted entry's warnings are logged, and the accepted entries are kept. There is no bound on the number of tools
+ * or on their total size: the payload is bounded by the Socket.IO `maxHttpBufferSize` (1,000,000 bytes), and the
+ * caller's throttled logger bounds the log output.
  * @param {unknown} payload - The untrusted payload.
  * @param {(line: string) => void} log - Receives one line per refusal or warning; callers pass a throttled logger.
  * @returns {RegistryOutcome} The accepted tools and the number of refused entries, or a failure when the payload is
@@ -489,23 +644,13 @@ export function sanitizeRegistry(payload: unknown, log: (line: string) => void):
    }
    // The raw entries.
    const entries: unknown[] = opened.scripts;
-   // The most tools the always-listed budget leaves room for beside the sidecar's own tools.
-   const room: number = getBudget('ALWAYS_LISTED_TOOLS_MAX').value - RESERVED_SCRIPT_NAMES.length;
-   // The most entries examined, so an enormous array costs bounded work.
-   const examineMax: number = 2 * getBudget('ALWAYS_LISTED_TOOLS_MAX').value;
    // The accepted tools.
    const tools: RegistryTool[] = [];
-   // The listed bytes the accepted tools may still take: the total budget less the room kept for the sidecar's tools.
-   let bytesLeft: number =
-      getBudget('ALL_DEFINITIONS_MAX_BYTES').value -
-      RESERVED_SCRIPT_NAMES.length * getBudget('DEFINITION_MAX_BYTES').value;
    // The names accepted so far, so a repeated name is refused.
    const seen: Set<string> = new Set();
-   // The entries refused or never examined.
+   // The entries refused.
    let refused: number = 0;
-   // The position of the entry being examined.
-   let index: number = 0;
-   for (; index < Math.min(entries.length, examineMax) && tools.length < room; index += 1) {
+   for (let index: number = 0; index < entries.length; index += 1) {
       // The entry's label in log lines: its name when it is a string, else its position.
       let label: string = `#${index}`;
       try {
@@ -513,10 +658,9 @@ export function sanitizeRegistry(payload: unknown, log: (line: string) => void):
          if (isRecord(entry) && typeof ownValue(entry, 'name') === 'string') {
             label = cleanForLog(ownValue(entry, 'name') as string, LOG_LABEL_BYTES);
          }
-         const outcome: ToolOutcome = sanitizeTool(entry, seen, bytesLeft);
+         const outcome: ToolOutcome = sanitizeTool(entry, seen);
          if (outcome.ok) {
             tools.push(outcome.tool);
-            bytesLeft -= outcome.listedBytes;
             for (const warning of outcome.warnings) {
                log(
                   `Wiretap sidecar | registry warning for tool ${JSON.stringify(label)}: ` +
@@ -533,12 +677,6 @@ export function sanitizeRegistry(payload: unknown, log: (line: string) => void):
          refused += 1;
          log(`Wiretap sidecar | registry refused tool ${JSON.stringify(label)}: the entry is unreadable`);
       }
-   }
-   // Entries never examined: past the examine bound or past the room for tools.
-   const skipped: number = entries.length - index;
-   if (skipped > 0) {
-      refused += skipped;
-      log(`Wiretap sidecar | registry refused ${skipped} tools: tool count budget of ${room} reached`);
    }
    return {
       ok: true,

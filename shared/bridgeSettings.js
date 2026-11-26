@@ -24,6 +24,27 @@ export const BRIDGE_SETTING_KEYS = Object.freeze(['backupFolder']);
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
 /**
+ * @typedef {'tooLong' | 'control'} BackupFolderProblem
+ * Why a `backupFolder` string is treated as unset: `tooLong` past `BACKUP_FOLDER_MAX_BYTES`, `control` for a control
+ * character.
+ */
+
+/**
+ * Name what makes a `backupFolder` string unusable, so the sanitizer and the client notice judge it by one rule.
+ * @param {string} folder - The stored folder path.
+ * @returns {BackupFolderProblem | null} The problem, or null when the value is usable.
+ */
+export function backupFolderProblem(folder) {
+   if (utf8Bytes(folder) > BACKUP_FOLDER_MAX_BYTES) {
+      return 'tooLong';
+   }
+   if (CONTROL_CHARACTER.test(folder)) {
+      return 'control';
+   }
+   return null;
+}
+
+/**
  * Build the default bridge settings.
  * @returns {BridgeSettings} A fresh object with every setting unset.
  */
@@ -50,9 +71,7 @@ export function sanitizeBridgeSettings(input) {
       const folder = descriptor === undefined
          ? undefined
          : /** @type {Record<string, unknown>} */ (input).backupFolder;
-      if (typeof folder === 'string'
-         && utf8Bytes(folder) <= BACKUP_FOLDER_MAX_BYTES
-         && !CONTROL_CHARACTER.test(folder)) {
+      if (typeof folder === 'string' && backupFolderProblem(folder) === null) {
          settings.backupFolder = folder;
       }
    } catch {

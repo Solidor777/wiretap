@@ -6,6 +6,7 @@ import {
    pickWatchPid,
    superviseServer,
 } from './lib/superviseServer.mjs';
+import { installFixturePlugin } from '../tests/e2e/pluginFixtureInstall.js';
 
 // Launcher for the Foundry server that e2e runs against. Used as Playwright's `webServer.command` and, with the
 // `--standalone` argument, as `npm run foundry:start`. Launches Foundry on the configured world when nothing answers
@@ -53,6 +54,10 @@ const watchPid = (standalone
  * @type {string}
  */
 const logFile = process.env.FOUNDRY_SERVER_LOG ?? path.join(repoRoot, 'debug', 'dumps', 'e2e-server.log');
+
+// Playwright starts the web server before the global setup runs, and Foundry reads the module folders only when it
+// starts, so the e2e fixture plugin module is installed here, before a server is launched.
+installFixturePlugin(dataPath);
 
 /** @type {import('./lib/superviseServer.mjs').SuperviseHandle} The supervised server. */
 const handle = await superviseServer({

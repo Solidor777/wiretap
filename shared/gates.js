@@ -28,7 +28,7 @@ import { GATE_DENIED } from './protocol.js';
  * @property {boolean} allowBackupAnyFolder - Backup files in a folder other than the default or the Backup folder
  * setting.
  * @property {boolean} allowAgentScripts - Saving and running agent-saved scripts (arbitrary code).
- * @property {string[]} allowedPluginModules - Ids of the modules whose plugin skills and scripts are enabled.
+ * @property {string[]} allowedPluginModules - Ids of the modules whose plugin tools are enabled.
  */
 
 /**
@@ -37,15 +37,10 @@ import { GATE_DENIED } from './protocol.js';
  * @property {string} message - Names the gate (or the refused write), at most 256 bytes.
  */
 
-// Maximum number of module ids in a snapshot's `allowedPluginModules`; a longer list is treated as empty.
-export const GATE_MODULES_MAX = 64;
-
-// Maximum length in characters of one module id in `allowedPluginModules`; a longer id is dropped.
-export const GATE_MODULE_ID_MAX_CHARS = 64;
-
-// The shape of a Foundry module id: lowercase letters, digits, underscore and hyphen, starting with a letter or digit.
-// Any other string is not a module id and is dropped from `allowedPluginModules`.
-const MODULE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+// The shape of a Foundry package id, as Foundry validates it: one or more letters of either case, digits, underscore
+// and hyphen, in any position and of any length. Any other string is not a module id and is dropped from
+// `allowedPluginModules`. Ids are compared exactly, so `MyMod` and `mymod` are different modules.
+const MODULE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 // The Foundry setting namespace that holds the gates; no write path may touch a setting in it.
 const WIRETAP_NAMESPACE = 'wiretap';
@@ -111,7 +106,7 @@ export const GATES = Object.freeze({
    allowedPluginModules: entry(
       'moduleList',
       Object.freeze([]),
-      'Plugin skills and scripts of the listed module ids; none by default.',
+      'Plugin tools of the listed module ids; none by default.',
    ),
 });
 
@@ -129,24 +124,25 @@ export function closedGateState() {
 }
 
 /**
- * Check whether a value is a Foundry module id: a string of 1 to `GATE_MODULE_ID_MAX_CHARS` characters matching
- * MODULE_ID_PATTERN.
+ * Check whether a value is a Foundry module id: a non-empty string matching MODULE_ID_PATTERN. Wiretap sets no length
+ * of its own; the plugin tool name limit bounds every id that can carry a tool.
  * @param {unknown} value - The untrusted value.
  * @returns {boolean} Whether it is a module id.
  */
 export function isModuleId(value) {
-   return typeof value === 'string' && value.length <= GATE_MODULE_ID_MAX_CHARS && MODULE_ID_PATTERN.test(value);
+   return typeof value === 'string' && MODULE_ID_PATTERN.test(value);
 }
 
 /**
- * Reduce an untrusted value to a valid module id list: an array of at most `GATE_MODULES_MAX` entries, keeping the
- * module ids (MODULE_ID_PATTERN, 1 to `GATE_MODULE_ID_MAX_CHARS` characters) without duplicates. A longer array is
- * treated as empty without being walked.
+ * Reduce an untrusted value to a valid module id list: an array of any length, keeping the module ids
+ * (MODULE_ID_PATTERN) without duplicates. The list has no count limit because how many modules to allow is the GM's
+ * choice. On the sidecar the snapshot arrives in one Socket.IO message, whose size limit bounds it; the client's own
+ * stored setting has no such bound.
  * @param {unknown} value - The untrusted value.
  * @returns {string[]} A fresh, valid list.
  */
 function sanitizeModuleList(value) {
-   if (!Array.isArray(value) || value.length > GATE_MODULES_MAX) {
+   if (!Array.isArray(value)) {
       return [];
    }
    /** @type {Set<string>} The accepted ids in first-seen order. */
@@ -207,12 +203,12 @@ function closedDenial(name, detail) {
 
 /**
  * Decide whether a gate is open in a snapshot. The snapshot is always sanitized first, so a missing or non-object
- * snapshot, a wrong-typed value, an invalid or oversized module list and an unknown gate name all deny. The
+ * snapshot, a wrong-typed value, a module list that is not an array and an unknown gate name all deny. The
  * `allowedPluginModules` gate is open only for a module id that the sanitized list contains; without a module id it is
  * closed. `moduleId` is ignored for every other gate.
  * @param {unknown} gateState - The snapshot to judge (not required to be sanitized).
  * @param {string} name - The registry name of the gate to judge.
- * @param {string} [moduleId] - The module whose plugin skills or scripts are being run.
+ * @param {string} [moduleId] - The module whose plugin tool is being run.
  * @returns {GateDenial | null} Null when open, else a denial under 256 bytes: only a GM can enable the gate.
  */
 export function gateDenial(gateState, name, moduleId) {
@@ -316,7 +312,7 @@ export function resolveSettingKey(documentOrKey) {
 
 /**
  * The rule every write path applies to Setting writes, whatever the gate state: a Wiretap setting cannot be written,
- * so no skill can change a gate. Fails closed and never throws: input whose key cannot be resolved by
+ * so no Wiretap tool can change a gate. Fails closed and never throws: input whose key cannot be resolved by
  * `resolveSettingKey` is refused. The key is resolved once; callers must write the string `resolveSettingKey` returns.
  * @param {unknown} documentOrKey - A Setting key, or a Setting document or data object (see `resolveSettingKey`).
  * @returns {GateDenial | null} Null when the write goes on to the other checks, else a denial under 256 bytes.

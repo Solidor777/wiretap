@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { GATE_DENIED } from '$shared/protocol.js';
-import { getBudget } from '$shared/budgets.js';
 import { updateDocuments } from '~/bridge/scripts/writes.js';
 import { installWriteWorld } from './mockWriteWorld.js';
 
@@ -496,15 +495,23 @@ describe('updateDocuments: path grammar refusals', () => {
       ).toBe('ARGS_INVALID');
    });
 
-   it('refuses an empty call and a call over the document bound', async () => {
+   it('refuses an empty call, and one document named in two entries by the duplicate rule', async () => {
       expect((await failure({ updates: [] })).code).toBe('ARGS_INVALID');
-      const tooMany = Array.from({ length: getBudget('WRITE_DOCUMENTS_MAX').value + 1 }, () =>
-         update(actor, [{
-            path: 'name',
-            value: 'MOCK_x'
-         }]),
-      );
-      expect((await failure({ updates: tooMany })).code).toBe('ARGS_INVALID');
+      /** @type {Error & { code: string }} The refusal of the same document written twice. */
+      const twice = await failure({
+         updates: [
+            update(actor, [{
+               path: 'name',
+               value: 'MOCK_a'
+            }]),
+            update(actor, [{
+               path: 'name',
+               value: 'MOCK_b'
+            }]),
+         ],
+      });
+      expect(twice.code).toBe('ARGS_INVALID');
+      expect(twice.message).toBe('A document may be written once per call: give all its patches in one entry.');
       expect(world.calls).toEqual([]);
    });
 });
@@ -905,5 +912,23 @@ describe('updateDocuments: read-back', () => {
          readback: true,
       });
       expect(rows[0].exported).toMatchObject({ name: 'MOCK_x' });
+   });
+});
+
+describe('updateDocuments: the partial read-back notice', () => {
+   it('marks a read-back row partial when the export leaves part of the document out', async () => {
+      /** @type {Record<string, unknown>} A subtree past the redaction depth and within the write depth bound. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 26; level += 1) {
+         deep = { next: deep };
+      }
+      const rows = await updateDocuments({
+         updates: [update(actor, [{
+            path: 'flags.mock.deep',
+            value: deep,
+         }])],
+         readback: true,
+      });
+      expect(rows[0].partial).toBe(true);
    });
 });

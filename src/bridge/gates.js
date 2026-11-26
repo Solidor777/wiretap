@@ -1,11 +1,48 @@
-import { GATES, gateDenial, sanitizeGateState } from '$shared/gates.js';
+import { GATES, gateDenial, isModuleId, sanitizeGateState } from '$shared/gates.js';
+import { cleanForLog } from '$shared/logText.js';
 
 /** @type {string} The settings namespace prefix of every gate setting key. */
 const GATE_KEY_PREFIX = 'wiretap.';
 
 /**
- * Split a stored comma-separated module id string into candidate ids. Validation (id shape, length, duplicates, count)
- * is left to `sanitizeGateState`; a non-string value gives an empty list.
+ * Longest stored module list entry named in a notice, in UTF-8 bytes.
+ * @type {number}
+ */
+const ENTRY_LOG_MAX_BYTES = 64;
+
+/**
+ * The stored value of each `moduleList` gate last judged, so each dropped entry is logged once per stored value and
+ * not on every gate read.
+ * @type {Map<string, unknown>}
+ */
+const lastJudgedLists = new Map();
+
+/**
+ * Log, once per stored value, each entry of a `moduleList` gate that `sanitizeGateState` drops because it is not a
+ * module id. The GM is the only one who can fix the setting, so the notice is a log line.
+ * @param {string} name - The gate name.
+ * @param {unknown} stored - The stored value of the gate setting.
+ * @param {string[]} candidates - The entries split from it.
+ * @returns {void}
+ */
+function noticeDroppedEntries(name, stored, candidates) {
+   if (lastJudgedLists.has(name) && lastJudgedLists.get(name) === stored) {
+      return;
+   }
+   lastJudgedLists.set(name, stored);
+   for (const candidate of candidates) {
+      if (!isModuleId(candidate)) {
+         console.warn(
+            `Wiretap | ${name} ignores "${cleanForLog(candidate, ENTRY_LOG_MAX_BYTES)}": a module id holds only `
+               + 'letters, digits, _ and -.',
+         );
+      }
+   }
+}
+
+/**
+ * Split a stored comma-separated module id string into candidate ids. Validation (id shape and duplicates) is left to
+ * `sanitizeGateState`; a non-string value gives an empty list.
  * @param {unknown} stored - The stored value of a `moduleList` gate setting.
  * @returns {string[]} The trimmed, non-empty candidates in stored order.
  */
@@ -21,7 +58,8 @@ function splitModuleList(stored) {
 
 /**
  * Read every gate from this client's world settings into a sanitized snapshot. A gate whose read throws, or whose
- * stored value has the wrong type, is closed; the result is always a complete `GateState`.
+ * stored value has the wrong type, is closed; the result is always a complete `GateState`. A module list entry that
+ * is not a module id is dropped and logged (see `noticeDroppedEntries`).
  * @returns {import('$shared/gates.js').GateState} A fresh snapshot.
  */
 export function readGateState() {
@@ -31,7 +69,14 @@ export function readGateState() {
       try {
          /** @type {unknown} The stored value of this gate. */
          const stored = game.settings.get('wiretap', name);
-         raw[name] = gate.type === 'moduleList' ? splitModuleList(stored) : stored;
+         if (gate.type === 'moduleList') {
+            /** @type {string[]} The entries of the stored list. */
+            const candidates = splitModuleList(stored);
+            noticeDroppedEntries(name, stored, candidates);
+            raw[name] = candidates;
+         } else {
+            raw[name] = stored;
+         }
       } catch {
          // An unreadable gate is left out of the raw snapshot, so the sanitizer closes it.
       }

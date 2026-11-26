@@ -4,6 +4,7 @@ import {
    TERMINAL_LAUNCH,
    TERMINAL_INPUT,
    TERMINAL_CLOSE,
+   TERMINAL_SCROLLBACK_DEFAULT,
 } from '$shared/protocol.js';
 
 /**
@@ -95,6 +96,66 @@ describe('TerminalConnection', () => {
       fire('terminal:exit', { code: 0 });
       events = sent.map((s) => s.event);
       expect(events).toContain(TERMINAL_LAUNCH);
+   });
+
+   it('keeps 64 KB (65,536 characters) of output by default and sends that size with the launch', () => {
+      const { socket, fire, sent } = makeFakeSocket();
+      const conn = new TerminalConnection();
+      conn.connect('http://127.0.0.1:31416', () => socket);
+      fire('connect');
+      fire('terminal:data', { chunk: `${'a'.repeat(10)}${'b'.repeat(TERMINAL_SCROLLBACK_DEFAULT)}` });
+      const writes = [];
+      conn.attach((chunk) => writes.push(chunk));
+      expect(writes.join('')).toBe('b'.repeat(TERMINAL_SCROLLBACK_DEFAULT));
+      conn.launch('claude');
+      expect(sent.find((s) => s.event === TERMINAL_LAUNCH).payload).toEqual({
+         command: 'claude',
+         cols: 80,
+         rows: 24,
+         scrollback: TERMINAL_SCROLLBACK_DEFAULT,
+      });
+   });
+
+   it('keeps the configured number of characters and sends it with the launch', () => {
+      const { socket, fire, sent } = makeFakeSocket();
+      const conn = new TerminalConnection();
+      conn.setScrollback(10);
+      conn.connect('http://127.0.0.1:31416', () => socket);
+      fire('connect');
+      fire('terminal:data', { chunk: 'abcdefghij' });
+      fire('terminal:data', { chunk: 'klmno' });
+      const writes = [];
+      conn.attach((chunk) => writes.push(chunk));
+      expect(writes.join('')).toBe('fghijklmno');
+      conn.launch('claude');
+      expect(sent.find((s) => s.event === TERMINAL_LAUNCH).payload.scrollback).toBe(10);
+   });
+
+   it('trims the kept output at once when the size shrinks', () => {
+      const { socket, fire } = makeFakeSocket();
+      const conn = new TerminalConnection();
+      conn.connect('http://127.0.0.1:31416', () => socket);
+      fire('connect');
+      fire('terminal:data', { chunk: 'abcdefghij' });
+      conn.setScrollback(4);
+      const writes = [];
+      conn.attach((chunk) => writes.push(chunk));
+      expect(writes.join('')).toBe('ghij');
+   });
+
+   it.each([
+      ['zero', 0],
+      ['a negative number', -1],
+      ['a fraction', 2.5],
+      ['not a number', Number.NaN],
+      ['null', null],
+   ])('falls back to the default size for %s', (_label, value) => {
+      const { socket, sent } = makeFakeSocket();
+      const conn = new TerminalConnection();
+      conn.setScrollback(value);
+      conn.connect('http://127.0.0.1:31416', () => socket);
+      conn.launch('claude');
+      expect(sent.find((s) => s.event === TERMINAL_LAUNCH).payload.scrollback).toBe(TERMINAL_SCROLLBACK_DEFAULT);
    });
 
    it('restart while idle launches immediately', () => {

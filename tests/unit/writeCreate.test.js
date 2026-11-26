@@ -270,7 +270,7 @@ describe('createDocuments: arguments', () => {
       })).code).toBe('ARGS_INVALID');
    });
 
-   it('refuses an empty list, a non-object entry and more documents than the bound', async () => {
+   it('refuses an empty list and a non-object entry', async () => {
       expect((await failure({
          documentName: 'Actor',
          data: []
@@ -283,12 +283,17 @@ describe('createDocuments: arguments', () => {
          documentName: 'Actor',
          data: [[]]
       })).code).toBe('ARGS_INVALID');
-      const tooMany = Array.from({ length: getBudget('WRITE_DOCUMENTS_MAX').value + 1 }, () => ({ name: 'MOCK' }));
-      expect((await failure({
-         documentName: 'Actor',
-         data: tooMany
-      })).code).toBe('ARGS_INVALID');
       expect(world.calls).toEqual([]);
+   });
+
+   it('creates more documents in one call than the best-practice size', async () => {
+      const count = getBudget('WRITE_DOCUMENTS_MAX').value * 2 + 20;
+      const rows = await createDocuments({
+         documentName: 'Actor',
+         data: Array.from({ length: count }, (_, index) => ({ name: `MOCK_${index}` })),
+      });
+      expect(world.classes.Actor.createDocuments.mock.calls[0][0]).toHaveLength(count);
+      expect(rows).toHaveLength(count);
    });
 });
 
@@ -864,5 +869,35 @@ describe('createDocuments: rows follow the order of the data', () => {
       expect(sent[0]._id).toMatch(/^[A-Za-z0-9]{16}$/);
       expect(sent[0]._id).not.toBe('MOCKIGNOREDID000');
       expect(rows[0].uuid).toBe(`Actor.${sent[0]._id}`);
+   });
+});
+
+describe('createDocuments: the partial read-back notice', () => {
+   it('marks a read-back row partial when the export leaves part of the document out', async () => {
+      /** @type {Record<string, unknown>} A subtree past the redaction depth and within the write depth bound. */
+      let deep = { leaf: 1 };
+      for (let level = 0; level < 26; level += 1) {
+         deep = { next: deep };
+      }
+      const rows = await createDocuments({
+         documentName: 'Actor',
+         data: [{
+            name: 'MOCK_deep',
+            type: 'npc',
+            flags: { mock: { deep } },
+         }],
+         readback: true,
+      });
+      expect(rows[0].exported).toMatchObject({ name: 'MOCK_deep' });
+      expect(rows[0].partial).toBe(true);
+      const whole = await createDocuments({
+         documentName: 'Actor',
+         data: [{
+            name: 'MOCK_whole',
+            type: 'npc',
+         }],
+         readback: true,
+      });
+      expect(whole[0].partial).toBeUndefined();
    });
 });

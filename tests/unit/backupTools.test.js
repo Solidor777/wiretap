@@ -8,6 +8,7 @@ import { createBackupStore } from '../../server/backups.ts';
 import { BridgeError } from '../../server/endpoints.ts';
 import {
    BACKUP_FILE_PATTERN,
+   BACKUP_NOTE_MAX_JSON_BYTES,
    HEADER_LINE_BYTES,
    parseHeaderLine,
 } from '../../shared/backup.js';
@@ -158,7 +159,7 @@ function makeBridge() {
 
 /**
  * Build the store, the fake bridge and the tools.
- * @param {{ trash?: TrashFunction }} [options] - A recycle bin to use instead of the fake one.
+ * @param {{ trash?: TrashFunction, now?: () => number }} [options] - A recycle bin instead of the fake one; the clock.
  * @returns {Fixture} The fixture.
  */
 function setup(options = {}) {
@@ -182,6 +183,7 @@ function setup(options = {}) {
       bridge,
       store,
       log: (line) => logs.push(line),
+      now: options.now,
    })(undefined);
    return {
       root,
@@ -428,14 +430,15 @@ describe('backup_documents arguments', () => {
       expect(fixture.bridge.calls).toHaveLength(0);
    });
 
-   it('refuses a note over 200 bytes or with a control character', async () => {
+   it('refuses a note too large for the header line or with a control character', async () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The expected refusal. */
-      const refusal = 'ARGS_INVALID: note must be at most 200 bytes with no control characters.';
+      const refusal = 'ARGS_INVALID: note must have no control characters and take at most '
+         + `${BACKUP_NOTE_MAX_JSON_BYTES} bytes in the backup header.`;
       expect(await fixture.call('backup_documents', {
          documentName: 'Actor',
-         note: 'x'.repeat(201),
+         note: 'x'.repeat(BACKUP_NOTE_MAX_JSON_BYTES + 1),
       })).toEqual({ error: refusal });
       expect(await fixture.call('backup_documents', {
          documentName: 'Actor',
@@ -443,6 +446,199 @@ describe('backup_documents arguments', () => {
       })).toEqual({ error: refusal });
       expect(fixture.bridge.calls).toHaveLength(0);
    });
+
+   it('accepts any positive timeoutMs up to the timer limit less the reply grace, any uuid count, a uuid, folder uuid '
+      + 'or pack id of any length and any list limit', () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      /** @type {number} The longest delay a JavaScript timer holds (a signed 32-bit integer of milliseconds). */
+      const timerMax = 2 ** 31 - 1;
+      /** @type {string[]} 1000 uuids, past the 200-uuid guideline. */
+      const uuids = Array.from({ length: 1000 }, (_, index) => `Actor.MOCKACTOR${String(index).padStart(7, '0')}`);
+      for (const name of ['backup_documents', 'restore_backup']) {
+         /** @type {ToolRegistration} The registration. */
+         const tool = /** @type {ToolRegistration} */ (fixture.tools.find((candidate) => candidate.name === name));
+         /** @type {import('zod').ZodObject} The argument schema. */
+         const schema = z.object(tool.inputSchema);
+         /** @type {object} Arguments every call of the tool needs. */
+         const base = name === 'restore_backup' ? { file: 'x' } : {};
+         for (const timeoutMs of [1, 300_001, timerMax - 2000]) {
+            expect(schema.safeParse({
+               ...base,
+               timeoutMs,
+            }).success, `${name} ${timeoutMs}`).toBe(true);
+         }
+         for (const timeoutMs of [0, timerMax - 1999, 1.5]) {
+            expect(schema.safeParse({
+               ...base,
+               timeoutMs,
+            }).success, `${name} ${timeoutMs}`).toBe(false);
+         }
+         expect(schema.safeParse({
+            ...base,
+            uuids,
+         }).success).toBe(true);
+      }
+      /** @type {string} A document uuid in a pack whose id is over 200 characters. */
+      const long = `Compendium.world.${'p'.repeat(300)}.Actor.MOCKACTOR0000001`;
+      /** @type {import('zod').ZodObject} The backup_documents argument schema. */
+      const backup = z.object(
+         /** @type {ToolRegistration} */ (fixture.tools.find((tool) => tool.name === 'backup_documents')).inputSchema,
+      );
+      for (const args of [
+         { uuids: [long] },
+         { folderUuid: `Folder.${'f'.repeat(300)}` },
+         { pack: `world.${'p'.repeat(300)}` },
+      ]) {
+         expect(backup.safeParse(args).success, JSON.stringify(args).slice(0, 40)).toBe(true);
+      }
+      /** @type {import('zod').ZodObject} The restore_backup argument schema. */
+      const restore = z.object(
+         /** @type {ToolRegistration} */ (fixture.tools.find((tool) => tool.name === 'restore_backup')).inputSchema,
+      );
+      expect(restore.safeParse({
+         file: 'x',
+         uuids: [long],
+      }).success).toBe(true);
+      /** @type {ToolRegistration} The listing registration. */
+      const list = /** @type {ToolRegistration} */ (fixture.tools.find((tool) => tool.name === 'list_backups'));
+      expect(z.object(list.inputSchema).safeParse({ limit: 100_000 }).success).toBe(true);
+      expect(z.object(list.inputSchema).safeParse({ limit: 0 }).success).toBe(false);
+   });
+});
+
+describe('guideline warnings', () => {
+   /**
+    * Run a dry run of `backup_documents` whose fake client reports the given counts, and return the warning lines.
+    * @param {object} args - The call's arguments besides the selector.
+    * @param {{ documents?: number, bytes?: number }} [counts] - The counts the client reports.
+    * @returns {Promise<string[]>} The log lines that are warnings.
+    */
+   async function dryRunWarnings(args, counts = {}) {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      fixture.bridge.behaviour = async () => ({
+         documents: counts.documents ?? 1,
+         bytes: counts.bytes ?? HEADER_LINE_BYTES + 10,
+         unreadable: 0,
+         parents: 0,
+      });
+      /** @type {Record<string, unknown>} The dry run's result. */
+      const result = await fixture.call('backup_documents', {
+         ...(args.uuids === undefined ? { documentName: 'Actor' } : {}),
+         ...args,
+         dryRun: true,
+      });
+      expect(result.dryRun).toBe(true);
+      return fixture.logs.filter((line) => line.includes('warning'));
+   }
+
+   /**
+    * Build distinct synthetic uuids.
+    * @param {number} count - How many uuids to build.
+    * @returns {string[]} Actor uuids that differ by their numeric suffix.
+    */
+   function uuids(count) {
+      return Array.from({ length: count }, (_, index) => `Actor.MOCK${index}`);
+   }
+
+   it('warns once past 200 uuids, a 200-byte note and a 300000 ms timeoutMs, and not at them', async () => {
+      expect(await dryRunWarnings({
+         uuids: uuids(200),
+         note: 'x'.repeat(200),
+         timeoutMs: 300_000,
+      })).toEqual([]);
+      expect(await dryRunWarnings({ uuids: uuids(201) })).toEqual([
+         'Wiretap sidecar | backup_documents warning: uuids 201 is over the 200 guideline',
+      ]);
+      expect(await dryRunWarnings({ note: 'x'.repeat(201) })).toEqual([
+         'Wiretap sidecar | backup_documents warning: note bytes 201 is over the 200 guideline',
+      ]);
+      expect(await dryRunWarnings({ timeoutMs: 300_001 })).toEqual([
+         'Wiretap sidecar | backup_documents warning: timeoutMs 300001 is over the 300000 guideline',
+      ]);
+   });
+
+   it('warns once past 10000 documents and 64000000 bytes, and not at them', async () => {
+      expect(await dryRunWarnings({}, {
+         documents: 10_000,
+         bytes: 64_000_000,
+      })).toEqual([]);
+      expect(await dryRunWarnings({}, {
+         documents: 10_001,
+         bytes: 64_000_001,
+      })).toEqual([
+         'Wiretap sidecar | backup_documents warning: documents 10001 is over the 10000 guideline',
+         'Wiretap sidecar | backup_documents warning: bytes 64000001 is over the 64000000 guideline',
+      ]);
+   });
+
+   it('warns once past a list limit of 50, and not at it', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      await fixture.call('list_backups', { limit: 50 });
+      expect(fixture.logs).toEqual([]);
+      await fixture.call('list_backups', { limit: 51 });
+      expect(fixture.logs).toEqual([
+         'Wiretap sidecar | list_backups warning: limit 51 is over the 50 guideline',
+      ]);
+   });
+
+   it('writes at most 10 guideline warnings per minute, then one summary line', async () => {
+      /** @type {number} The tools' clock in milliseconds. */
+      let clock = 0;
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup({ now: () => clock });
+      for (let index = 0; index < 15; index += 1) {
+         await fixture.call('list_backups', { limit: 51 });
+      }
+      expect(fixture.logs).toEqual(Array.from({ length: 10 }, () =>
+         'Wiretap sidecar | list_backups warning: limit 51 is over the 50 guideline'));
+      clock = 60_000;
+      await fixture.call('list_backups', { limit: 52 });
+      expect(fixture.logs.slice(10)).toEqual([
+         'Wiretap sidecar | 5 further backup guideline warnings suppressed',
+         'Wiretap sidecar | list_backups warning: limit 52 is over the 50 guideline',
+      ]);
+   });
+
+   it('warns once past 200 uuids, a 300000 ms timeoutMs and a 10000-document file on restore, and not at them',
+      async () => {
+         /** @type {Fixture} The store, fake bridge and tools under test. */
+         const fixture = setup();
+         /** @type {string} A backup of 10000 short lines. */
+         const atGuideline = await writeBackup(fixture.store, fixture.store.defaultFolder, {
+            lines: Array.from({ length: 10_000 }, () => '{}\n'),
+         });
+         /** @type {string} A backup of 10001 short lines. */
+         const pastGuideline = await writeBackup(fixture.store, fixture.store.defaultFolder, {
+            lines: Array.from({ length: 10_001 }, () => '{}\n'),
+         });
+         fixture.bridge.behaviour = async () => ({ ...RESTORE_RESULT });
+         await fixture.call('restore_backup', {
+            file: atGuideline,
+            uuids: uuids(200),
+            timeoutMs: 300_000,
+         });
+         await fixture.bridge.ended;
+         // The lock clears once the pump has ended and the file is closed, a task after the end marker.
+         await new Promise((resolve) => {
+            setImmediate(resolve);
+         });
+         expect(fixture.logs).toEqual([]);
+         /** @type {Record<string, unknown>} The restore of the larger file. */
+         const result = await fixture.call('restore_backup', {
+            file: pastGuideline,
+            uuids: uuids(201),
+            timeoutMs: 300_001,
+         });
+         expect(result.error).toBeUndefined();
+         expect(fixture.logs).toEqual([
+            'Wiretap sidecar | restore_backup warning: uuids 201 is over the 200 guideline',
+            'Wiretap sidecar | restore_backup warning: timeoutMs 300001 is over the 300000 guideline',
+            'Wiretap sidecar | restore_backup warning: documents 10001 is over the 10000 guideline',
+         ]);
+      });
 });
 
 describe('backup_documents', () => {
@@ -696,7 +892,7 @@ describe('backup_documents', () => {
          expect(backupFiles(fixture.store.defaultFolder)).toEqual([]);
       });
 
-   it('saves 10000 documents as a listable backup and refuses 10001 with BACKUP_TOO_LARGE, trashing the file',
+   it('saves a backup of 10000 documents and one of 10001, both listable, warning only for the larger',
       async () => {
          /** @type {Fixture} The store, fake bridge and tools under test. */
          const fixture = setup();
@@ -719,17 +915,23 @@ describe('backup_documents', () => {
          /** @type {Record<string, unknown>} The saved backup. */
          const saved = await fixture.call('backup_documents', { documentName: 'Actor' });
          expect(saved.documents).toBe(10_000);
-         expect(await fixture.call('list_backups', {})).toMatchObject({
-            rows: [[saved.file, expect.any(String), 10_000, '']],
-            total: 1,
-         });
+         expect(fixture.logs).toEqual([]);
 
          streamLines(10_001);
-         expect(await fixture.call('backup_documents', { documentName: 'Actor' })).toEqual({
-            error: 'BACKUP_TOO_LARGE: The backup would exceed 10000 documents.',
+         /** @type {Record<string, unknown>} The larger backup. */
+         const larger = await fixture.call('backup_documents', { documentName: 'Actor' });
+         expect(larger.documents).toBe(10_001);
+         expect(fixture.logs).toEqual([
+            'Wiretap sidecar | backup_documents warning: documents 10001 is over the 10000 guideline',
+         ]);
+         expect(await fixture.call('list_backups', {})).toMatchObject({
+            rows: [
+               [larger.file, expect.any(String), 10_001, ''],
+               [saved.file, expect.any(String), 10_000, ''],
+            ],
+            total: 2,
          });
-         expect(fixture.trash.calls).toHaveLength(1);
-         expect(backupFiles(fixture.store.defaultFolder)).toEqual([saved.file]);
+         expect(fixture.trash.calls).toHaveLength(0);
       });
 
    it('names the partial file when the recycle bin refuses it', async () => {
@@ -837,7 +1039,7 @@ describe('backup_documents', () => {
 });
 
 describe('createBackupSink', () => {
-   it('createBackupSink refuses received bytes over 64000000 with BACKUP_TOO_LARGE', async () => {
+   it('createBackupSink accepts received bytes past 64000000', async () => {
       /** @type {number} Bytes the fake writer received. */
       let appended = 0;
       /** @type {import('../../server/backups.ts').BackupFileWriter} A writer that only counts. */
@@ -857,32 +1059,18 @@ describe('createBackupSink', () => {
       const sink = createBackupSink(() => writer);
       /** @type {Buffer} One full piece, reused. */
       const piece = Buffer.alloc(512_000);
-      for (let seq = 0; seq < 124; seq += 1) {
+      for (let seq = 0; seq < 126; seq += 1) {
          await sink.piece({
             seq,
             data: piece,
          });
       }
-      expect(appended).toBe(63_488_000);
-      /** @type {unknown} The refusal of piece 125. */
-      const refusal = await Promise.resolve(sink.piece({
-         seq: 124,
-         data: piece,
-      })).catch((error) => error);
-      expect(refusal).toBeInstanceOf(BridgeError);
-      expect(/** @type {BridgeError} */ (refusal).code).toBe('BACKUP_TOO_LARGE');
-      expect(sink.failure()).toBe(refusal);
-      expect(appended).toBe(63_488_000);
-      /** @type {unknown} The refusal of a later piece. */
-      const later = await Promise.resolve(sink.piece({
-         seq: 125,
-         data: Buffer.from('x'),
-      })).catch((error) => error);
-      expect(later).toBe(refusal);
+      expect(appended).toBe(64_512_000);
+      expect(sink.failure()).toBeUndefined();
       expect(sink.writer()).toBe(writer);
       expect(sink.counts()).toEqual({
-         pieces: 124,
-         bytes: 63_488_000,
+         pieces: 126,
+         bytes: 64_512_000,
          lines: 0,
          ended: false,
       });
@@ -1217,13 +1405,13 @@ describe('restore_backup', () => {
       }
    });
 
-   it('returns a skipped row that echoes the longest non-ASCII uuid the arguments allow', async () => {
+   it('returns a skipped row that echoes a long non-ASCII uuid', async () => {
       /** @type {Fixture} The store, fake bridge and tools under test. */
       const fixture = setup();
       /** @type {string} The backup. */
       const file = await writeBackup(fixture.store);
-      /** @type {string} A uuid of 256 characters, each 3 UTF-8 bytes: 768 bytes. */
-      const uuid = '€'.repeat(256);
+      /** @type {string} A uuid of 1000 characters, each 3 UTF-8 bytes: 3000 bytes. */
+      const uuid = '€'.repeat(1000);
       fixture.bridge.behaviour = async () => ({
          replaced: 2,
          created: 0,
@@ -1281,6 +1469,32 @@ describe('list_backups and delete_backup', () => {
       expect(large.__bytes).toBeLessThanOrEqual(2000);
       expect(large.cut).toBe(true);
       expect(/** @type {unknown[]} */ (large.rows).length).toBeLessThan(30);
+   });
+
+   it('says how many files the listing did not read when the header read bound stopped it', async () => {
+      /** @type {Fixture} The store, fake bridge and tools under test. */
+      const fixture = setup();
+      /** @type {ToolRegistration[]} Tools over a store whose listing stopped at the read bound. */
+      const tools = createBackupTools({
+         bridge: fixture.bridge,
+         store: {
+            ...fixture.store,
+            list: () => ({
+               rows: [],
+               total: 1500,
+               invalid: 1000,
+               unread: 500,
+            }),
+         },
+      })(undefined);
+      /** @type {Record<string, unknown>} The `list_backups` reply over the stopped listing. */
+      const listing = await callTool(tools, 'list_backups', {});
+      expect(listing).toMatchObject({
+         total: 1500,
+         invalid: 1000,
+         unread: 500,
+      });
+      expect((await fixture.call('list_backups', {})).unread).toBeUndefined();
    });
 
    it('fitListResult and fitRestoreResult leave a fitting result unchanged', () => {

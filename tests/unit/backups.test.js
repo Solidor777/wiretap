@@ -458,6 +458,7 @@ describe('list', () => {
          rows: [],
          total: 0,
          invalid: 0,
+         unread: 0,
       });
       fixture.store.checkFolder(folder, true);
       /** @type {string[]} The valid files, oldest first. */
@@ -476,6 +477,7 @@ describe('list', () => {
          ],
          total: 4,
          invalid: 1,
+         unread: 0,
       });
    });
 
@@ -497,6 +499,7 @@ describe('list', () => {
          rows: [],
          total: 1001,
          invalid: 1000,
+         unread: 1,
       });
    });
 });

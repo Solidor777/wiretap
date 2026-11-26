@@ -13,7 +13,6 @@ import {
 } from '$shared/protocol.js';
 import { getBudget } from '$shared/budgets.js';
 import { cleanForLog, describeCause } from '$shared/logText.js';
-import { SCRIPT_API_VERSION } from '$shared/scripts.js';
 import { truncateUtf8 } from '$shared/utf8.js';
 import { exportBackup } from '~/bridge/backup/exportBackup.js';
 import { restoreBackup } from '~/bridge/backup/restoreBackup.js';
@@ -23,6 +22,7 @@ import { createPieceChannel } from '~/bridge/pieces.js';
 import { createCallTool } from '~/bridge/scripts/callTool.js';
 import { ERROR_MESSAGE_MAX_BYTES } from '~/bridge/scripts/core.js';
 import { ScriptError, scriptRegistry } from '~/bridge/scripts/registry.js';
+import { buildRegistryPayload } from '~/bridge/scripts/registryPayload.js';
 
 /**
  * Live bridge state; `identified` is true only from an ok identify ack until the next disconnect, refusal or
@@ -247,8 +247,10 @@ export function initFoundryBridge(connection, { scripts = scriptRegistry } = {})
       /**
        * Send the complete script list to the sidecar, which replaces this endpoint's previous list with it. Only an
        * identified, connected endpoint sends: the sidecar refuses a registry from a socket it has not registered. The
-       * payload holds definitions only; handlers never leave the client. The sidecar's ack reports how many entries it
-       * accepted and refused (the reasons are in the sidecar log).
+       * payload holds definitions only; handlers never leave the client, and plugin definitions are left out, largest
+       * listed definition first (the later registration first among equal sizes), while the payload would exceed the
+       * sidecar's message bound. The sidecar's ack reports how many entries
+       * it accepted and refused (the reasons are in the sidecar log).
        * @returns {void}
        */
       const sendRegistry = () => {
@@ -257,10 +259,7 @@ export function initFoundryBridge(connection, { scripts = scriptRegistry } = {})
          }
          socket.emit(
             BRIDGE_REGISTRY,
-            {
-               apiVersion: SCRIPT_API_VERSION,
-               scripts: scripts.definitions(),
-            },
+            buildRegistryPayload(scripts.definitions(), scripts.log),
             (ack) => {
                if (ack?.ok === true) {
                   if (ack.refused > 0) {

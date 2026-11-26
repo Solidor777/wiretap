@@ -66,7 +66,6 @@
  * (`unreadable` of `canonical.js`) is refused with the same code, and a `User` is never copied.
  */
 
-import { getBudget } from '$shared/budgets.js';
 import { cleanForLog } from '$shared/logText.js';
 import { resolveDocument, unreadable } from '~/bridge/scripts/canonical.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
@@ -93,26 +92,19 @@ const COPY_OPTIONS = Object.freeze({
 /**
  * @typedef {object} CopyParams
  * @property {string} documentName - The class of the documents to create; every source must be of this class.
- * @property {unknown} fromUuids - The uuids of the sources, 1 to `WRITE_DOCUMENTS_MAX` strings.
+ * @property {unknown} fromUuids - The uuids of the sources, one or more strings.
  * @property {boolean} [keepId] - Keep the `_id` of each source in its copy.
  */
 
 /**
- * Check the uuid list of a copy: an array of 1 to `WRITE_DOCUMENTS_MAX` strings.
+ * Check the uuid list of a copy: an array of one or more strings.
  * @param {unknown} fromUuids - The list the call carries.
  * @returns {void}
  * @throws {ScriptError} `ARGS_INVALID` when the list is not such an array.
  */
 function checkUuids(fromUuids) {
-   /** @type {number} The most sources one call copies. */
-   const max = getBudget('WRITE_DOCUMENTS_MAX').value;
-   if (
-      !Array.isArray(fromUuids) ||
-      fromUuids.length < 1 ||
-      fromUuids.length > max ||
-      !fromUuids.every((uuid) => typeof uuid === 'string')
-   ) {
-      throw new ScriptError('ARGS_INVALID', `Give 1 to ${max} fromUuids.`);
+   if (!Array.isArray(fromUuids) || fromUuids.length < 1 || !fromUuids.every((uuid) => typeof uuid === 'string')) {
+      throw new ScriptError('ARGS_INVALID', 'Give one or more fromUuids.');
    }
 }
 

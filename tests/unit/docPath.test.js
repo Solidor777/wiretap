@@ -640,16 +640,16 @@ describe('resolvePaths', () => {
       ]).error.code).toBe('PATH_INVALID');
    });
 
-   it('accepts the maximum number of paths and refuses one more', () => {
-      const max = getBudget('PATHS_PER_CALL_MAX').value;
-      const paths = Array.from({ length: max }, () => 'name');
-      expect(resolvePaths(makeExport(), paths).ok).toBe(true);
-      const over = resolvePaths(makeExport(), [
+   it('resolves more paths than the best-practice path count', () => {
+      const count = getBudget('PATHS_PER_CALL_MAX').value * 3;
+      const paths = Array.from({ length: count }, (_, index) => `missing${index}`);
+      const result = resolvePaths(makeExport(), [
          ...paths,
          'name',
       ]);
-      expect(over.ok).toBe(false);
-      expect(over.error.code).toBe('PATH_LIMIT');
+      expect(result.ok).toBe(true);
+      expect(result.missing).toHaveLength(count);
+      expect(Object.keys(result.values)).toEqual(['name']);
    });
 
    it('refuses a paths argument that is not an array of strings', () => {
@@ -1085,14 +1085,15 @@ describe('groupWrites', () => {
       }], COLLECTIONS).ok).toBe(true);
    });
 
-   it('refuses more patches than the per-call path limit', () => {
-      const max = getBudget('PATHS_PER_CALL_MAX').value;
-      const patches = Array.from({ length: max + 1 }, (_, index) => ({
+   it('groups more patches than the best-practice path count', () => {
+      const count = getBudget('PATHS_PER_CALL_MAX').value * 3;
+      const patches = Array.from({ length: count }, (_, index) => ({
          path: `flags.k${index}`,
          value: index,
       }));
-      expect(groupWrites(patches, COLLECTIONS).error.code).toBe('PATH_LIMIT');
-      expect(groupWrites(patches.slice(0, max), COLLECTIONS).ok).toBe(true);
+      const result = groupWrites(patches, COLLECTIONS);
+      expect(result.ok).toBe(true);
+      expect(result.document).toHaveLength(count);
    });
 
    describe('unsafe values', () => {
@@ -1262,7 +1263,10 @@ describe('error messages', () => {
          () => parsePath(manySegments),
          () => resolvePaths({}, 'name'),
          () => resolvePaths({}, []),
-         () => resolvePaths({}, Array.from({ length: 21 }, () => 'a')),
+         () => resolvePaths({}, [
+            'a',
+            'a..b',
+         ]),
          () => resolvePaths({}, [hugePath]),
          () => groupWrites('x', []),
          () => groupWrites([], []),

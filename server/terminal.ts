@@ -8,22 +8,34 @@ import {
    TERMINAL_DATA,
    TERMINAL_STATE,
    TERMINAL_EXIT,
+   TERMINAL_SCROLLBACK_DEFAULT,
+   TERMINAL_SCROLLBACK_WARN,
+   scrollbackChars,
 } from '../shared/protocol.js';
 import { resolvePtyOptions } from './ptyOptions.ts';
 import { resolveSpawn } from './spawnCommand.ts';
 import { isSafeConfigPath, planMcpWiring, wireMcpConfig, type McpWiringPlan } from './mcpWiring.ts';
 import { writeMcpConfig } from './mcpConfigFile.ts';
-
-// Maximum bytes of recent PTY output retained for reattach replay.
-const SCROLLBACK_LIMIT: number = 64 * 1024;
+import { createLogThrottle } from './logThrottle.ts';
 
 // Largest accepted terminal dimension in columns or rows; bounds what an untrusted client can hand to node-pty.
 const MAX_TERMINAL_DIMENSION: number = 1000;
+
+// The output chunk sent only to a socket whose launch is ignored because a terminal already runs; the client shows
+// terminal output as it arrives, so the GM sees why nothing new started.
+const LAUNCH_IGNORED_NOTICE: string = '\r\n[Wiretap] A terminal is already running; the launch was ignored.\r\n';
+
+// Length of one window of the ignored-launch log throttle, in milliseconds.
+const LAUNCH_IGNORED_LOG_WINDOW_MS: number = 60_000;
+
+// Most ignored-launch lines written per window; any socket can send launches in a loop.
+const LAUNCH_IGNORED_LOG_LIMIT: number = 10;
 
 interface LaunchPayload {
    command?: string;
    cols?: number;
    rows?: number;
+   scrollback?: unknown;
 }
 
 /** Options for the terminal manager. */
@@ -65,8 +77,18 @@ export function createTerminalManager(
    let term: pty.IPty | null = null;
    // Recent PTY output replayed to a reattaching client.
    let scrollback: string = '';
+   // Characters of output kept in `scrollback`, set by each launch from the GM's scrollback setting.
+   let scrollbackLimit: number = TERMINAL_SCROLLBACK_DEFAULT;
    // The last known terminal dimensions.
    let size: ResizePayload = { cols: 80, rows: 24 };
+   // Writes an ignored-launch line subject to the per-window limit, with one summary line per window.
+   const logLaunchIgnored: (line: string) => void = createLogThrottle({
+      log: (line) => console.warn(line),
+      now: Date.now,
+      limit: LAUNCH_IGNORED_LOG_LIMIT,
+      windowMs: LAUNCH_IGNORED_LOG_WINDOW_MS,
+      noun: 'ignored terminal launch lines',
+   });
    /**
     * Auto-wire the MCP endpoint into an allowlisted `claude` command. The config file is (re)written on every
     * wired launch. Returns the command unchanged (and logs why when the cause is a skipped command line, an
@@ -125,24 +147,31 @@ export function createTerminalManager(
    }
 
    /**
-    * Append a chunk to the scrollback buffer, trimming to the byte cap.
+    * Append a chunk to the scrollback buffer, keeping its last `scrollbackLimit` characters (UTF-16 code units).
     * @param {string} chunk - The output chunk to retain.
     */
    function appendScrollback(chunk: string): void {
       scrollback += chunk;
-      if (scrollback.length > SCROLLBACK_LIMIT) {
-         scrollback = scrollback.slice(scrollback.length - SCROLLBACK_LIMIT);
+      if (scrollback.length > scrollbackLimit) {
+         scrollback = scrollback.slice(scrollback.length - scrollbackLimit);
       }
    }
 
    /**
-    * Spawn the PTY if none is running. A payload that is not an object, whose `command` is neither absent nor a
-    * string, or whose `cols` or `rows` is present but not an integer within 1..MAX_TERMINAL_DIMENSION, launches
-    * nothing: the payload comes from an untrusted socket event. An absent `cols` or `rows` keeps the stored size.
+    * Spawn the PTY if none is running; a launch while one runs is ignored with one throttled log line, and the
+    * launching socket alone is sent `LAUNCH_IGNORED_NOTICE` as terminal output every time (it is not kept in the
+    * scrollback). A payload that is not an object, whose `command` is neither absent nor a string, or whose `cols` or
+    * `rows` is present but not an integer within 1..MAX_TERMINAL_DIMENSION, launches nothing: the payload comes from
+    * an untrusted socket event. An absent `cols` or `rows` keeps the stored size. The
+    * payload's `scrollback` sets the replay size for this PTY (any value that is not a positive integer gives the
+    * default); a size past `TERMINAL_SCROLLBACK_WARN` is kept and logged once.
+    * @param {Socket} socket - The socket that asked for the launch.
     * @param {LaunchPayload} payload - The launch parameters.
     */
-   function launch(payload: LaunchPayload): void {
+   function launch(socket: Socket, payload: LaunchPayload): void {
       if (term) {
+         logLaunchIgnored('Wiretap sidecar | terminal launch ignored: a terminal is already running');
+         socket.emit(TERMINAL_DATA, { chunk: LAUNCH_IGNORED_NOTICE });
          return;
       }
       if (
@@ -163,6 +192,13 @@ export function createTerminalManager(
       const command: string = withMcpWiring(payload.command ?? 'claude');
       size = { cols: payload.cols ?? size.cols, rows: payload.rows ?? size.rows };
       scrollback = '';
+      scrollbackLimit = scrollbackChars(payload.scrollback);
+      if (scrollbackLimit > TERMINAL_SCROLLBACK_WARN) {
+         console.warn(
+            `Wiretap sidecar | terminal scrollback of ${scrollbackLimit} characters is more than the ` +
+               `${TERMINAL_SCROLLBACK_WARN} recommended; a reattach replays all of it in one message`,
+         );
+      }
       // The spawn executable and arguments for the host platform.
       const { file, args }: { file: string; args: string[] | string } = resolveSpawn(
          command,
@@ -199,7 +235,7 @@ export function createTerminalManager(
          if (term && scrollback) {
             socket.emit(TERMINAL_DATA, { chunk: scrollback });
          }
-         socket.on(TERMINAL_LAUNCH, (payload: LaunchPayload) => launch(payload));
+         socket.on(TERMINAL_LAUNCH, (payload: LaunchPayload) => launch(socket, payload));
          socket.on(TERMINAL_INPUT, (payload: InputPayload) => {
             if (!isObjectPayload(payload) || typeof payload.data !== 'string') {
                console.warn('Wiretap sidecar | terminal input ignored: the payload data is not a string');

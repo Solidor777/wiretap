@@ -10,7 +10,8 @@
  * - Every key whose name matches `SECRET_KEY` is dropped from the free-form data of the export: the `value` of a
  * `Setting` (stored as JSON text) and every `flags` object of the export, so a User's flags and the module flags of
  * any document are covered. Core schema fields and system data are not redacted: core names such as `prototypeToken`
- * match the pattern. The walk is bounded and drops what it cannot finish walking.
+ * match the pattern. The walk is bounded and drops what it cannot finish walking; the export then carries
+ * `partial: true`, which every read and read-back path passes on in its reply.
  *
  * The backup export (`exportForBackup`) applies the same exclusions and also reports the paths they changed. It
  * refuses a document the walk cut at a bound, because a backup must hold every document whole.
@@ -56,20 +57,20 @@ export const SECRET_SETTING_KEY =
    /pass(word|phrase)|secret|api[-_]?key|credential|private[-_]?key|(auth|access|api|bearer|refresh)[-_]?token/i;
 
 /**
- * Deepest level the redaction walk enters; a deeper subtree is dropped.
+ * Deepest level the redaction walk enters; a deeper subtree is dropped and the export is marked partial.
  * @type {number}
  */
 export const REDACT_MAX_DEPTH = 24;
 
 /**
- * Deepest nesting of JSON held in strings the redaction walk opens; deeper text is dropped. Each level of nesting
- * doubles the escaping, so real data never nests far.
+ * Deepest nesting of JSON held in strings the redaction walk opens; deeper text is dropped and the export is marked
+ * partial. Each level of nesting doubles the escaping, so real data never nests far.
  * @type {number}
  */
 export const REDACT_MAX_STRING_NESTING = 4;
 
 /**
- * Most nodes the redaction walk visits per export; the remainder is dropped.
+ * Most nodes the redaction walk visits per export; the remainder is dropped and the export is marked partial.
  * @type {number}
  */
 export const REDACT_MAX_NODES = 50000;
@@ -89,7 +90,9 @@ export const USER_EXCLUDED_FIELDS = Object.freeze([
  */
 
 /**
- * @typedef {{ ok: true, data: Record<string, unknown> } | { ok: false, code: string, message: string }} ExportOutcome
+ * @typedef {{ ok: true, data: Record<string, unknown>, partial?: true } | { ok: false, code: string, message: string }}
+ * ExportOutcome
+ * `partial` is set when the redaction walk dropped part of the document at a bound, so the data does not hold it whole.
  */
 
 /**
@@ -421,7 +424,8 @@ export function exportForBackup(document) {
  * Produce the canonical export of a document: `toCompendium(null, { clearSource: false, keepId: true, clearSort:
  * false, clearOwnership: false })` (Foundry's defaults would drop `_id`, `sort`, `ownership` and `author`) plus
  * `uuid`; or, when `derived`, the prepared data `toObject(false)` with the same fields added. The exclusions apply
- * before the data leaves this function. Never throws.
+ * before the data leaves this function; an export the redaction walk cut at a bound carries `partial: true` beside
+ * `data`. Never throws.
  * @param {object} document - The Foundry document, or a stand-in with `documentName`, `uuid`, `toCompendium` and
  * `toObject`.
  * @param {ExportOptions} options - Whether to export the stored or the prepared data.
@@ -439,11 +443,13 @@ export function exportDocument(document, options) {
       }
       /** @type {Record<string, unknown>} The plain export. */
       const data = options?.derived === true ? toPlain(document.toObject(false)) : storedExport(document);
-      stripExcluded(document.documentName, data);
+      /** @type {boolean} Whether the redaction walk dropped part of the document at a bound. */
+      const partial = stripExcluded(document.documentName, data);
       data.uuid = document.uuid;
       return {
          ok: true,
          data,
+         ...(partial ? { partial: true } : {}),
       };
    } catch {
       return {
