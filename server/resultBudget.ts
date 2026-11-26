@@ -73,8 +73,8 @@ export interface ResultBudgetOptions {
    budgetBytes?: number;
    /** The tool's name, written in the log line that names the result fields the enforcer drops. */
    toolName: string;
-   /** Receives the log line that names the dropped result fields (default: `console.warn`). */
-   log?: (line: string) => void;
+   /** The sidecar log sink; receives the line that names the result fields the enforcer drops. */
+   log: (line: string) => void;
 }
 
 /** The byte limit of one call and whether it is lower than the per-call `maxBytes` asked for. */
@@ -502,7 +502,7 @@ function enforce(raw: unknown, args: unknown, options: ResultBudgetOptions): Cal
    const content: CallToolResult['content'] = result.content.map(rebuildItem);
    // The rebuilt image items.
    const images: CallToolResult['content'] = content.filter((item) => item.type === 'image');
-   logDroppedFields(options.toolName, result, options.log ?? ((line: string): void => console.warn(line)));
+   logDroppedFields(options.toolName, result, options.log);
    // The limit of this call.
    const callLimit: CallLimit = resolveLimit(args, options.budgetBytes);
    if (bytes <= callLimit.limit) {

@@ -8,6 +8,12 @@ import { summarizeResult, withResultBudget } from '../../server/resultBudget.ts'
 const OWNER = 'owner-a';
 
 /**
+ * The log sink of the tests that read no log line.
+ * @returns {void}
+ */
+const IGNORE_LOG = () => {};
+
+/**
  * Build a text tool result.
  * @param {string} text - The text of the single content item.
  * @returns {{ content: { type: 'text', text: string }[] }} The one-item text result.
@@ -28,21 +34,26 @@ function textResult(text) {
  * @param {object} result - The result the handler returns.
  * @param {object} [args] - The tool arguments.
  * @param {object} [options] - Extra enforcer options (`budgetBytes`, `store`).
- * @returns {Promise<{ out: object, store: ReturnType<typeof createHandleStore> }>} The enforced result and the store.
+ * @returns {Promise<{ out: object, store: ReturnType<typeof createHandleStore>, lines: string[] }>} The result, store
+ * and log lines.
  */
 async function enforce(result, args = {}, options = {}) {
    /** @type {ReturnType<typeof createHandleStore>} The store receiving large results. */
    const store = options.store ?? createHandleStore();
+   /** @type {string[]} The lines the enforcer's log received. */
+   const lines = [];
    /** @type {Function} The wrapped handler. */
    const wrapped = withResultBudget(async () => result, {
       store,
       ownerKey: OWNER,
       toolName: 'mock_tool',
       budgetBytes: options.budgetBytes,
+      log: (line) => lines.push(line),
    });
    return {
       out: await wrapped(args),
       store,
+      lines,
    };
 }
 
@@ -248,6 +259,7 @@ describe('threshold', () => {
          {
             store: createHandleStore(),
             ownerKey: OWNER,
+            log: IGNORE_LOG,
          },
       );
       await wrapped({ a: 1 }, { sessionId: 's' });
@@ -486,6 +498,7 @@ describe('errors', () => {
          {
             store: createHandleStore(),
             ownerKey: OWNER,
+            log: IGNORE_LOG,
          },
       );
       const out = await wrapped({});
@@ -763,6 +776,7 @@ describe('the enforcer never fails open', () => {
       const wrapped = withResultBudget(async () => value, {
          store: createHandleStore(),
          ownerKey: OWNER,
+         log: IGNORE_LOG,
       });
       return wrapped({});
    }
@@ -900,6 +914,7 @@ describe('the enforcer never fails open', () => {
             {
                store: createHandleStore(),
                ownerKey: OWNER,
+               log: IGNORE_LOG,
             },
          );
          const out = await wrapped({});
@@ -929,6 +944,7 @@ describe('the enforcer never fails open', () => {
             {
                store: createHandleStore(),
                ownerKey: OWNER,
+               log: IGNORE_LOG,
             },
          );
          await wrapped({});
@@ -950,6 +966,7 @@ describe('the enforcer never fails open', () => {
          {
             store: createHandleStore(),
             ownerKey: OWNER,
+            log: IGNORE_LOG,
          },
       );
       const out = await wrapped({});
@@ -966,6 +983,7 @@ describe('the enforcer never fails open', () => {
          {
             store: createHandleStore(),
             ownerKey: OWNER,
+            log: IGNORE_LOG,
          },
       );
       const out = await wrapped({});
@@ -984,6 +1002,7 @@ describe('the enforcer never fails open', () => {
             {
                store: createHandleStore(),
                ownerKey: OWNER,
+               log: IGNORE_LOG,
             },
          );
          await wrapped({});
@@ -1009,6 +1028,7 @@ describe('the enforcer never fails open', () => {
             {
                store: createHandleStore(),
                ownerKey: OWNER,
+               log: IGNORE_LOG,
             },
          );
          expect(JSON.stringify(await wrapped({}))).not.toContain('SECRET_TOKEN_123');
@@ -1048,6 +1068,7 @@ describe('owner liveness', () => {
          store,
          ownerKey: OWNER,
          ownerLive: () => true,
+         log: IGNORE_LOG,
       });
       const out = await wrapped({});
       expect(JSON.parse(out.content[0].text).handle).toBeTruthy();
@@ -1060,6 +1081,7 @@ describe('owner liveness', () => {
          store,
          ownerKey: OWNER,
          ownerLive: () => false,
+         log: IGNORE_LOG,
       });
       const out = await wrapped({});
       expect(out.isError).toBe(true);
@@ -1074,6 +1096,7 @@ describe('owner liveness', () => {
          store,
          ownerKey: OWNER,
          ownerLive: () => false,
+         log: IGNORE_LOG,
       });
       const out = await wrapped({});
       expect(out.content[0].text).toBe('ok');
@@ -1140,9 +1163,7 @@ describe('unmeasured fields are dropped', () => {
    });
 
    it('logs the tool and the names of the fields it drops', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      /** @type {Function} The wrapped handler of a named tool. */
-      const wrapped = withResultBudget(async () => ({
+      const { lines } = await enforce({
          content: [
             {
                type: 'text',
@@ -1152,16 +1173,8 @@ describe('unmeasured fields are dropped', () => {
          ],
          _meta: { pad: 'p' },
          extra: 1,
-      }), {
-         store: createHandleStore(),
-         ownerKey: OWNER,
-         toolName: 'mock_tool',
       });
-      await wrapped({});
-      expect(warn.mock.calls.map((call) => call[0])).toEqual([
-         'Wiretap sidecar | mock_tool result fields dropped: _meta, extra, content.annotations',
-      ]);
-      warn.mockRestore();
+      expect(lines).toEqual(['Wiretap sidecar | mock_tool result fields dropped: _meta, extra, content.annotations']);
    });
 
    it('writes the dropped-fields line to the log it is given, not to the console', async () => {
@@ -1191,7 +1204,8 @@ describe('unmeasured fields are dropped', () => {
 
    it('logs nothing when a result has no field to drop', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      await enforce(textResult('ok'));
+      const { lines } = await enforce(textResult('ok'));
+      expect(lines).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
       warn.mockRestore();
    });
