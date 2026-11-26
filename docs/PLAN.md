@@ -191,7 +191,7 @@ which the enforcer applies at runtime (over cap → handle).
 | Error | ≤ 512 B, first 10 failures + count | CI hard | — |
 | Text result hard cap | **8 KB default**, per-call `maxBytes` up to 16 KB; over cap → `{handle, bytes, summary}` | Runtime enforcer; CI hard on the behaviour | 18 KB was +8,954 tokens; 8 KB ≈ 4k tokens fits hero `system` (5.8 KB) and the median item (2.1 KB); 16 KB stays below the measured Claude Code inline lower bound (21.7 KB). Titan full actor exports are 5,738–12,492 B (E9): 3 of the 4 measured exceed 8 KB, so a full actor read returns a handle unless `maxBytes` is raised; titan items (634–1,697 B) fit |
 | `sheet_layout` | ≤ 4 KB | CI hard (fixture) and e2e hard | E9 prototype at depth 2: 401–441 B, but too shallow to be useful; the default depth is set in M15b by measurement |
-| Image | `screenshot` only; default ≤ 480,000 px (the 800×600 area), aspect kept (D28); max 1280 px longest side; one per result | CI hard (capture unit) | +972 measured at 800×600; larger sizes not measured. Titan sheets are 850×926 (actor) and 700×650 (item) (E9): the actor sheet does not fit an 800×600 box without distortion-free downscaling to 551×600, so the default is expressed as area |
+| Image | `screenshot` only; default ≤ 480,000 px (the 800×600 area), aspect kept (D28); a warning line past 1280 px longest side and past one image per result, never a refusal | CI hard (capture unit) | +972 measured at 800×600; larger sizes not measured. Titan sheets are 850×926 (actor) and 700×650 (item) (E9): the actor sheet does not fit an 800×600 box without distortion-free downscaling to 551×600, so the default is expressed as area |
 | Live recalibration | `tests/measure/measureContext.mjs`, manual, ≤ 6 `claude -p` runs | Report only | Tokenizers and Claude Code behaviour change between versions |
 
 The number of tools and their total definition size are not capped, for Wiretap's own tools or for plugins (owner
@@ -294,7 +294,7 @@ Budgets are the result cap in serialized bytes. "Replaces" counts the calls a ge
 | `close_sheet(uuid, userId?)` | Close it the same way, via the `wiretap.closeSheet` query (READ `client/applications/api/application.mjs:950` `close`) | api | 128 B | — | — |
 | `element_size(uuid, selector)` | `{x, y, w, h, scrollW, scrollH, visible}` of a selector inside the rendered sheet (`element` getter READ `application.mjs:327`) | dom | 256 B | — | screenshot |
 | `sheet_layout(uuid, depth=2, maxNodes=40)` | Compact tree `[selector, w, h, overflow]` of the sheet parts | dom | 4 KB | — | screenshot + N sizes |
-| `screenshot(uuid, selector?, maxSide=800)` | PNG, explicit last resort; default ≤ 800×600, hard max 1280 px longest side, one image per call | dom + runner | 1 image | — | — |
+| `screenshot(uuid, selector?, maxSide=800)` | PNG, explicit last resort; default ≤ 800×600; the result enforcer logs a warning line past 1280 px longest side | dom + runner | 1 image | — | — |
 | `roll(formula, toChat=false)` | `{total, formula, dice}` | api | 512 B | — | — |
 | `read_handle(handle, paths? , offset?, length?)` | Slice a stored result (§2.8 grammar) | none | hard cap | — | — |
 | `inspect_sheet(uuid, selectors[])` | Composite: open, measure k selectors plus a layout summary, close | dom | 2 KB | — | 2 + k |

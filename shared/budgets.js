@@ -131,12 +131,13 @@ export const BUDGETS = table([
    // Serialized sheet layout tree (4 KB).
    budget('SHEET_LAYOUT_MAX_BYTES', 4000, 'bytes', BUDGET_SEVERITY.HARD),
    // Default screenshot area, the 800x600 area; aspect ratio is kept. A capture-time default: the result enforcer
-   // checks only the longest side and the data size, never this area.
+   // checks the data size and warns past the longest side, never this area.
    budget('IMAGE_DEFAULT_MAX_PIXELS', 480000, 'pixels', BUDGET_SEVERITY.HARD),
-   // Longest side of any returned image.
-   budget('IMAGE_MAX_SIDE_PIXELS', 1280, 'pixels', BUDGET_SEVERITY.HARD),
-   // Images in one result.
-   budget('IMAGE_MAX_PER_RESULT', 1, 'count', BUDGET_SEVERITY.HARD),
+   // Best-practice longest side of a returned image; a result with a larger image passes and the sidecar logs one
+   // warning line.
+   budget('IMAGE_MAX_SIDE_PIXELS', 1280, 'pixels', BUDGET_SEVERITY.WARN),
+   // Best-practice number of images in one result; a result with more passes and the sidecar logs one warning line.
+   budget('IMAGE_MAX_PER_RESULT', 1, 'count', BUDGET_SEVERITY.WARN),
    // Base64 characters of one returned image; a larger payload is refused whatever its header claims.
    budget('IMAGE_DATA_MAX_BYTES', 1000000, 'chars', BUDGET_SEVERITY.HARD),
    // One stored result, in UTF-8 bytes; a larger value is refused instead of stored.

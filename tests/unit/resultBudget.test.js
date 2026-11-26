@@ -522,30 +522,66 @@ describe('images', () => {
       };
    }
 
-   it('passes one image at the 1280 pixel side limit through unchanged', async () => {
+   it('passes one image with a 1280 pixel longest side through unchanged and logs no line', async () => {
       const result = { content: [image(1280, 720)] };
-      expect((await enforce(result)).out).toEqual(result);
+      const { out, lines } = await enforce(result);
+      expect(out).toEqual(result);
+      expect(lines).toEqual([]);
    });
 
-   it('refuses an image whose longest side is 1281 pixels', async () => {
-      const { out } = await enforce({ content: [image(1281, 100)] });
-      expect(out.isError).toBe(true);
-      expect(out.content[0].text.startsWith('IMAGE_LIMIT: ')).toBe(true);
-      expect(Buffer.byteLength(out.content[0].text, 'utf8')).toBeLessThanOrEqual(256);
+   it('accepts an image whose longest side is 1281 pixels and logs one line', async () => {
+      const result = { content: [image(1281, 100)] };
+      const { out, lines } = await enforce(result);
+      expect(out).toEqual(result);
+      expect(lines).toEqual([
+         'Wiretap sidecar | mock_tool result image is 1281x100, its longest side past the 1280 px best-practice size',
+      ]);
    });
 
-   it('refuses a tall image by its height', async () => {
-      const { out } = await enforce({ content: [image(100, 1281)] });
-      expect(out.isError).toBe(true);
+   it('accepts a tall image past the side guideline by its height and logs one line', async () => {
+      const result = { content: [image(100, 1281)] };
+      const { out, lines } = await enforce(result);
+      expect(out).toEqual(result);
+      expect(lines).toEqual([
+         'Wiretap sidecar | mock_tool result image is 100x1281, its longest side past the 1280 px best-practice size',
+      ]);
    });
 
-   it('refuses a second image in one result', async () => {
-      const { out } = await enforce({ content: [
+   it('logs one side line for a result with several images past the side guideline', async () => {
+      const { out, lines } = await enforce({ content: [
+         image(1300, 10),
+         image(2000, 10),
+      ] });
+      expect(out.content).toHaveLength(2);
+      expect(lines.filter((line) => line.includes('longest side'))).toEqual([
+         'Wiretap sidecar | mock_tool result image is 1300x10, its longest side past the 1280 px best-practice size',
+      ]);
+   });
+
+   it('accepts a second image in one result and logs one line', async () => {
+      const result = { content: [
          image(10, 10),
          image(10, 10),
+      ] };
+      const { out, lines } = await enforce(result);
+      expect(out).toEqual(result);
+      expect(lines).toEqual([
+         'Wiretap sidecar | mock_tool result carries 2 images, past the 1-image best-practice count',
+      ]);
+   });
+
+   it('logs no image line when a past-guideline image is refused for another reason', async () => {
+      const { out, lines } = await enforce({ content: [
+         image(10, 10),
+         {
+            type: 'image',
+            data: pngHeader(2000, 10),
+            mimeType: 'image/jpeg',
+         },
       ] });
       expect(out.isError).toBe(true);
       expect(out.content[0].text.startsWith('IMAGE_LIMIT: ')).toBe(true);
+      expect(lines).toEqual([]);
    });
 
    it.each([

@@ -188,49 +188,68 @@ function readPngSize(data: string): { width: number; height: number } | null {
    };
 }
 
+/** The outcome of checking a result's images: the refusal text, or the warning lines of an accepted result. */
+type ImageCheck = { refusal: string } | { refusal: null; warnings: string[] };
+
 /**
- * Check the images of a result: at most one, each `image/png` with plain base64 data within the data budget and a
- * longest side within the side budget.
+ * Check the images of a result: each `image/png` with plain base64 data within the data budget and a readable size.
+ * Any number of images of any side is accepted; a result past the best-practice image count gets one warning line,
+ * and one past the best-practice longest side gets one warning line naming its first such image.
  * @param {CallToolResult['content']} content - The content items.
- * @returns {string | null} The refusal text, or null when the images are acceptable.
+ * @param {string} toolName - The tool's name, for the warning lines.
+ * @returns {ImageCheck} The refusal, or the warning lines when the images are acceptable.
  */
-function checkImages(content: CallToolResult['content']): string | null {
+function checkImages(content: CallToolResult['content'], toolName: string): ImageCheck {
    // The image items.
    const images: CallToolResult['content'] = content.filter((item) => item.type === 'image');
-   // Most images one result may carry.
+   // Best-practice number of images in one result.
    const maxImages: number = getBudget('IMAGE_MAX_PER_RESULT').value;
-   // Longest side an image may have.
+   // Best-practice longest side of an image.
    const maxSide: number = getBudget('IMAGE_MAX_SIDE_PIXELS').value;
    // Most base64 characters one image may carry.
    const maxData: number = getBudget('IMAGE_DATA_MAX_BYTES').value;
+   // The warning lines of an accepted result, in order: the count line, then the side line.
+   const warnings: string[] = [];
    if (images.length > maxImages) {
-      return `IMAGE_LIMIT: at most ${maxImages} image per result.`;
+      warnings.push(
+         `Wiretap sidecar | ${toolName} result carries ${images.length} images, past the ${maxImages}-image ` +
+            'best-practice count',
+      );
    }
+   // Whether the side line is already written.
+   let sideWarned: boolean = false;
    for (const item of images) {
       // The fields the checks read, whatever the item carries.
       const fields: { data?: unknown; mimeType?: unknown } = item as { data?: unknown; mimeType?: unknown };
       if (fields.mimeType !== PNG_MIME_TYPE) {
-         return `IMAGE_LIMIT: only ${PNG_MIME_TYPE} images are accepted.`;
+         return { refusal: `IMAGE_LIMIT: only ${PNG_MIME_TYPE} images are accepted.` };
       }
       if (typeof fields.data !== 'string') {
-         return 'IMAGE_LIMIT: the image data must be a base64 string.';
+         return { refusal: 'IMAGE_LIMIT: the image data must be a base64 string.' };
       }
       if (fields.data.length > maxData) {
-         return `IMAGE_LIMIT: image data is ${fields.data.length} characters; at most ${maxData}.`;
+         return { refusal: `IMAGE_LIMIT: image data is ${fields.data.length} characters; at most ${maxData}.` };
       }
       if (!BASE64_PATTERN.test(fields.data)) {
-         return 'IMAGE_LIMIT: image data is not plain base64.';
+         return { refusal: 'IMAGE_LIMIT: image data is not plain base64.' };
       }
       // The decoded size of this image.
       const size: { width: number; height: number } | null = readPngSize(fields.data);
       if (size === null) {
-         return 'IMAGE_LIMIT: the image size could not be read; only PNG is accepted.';
+         return { refusal: 'IMAGE_LIMIT: the image size could not be read; only PNG is accepted.' };
       }
-      if (Math.max(size.width, size.height) > maxSide) {
-         return `IMAGE_LIMIT: image is ${size.width}x${size.height}; the longest side is at most ${maxSide} px.`;
+      if (!sideWarned && Math.max(size.width, size.height) > maxSide) {
+         sideWarned = true;
+         warnings.push(
+            `Wiretap sidecar | ${toolName} result image is ${size.width}x${size.height}, its longest side past the ` +
+               `${maxSide} px best-practice size`,
+         );
       }
    }
-   return null;
+   return {
+      refusal: null,
+      warnings,
+   };
 }
 
 /**
@@ -488,10 +507,13 @@ function enforce(raw: unknown, args: unknown, options: ResultBudgetOptions): Cal
    if (result.isError) {
       return errorResult(truncateUtf8(textParts(result).join('\n'), getBudget('ERROR_MAX_BYTES').value));
    }
-   // The refusal for the result's images, when it has one.
-   const imageRefusal: string | null = checkImages(result.content);
-   if (imageRefusal !== null) {
-      return errorResult(imageRefusal);
+   // The refusal for the result's images, or their warning lines.
+   const imageCheck: ImageCheck = checkImages(result.content, options.toolName);
+   if (imageCheck.refusal !== null) {
+      return errorResult(imageCheck.refusal);
+   }
+   for (const line of imageCheck.warnings) {
+      options.log(line);
    }
    // The text the client would read.
    const parts: string[] = textParts(result);
@@ -557,8 +579,8 @@ function enforce(raw: unknown, args: unknown, options: ResultBudgetOptions): Cal
  * stay). An error result is capped to the error budget and never becomes a handle. The wrapper never passes a result
  * it could not check: a malformed or unserializable result becomes a fixed error, a thrown BridgeError passes its
  * bounded message, and any other thrown value becomes a fixed error while its message goes to the server log. A result
- * with more than one image, a non-PNG image, an oversized or non-base64 image, or a longest side over the limit is
- * refused.
+ * with a non-PNG image, an oversized or non-base64 image, or an image whose size cannot be read is refused; a result
+ * past the best-practice image count or longest side is accepted and logs one warning line for each.
  * @param {ToolHandler<Args>} handler - The tool handler to wrap.
  * @param {ResultBudgetOptions} options - The store, owner key and the tool's own budget.
  * @returns {ToolHandler<Args>} The enforcing handler.

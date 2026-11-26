@@ -646,13 +646,16 @@ handle gets `HANDLE_NOT_FOUND: Handle not found: it may have expired (1800 s unr
 other failure, and any result the enforcer cannot read (no `content`, non-string text, unserializable content), becomes
 a fixed short error (`Tool failed.` or `Tool returned an invalid result.`) and the real cause is written to the sidecar
 log only, with control characters and line breaks replaced by spaces and the text cut to 512 bytes. A result is refused
-with `IMAGE_LIMIT` when it carries more than one image, an image whose `mimeType` is not `image/png`, base64 data that
-is longer than 1,000,000 characters or has any character outside the standard base64 alphabet (whitespace included), or
-a PNG whose longest side exceeds 1280 px. The enforcer returns only what it measured: image items as exactly `type`,
-`data` and `mimeType`, text items as exactly `type` and `text`, and the result as `content` plus `structuredContent`
-when present. `_meta`, `annotations` and any unknown field, on an item or on the result, are dropped, and the sidecar
-log names them (`Wiretap sidecar | <tool> result fields dropped: <names>`). The 480,000 px default image area is applied
-when a capture tool takes the picture, not by the enforcer.
+with `IMAGE_LIMIT` when it carries an image whose `mimeType` is not `image/png`, base64 data that is longer than
+1,000,000 characters or has any character outside the standard base64 alphabet (whitespace included), or a PNG whose
+size cannot be read. Any number of images of any size is accepted: past one image in a result, and past a 1280 px
+longest side, the sidecar log gets one warning line each (`Wiretap sidecar | <tool> result carries <n> images, past
+the 1-image best-practice count`, `Wiretap sidecar | <tool> result image is <w>x<h>, its longest side past the 1280 px
+best-practice size`, naming the first such image). The enforcer returns only what it measured: image items as exactly
+`type`, `data` and `mimeType`, text items as exactly `type` and `text`, and the result as `content` plus
+`structuredContent` when present. `_meta`, `annotations` and any unknown field, on an item or on the result, are
+dropped, and the sidecar log names them (`Wiretap sidecar | <tool> result fields dropped: <names>`). The 480,000 px
+default image area is applied when a capture tool takes the picture, not by the enforcer.
 
 ## Origin validation
 

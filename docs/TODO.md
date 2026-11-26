@@ -62,8 +62,8 @@
       after calls against the byte sizes printed by `npx tsx tests/measure/measureContext.mjs`, and replace the inferred
       bytes / 2 token column in `docs/PLAN.md` with the measured one
 - [ ] Screenshot capture must enforce the 480,000 px default area (`IMAGE_DEFAULT_MAX_PIXELS`) when the capture tool
-      exists; the result enforcer checks only the longest side (1280 px), the 1,000,000-character data size and the
-      PNG type, never the area
+      exists; the result enforcer checks only the 1,000,000-character data size and the PNG type, and logs a warning
+      line past a 1280 px longest side, never the area
 
 - [ ] Make `destructiveHint` accurate for additive scripts: a definition has no field that declares a mutating script
       non-destructive, so the sidecar sets only `readOnlyHint` (`server/mcp.ts`) and every mutating script, including
