@@ -322,7 +322,7 @@ describe('get_document compact view', () => {
       });
    });
 
-   it('holds 2 KB with 30 pattern-matching leaves at 200 bytes and 120 long-named items', async () => {
+   it('holds 2 KB with 30 long pattern-matching leaves and 120 long-named items', async () => {
       /** @type {Record<string, { value: string }>} Thirty groups whose `value` leaf matches the default pattern. */
       const system = {};
       for (let index = 0; index < 30; index++) {

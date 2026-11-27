@@ -183,7 +183,7 @@ test.describe('wiretap core read tools', () => {
          expect.stringMatching(/^Wiretap E2E item \d$/),
          expect.any(String),
       ]);
-      // `value` matches the default key-name pattern; `baseValue` does not, and no per-subtype list adds it.
+      // `value` matches the default key-name pattern; `baseValue` does not.
       expect(Object.keys(view.fields)).toContain('system.resource.stamina.value');
       expect(Object.keys(view.fields)).not.toContain('system.attribute.body.baseValue');
       expect(view.version).toMatch(/^[0-9a-f]{14}$/);

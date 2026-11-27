@@ -53,10 +53,10 @@ export async function getDocumentHandler(args, ctx) {
    notes.note(args.ifChanged?.length ?? 0, 'characters in ifChanged', BEST_PRACTICE.ifChangedChars);
    notes.write(ctx.log);
    /**
-    * The plain export, its class, and whether the export left part of the document out.
-    * @type {{ data: Record<string, unknown>, documentName: string, partial: boolean }}
+    * The plain export and whether the export left part of the document out.
+    * @type {{ data: Record<string, unknown>, partial: boolean }}
     */
-   const { data, documentName, partial } = await ctx.core.readDocument(
+   const { data, partial } = await ctx.core.readDocument(
       {
          uuid: args.uuid,
          documentName: args.documentName,
