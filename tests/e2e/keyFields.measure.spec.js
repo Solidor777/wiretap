@@ -4,10 +4,11 @@ import { test } from '@playwright/test';
 import { login } from './fixtures.js';
 
 /**
- * Candidate generator for the per-subtype compact-view key-field lists (`src/bridge/scripts/keyFields.json`). It is a
- * measurement, not a test: it runs only when `WIRETAP_MEASURE_KEYFIELDS=1` is set, reads the live world without
+ * Candidate generator for per-subtype compact-view key-field lists, for a game-system add-on to hold; Wiretap ships no
+ * lists (the Titan lists are in the `wiretap-titan-vttrpg` add-on at `data/keyFields.json`). It is a measurement, not a
+ * test: it runs only when `WIRETAP_MEASURE_KEYFIELDS=1` is set, reads the live world without
  * writing to it, and writes `debug/dumps/keyfields-candidates.json` (the ranked candidates) and
- * `debug/dumps/keyfields-reviewed.json` (the candidates after the review filter, in the committed format).
+ * `debug/dumps/keyfields-reviewed.json` (the candidates after the review filter, in the format of the add-on's file).
  * `docs/experiments/2026-10-m4-keyfields.md` records the command, the date and the review.
  *
  * Command: `WIRETAP_MEASURE_KEYFIELDS=1 npx playwright test tests/e2e/keyFields.measure.spec.js`.

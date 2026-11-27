@@ -13,7 +13,6 @@
 
 import { contentVersion } from '~/bridge/scripts/contentHash.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
-import { keyPathsFor } from '~/bridge/scripts/keyFields.js';
 import { BEST_PRACTICE, SizeNotes } from '~/bridge/scripts/sizeNotes.js';
 import { shapeRefusal } from '~/bridge/scripts/writeArgs.js';
 
@@ -54,10 +53,10 @@ export async function getDocumentHandler(args, ctx) {
    notes.note(args.ifChanged?.length ?? 0, 'characters in ifChanged', BEST_PRACTICE.ifChangedChars);
    notes.write(ctx.log);
    /**
-    * The plain export, its class, and whether the export left part of the document out.
-    * @type {{ data: Record<string, unknown>, documentName: string, partial: boolean }}
+    * The plain export and whether the export left part of the document out.
+    * @type {{ data: Record<string, unknown>, partial: boolean }}
     */
-   const { data, documentName, partial } = await ctx.core.readDocument(
+   const { data, partial } = await ctx.core.readDocument(
       {
          uuid: args.uuid,
          documentName: args.documentName,
@@ -110,19 +109,8 @@ export async function getDocumentHandler(args, ctx) {
          }
          : data;
    }
-   /** @type {readonly string[] | undefined} The key leaves of this subtype, when the system has a list for it. */
-   const keyPaths = keyPathsFor(game.system?.id, documentName, data.type);
-   return ctx.shape.compact(
-      data,
-      keyPaths === undefined
-         ? {
-            version,
-            partial,
-         }
-         : {
-            keyPaths: [...keyPaths],
-            version,
-            partial,
-         },
-   );
+   return ctx.shape.compact(data, {
+      version,
+      partial,
+   });
 }

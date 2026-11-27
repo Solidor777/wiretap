@@ -13,8 +13,8 @@ deferred work goes in [`TODO.md`](TODO.md) and defects in [`OPEN_BUGS.md`](OPEN_
   compact view of an actor with 120 embedded items lists all 40 tuples only when item names are short (`i<n>`, 16-character
   ids, beside the fixture's three key leaves). With 18-character names it lists 35 and sets `cut: true`, because the
   2,000-byte budget (`COMPACT_VIEW_MAX_BYTES`) binds before the 40-tuple cap. The cap is therefore a ceiling, not a
-  guarantee; the budget is the data-independent bound. Status: Needs review when the per-subtype key-field lists are
-  fixed (docs/PLAN.md M4).
+  guarantee; the budget is the data-independent bound. Status: Needs review if a per-system source of key leaves
+  is added; today every system uses the default key-name pattern.
 
 - Title: `getAllFailures()` is empty for a real failure on Foundry 14.364. Summary: `DataModelValidationError.getAllFailures()`
   returned `{}` for a blank name, a bad image path, a bad sort and an unknown type, while `getFailure()` with no key

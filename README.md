@@ -145,8 +145,8 @@ method `405`.
   `version`, up to 24 `system` leaves and `[id, name, type]` rows of the embedded documents (40 rows at most, with each
   collection's total). `cut: true` marks a view that lost data: a uuid, version, id or leaf value cut short, leaves or
   entries left out, or an object the walk did not enter; a name or type only shortened with `…` is not flagged. The
-  leaves come from a reviewed per-subtype list for the `titan` system (`src/bridge/scripts/keyFields.json`) and from a
-  default key-name pattern for any other. `fields` returns a nested projection, `paths` returns slices such as
+  leaves are those whose key name matches a default key-name pattern (`value`, `max`, `level`, `quantity` and the
+  like), for every game system. `fields` returns a nested projection, `paths` returns slices such as
   `system.resource` or `items.*.name` keyed by `_id` with the unresolved paths in `missing`, `derived: true` reads the
   prepared data for those two, and both results carry `version` too. `mode: "full"` returns the whole export
   (`toCompendium` with ids, sort and ownership kept, plus `uuid`) without a `version`. The `version` is a short content

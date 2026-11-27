@@ -84,12 +84,6 @@
 - [ ] The executing client's own gate check is covered by unit tests only: through the sidecar a closed gate is denied
       by the sidecar's snapshot before anything is sent (e2e `scripts.spec.js` shows that path). An e2e that reaches the
       client check needs a way to hold the sidecar's snapshot stale, for example a test-only observer command
-- [ ] Right after M7: built and shipped code references no game system (owner). The titan per-subtype key-field lists
-      in `src/bridge/scripts/keyFields.json` leave Wiretap; the compact view uses only the generic key-name rule of
-      `ctx.shape`. The lists move to the add-on module `wiretap-titan-vttrpg` (folder `Data/modules/wiretap-titan-vttrpg`,
-      repo `https://github.com/Solidor777/wiretap-titan-vttrpg.git`), which depends on Wiretap; how an add-on supplies
-      key fields is decided when that module is built, after Wiretap is done. Test machinery may keep using the titan
-      install (the `test-titan` e2e world, titan-like unit fixtures). Walk through the code changes with the owner first.
 - [ ] owner: decide whether non-core Settings are readable at all. Today every Setting outside the `wiretap.` namespace
       and the credential denylist is returned with secret-named keys dropped from its value (docs/PLAN.md section 4.4),
       so another module's setting that stores a secret under a name the pattern does not match is exposed. Options: a

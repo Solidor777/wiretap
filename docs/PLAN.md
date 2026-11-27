@@ -399,7 +399,8 @@ GM human tab: settings UI → credentials pushed once over bridge:credentials �
   clearOwnership: false})` plus `uuid`. The defaults would drop `_id`, `sort`, `ownership` and `author` (READ
   `client-document.mjs:1113-1134`). Optionally prepared values are added under a separate `derived` key.
 - **Default reads** return the compact view: `uuid`, `name`, `type`, `version` (a content hash of the export the read
-  returns, embedded documents included, keys sorted; compared by `ifChanged`), a per-type key-field list, and embedded
+  returns, embedded documents included, keys sorted; compared by `ifChanged`), the `system` leaves whose key matches the
+  default key-name pattern, and embedded
   documents as `[id, name, type]` tuples (first 40 plus a total count). `fields` returns a projection, `paths` path
   slices (§2.8), both of the canonical form, each with the same `version`; a `derived: true` read hashes the prepared
   export it returns.
