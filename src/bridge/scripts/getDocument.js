@@ -13,7 +13,6 @@
 
 import { contentVersion } from '~/bridge/scripts/contentHash.js';
 import { ScriptError } from '~/bridge/scripts/registry.js';
-import { keyPathsFor } from '~/bridge/scripts/keyFields.js';
 import { BEST_PRACTICE, SizeNotes } from '~/bridge/scripts/sizeNotes.js';
 import { shapeRefusal } from '~/bridge/scripts/writeArgs.js';
 
@@ -110,19 +109,8 @@ export async function getDocumentHandler(args, ctx) {
          }
          : data;
    }
-   /** @type {readonly string[] | undefined} The key leaves of this subtype, when the system has a list for it. */
-   const keyPaths = keyPathsFor(game.system?.id, documentName, data.type);
-   return ctx.shape.compact(
-      data,
-      keyPaths === undefined
-         ? {
-            version,
-            partial,
-         }
-         : {
-            keyPaths: [...keyPaths],
-            version,
-            partial,
-         },
-   );
+   return ctx.shape.compact(data, {
+      version,
+      partial,
+   });
 }

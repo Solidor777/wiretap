@@ -15,7 +15,6 @@ import {
    settleRegistry,
    teardownRecorded,
 } from './registry.js';
-import KEY_FIELDS from '../../src/bridge/scripts/keyFields.json' with { type: 'json' };
 
 /** @type {number} The longest wait inside an already-loaded page or on the loopback sidecar, in milliseconds. */
 const POLL_MS = 1000;
@@ -171,7 +170,7 @@ test.describe('wiretap core read tools', () => {
       expect(prepared.sourceBytes).toBeLessThan(16000);
       expect(prepared.prepared).not.toBe(prepared.stored);
 
-      // Compact: within 2 KB, with the key leaves of the subtype and the item tuples with their total.
+      // Compact: within 2 KB, with the leaves of the default key-name pattern and the item tuples with their total.
       const compact = await callText('get_document', { uuid });
       expect(compact.isError, compact.text).toBe(false);
       expect(compact.bytes).toBeLessThanOrEqual(COMPACT_MAX);
@@ -184,12 +183,9 @@ test.describe('wiretap core read tools', () => {
          expect.stringMatching(/^Wiretap E2E item \d$/),
          expect.any(String),
       ]);
-      expect(Object.keys(view.fields)).toEqual(
-         expect.arrayContaining([
-            'system.resource.stamina.value',
-            'system.attribute.body.baseValue',
-         ]),
-      );
+      // `value` matches the default key-name pattern; `baseValue` does not, and no per-subtype list adds it.
+      expect(Object.keys(view.fields)).toContain('system.resource.stamina.value');
+      expect(Object.keys(view.fields)).not.toContain('system.attribute.body.baseValue');
       expect(view.version).toMatch(/^[0-9a-f]{14}$/);
 
       // Paths: a system slice and items.*.name keyed by _id.
@@ -441,20 +437,12 @@ test.describe('wiretap core read tools', () => {
       ]) {
          expect(documentNames.has(name), `the world holds a ${name}`).toBe(true);
       }
-      const lists = KEY_FIELDS[world.system] ?? {};
       for (const target of targets) {
          const call = await callText('get_document', { uuid: target.uuid });
          expect(call.isError, `${target.key}: ${call.text}`).toBe(false);
          expect(call.bytes, target.key).toBeLessThanOrEqual(COMPACT_MAX);
          const view = JSON.parse(call.text);
          expect(view.uuid, target.key).toBe(target.uuid);
-         if (lists[target.key] !== undefined && view.fields !== undefined) {
-            const allowed = new Set(lists[target.key].map((path) => `system.${path}`));
-            expect(
-               Object.keys(view.fields).every((key) => allowed.has(key)),
-               target.key,
-            ).toBe(true);
-         }
       }
    });
 

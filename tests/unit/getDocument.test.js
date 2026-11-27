@@ -5,7 +5,6 @@ import { definitionBytes, validateScriptDefinition } from '$shared/scripts.js';
 import { createCallTool } from '~/bridge/scripts/callTool.js';
 import { getDocumentDefinition } from '~/bridge/scripts/definitions.js';
 import { registerShippedScripts } from '~/bridge/scripts/index.js';
-import KEY_FIELDS from '~/bridge/scripts/keyFields.json';
 import { createScriptRegistry } from '~/bridge/scripts/registry.js';
 import { installWorld, mockDocument, removeWorld } from './mockDocuments.js';
 
@@ -37,7 +36,7 @@ function get(args) {
 }
 
 /**
- * Build the stored data of a synthetic titan-like actor with embedded items.
+ * Build the stored data of a synthetic actor with embedded items.
  * @param {number} [items] - How many embedded items.
  * @returns {Record<string, unknown>} The source fields.
  */
@@ -70,7 +69,7 @@ function actorSource(items = 3) {
  * @param {string} [systemId] - The mocked system id.
  * @returns {import('./mockDocuments.js').MockDocument} The installed actor `MOCKACTOR0000001`.
  */
-function worldWithActor(overrides = {}, systemId = 'titan') {
+function worldWithActor(overrides = {}, systemId = 'mock-system') {
    const actor = mockDocument(
       {
          documentName: 'Actor',
@@ -241,7 +240,7 @@ describe('get_document argument validation', () => {
 });
 
 describe('get_document compact view', () => {
-   it('shows uuid, name, type, the version, the subtype key leaves and the item tuples', async () => {
+   it('shows uuid, name, type, the version, the key leaves of the default pattern and the item tuples', async () => {
       worldWithActor();
       const view = await get({ uuid: 'Actor.MOCKACTOR0000001' });
       expect(view).toMatchObject({
@@ -249,12 +248,10 @@ describe('get_document compact view', () => {
          name: 'MOCK_Actor',
          type: 'player',
          version: expect.stringMatching(/^[0-9a-f]{14}$/),
-         fields: {
-            'system.inspiration': true,
-            'system.xp.earned': 12,
-            'system.attribute.body.baseValue': 3,
-            'system.resource.stamina.value': 6,
-         },
+      });
+      expect(view.fields).toEqual({
+         'system.resource.stamina.value': 6,
+         'system.resource.resolve.value': 1,
       });
       expect(view.fields['system.bio.description']).toBeUndefined();
       expect(view.embedded.items.total).toBe(3);
@@ -285,7 +282,6 @@ describe('get_document compact view', () => {
          },
          vi.fn,
       );
-      globalThis.game.system.id = 'titan';
       expect((await get({
          documentName: 'Actor',
          id: 'MOCKACTOR0000001',
@@ -304,7 +300,7 @@ describe('get_document compact view', () => {
       expect(packed.type).toBe('weapon');
    });
 
-   it('uses the default key-name pattern for a system without lists', async () => {
+   it('uses the default key-name pattern for any system', async () => {
       worldWithActor(
          {
             source: {
@@ -326,45 +322,36 @@ describe('get_document compact view', () => {
       });
    });
 
-   it('holds 2 KB for every listed subtype with every key leaf at its longest and 120 long-named items', async () => {
-      for (const [systemId, lists] of Object.entries(KEY_FIELDS)) {
-         for (const [pair, paths] of Object.entries(lists)) {
-            const [documentName, type] = pair.split('.');
-            const system = {};
-            for (const keyPath of paths) {
-               const names = keyPath.split('.');
-               let node = system;
-               for (const name of names.slice(0, -1)) {
-                  node[name] ??= {};
-                  node = node[name];
-               }
-               node[names.at(-1)] = 'V'.repeat(200);
-            }
-            const document = mockDocument(
-               {
-                  documentName,
-                  id: 'MOCKDOCUMENT0001',
-                  name: 'N'.repeat(200),
-                  type,
-                  source: {
-                     system,
-                     items: Array.from({ length: 120 }, (_, index) => ({
-                        _id: `MOCKITEM${String(index).padStart(8, '0')}`,
-                        name: `MOCK_long_item_${index}_xxxxxxxxxxxxxxxx`,
-                        type: 'weapon',
-                     })),
-                  },
-                  modifiedTime: 1_760_000_000_000,
-               },
-               vi.fn,
-            );
-            installWorld({ documents: [document] }, vi.fn);
-            globalThis.game.system.id = systemId;
-            const view = await get({ uuid: document.uuid });
-            expect(bytes(view), pair).toBeLessThanOrEqual(getBudget('COMPACT_VIEW_MAX_BYTES').value);
-            expect(Object.keys(view.fields ?? {}).length, pair).toBeLessThanOrEqual(24);
-         }
+   it('holds 2 KB with 30 pattern-matching leaves at 200 bytes and 120 long-named items', async () => {
+      /** @type {Record<string, { value: string }>} Thirty groups whose `value` leaf matches the default pattern. */
+      const system = {};
+      for (let index = 0; index < 30; index++) {
+         system[`g${index}`] = { value: 'V'.repeat(200) };
       }
+      const document = mockDocument(
+         {
+            documentName: 'Actor',
+            id: 'MOCKDOCUMENT0001',
+            name: 'N'.repeat(200),
+            type: 'player',
+            source: {
+               system,
+               items: Array.from({ length: 120 }, (_, index) => ({
+                  _id: `MOCKITEM${String(index).padStart(8, '0')}`,
+                  name: `MOCK_long_item_${index}_xxxxxxxxxxxxxxxx`,
+                  type: 'weapon',
+               })),
+            },
+            modifiedTime: 1_760_000_000_000,
+         },
+         vi.fn,
+      );
+      installWorld({ documents: [document] }, vi.fn);
+      globalThis.game.system.id = 'mock-system';
+      const view = await get({ uuid: document.uuid });
+      expect(bytes(view)).toBeLessThanOrEqual(getBudget('COMPACT_VIEW_MAX_BYTES').value);
+      expect(Object.keys(view.fields).length).toBeLessThanOrEqual(24);
+      expect(view.cut).toBe(true);
    });
 });
 
